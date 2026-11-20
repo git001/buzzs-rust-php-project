@@ -74,6 +74,18 @@ pub enum ModifyHandler {
     Long,
     /// `OnUpdateLongGEZero`.
     LongGEZero,
+    /// `OnUpdateLong` with a range check (opcache's `OnUpdateCounter`,
+    /// `OnUpdateUnroll*`, `OnUpdateMaxTraceLength`): a value outside
+    /// `min..=max` warns with `message` (`{name}` stands for the directive)
+    /// and is rejected, so at startup the directive keeps its default.
+    LongRange {
+        /// Smallest accepted value.
+        min: i64,
+        /// Largest accepted value.
+        max: i64,
+        /// The warning, worded as in php-src.
+        message: &'static str,
+    },
     /// `OnUpdateReal` (`zend_strtod`).
     Real,
     /// `OnUpdateString` / `OnUpdateStr`.
@@ -96,6 +108,10 @@ pub enum ModifyHandler {
     DisplayErrors,
     /// `OnUpdateTimeout` (`max_execution_time`, `atol`).
     Timeout,
+    /// A handler that reads the number with `atoi()`/`atol()`: no
+    /// quantity suffixes and no "Invalid quantity" warning (opcache's
+    /// `OnUpdateMemoryConsumption`, `OnUpdateMaxAcceleratedFiles`).
+    Atol,
     /// `OnSetExceptionStringParamMaxLen` (0..=1000000).
     ExceptionStringParamMaxLen,
     /// `OnSetLogFilter` (`all`/`no-ctrl`/`ascii`/`raw`).
@@ -636,6 +652,14 @@ impl IniRegistry {
                 }
                 (IniTyped::Long(t), None)
             }
+            ModifyHandler::LongRange { min, max, message } => {
+                let t = quantity(diag, v);
+                if !(min..=max).contains(&t) {
+                    warn(diag, message.replace("{name}", name));
+                    return Err(());
+                }
+                (IniTyped::Long(t), None)
+            }
             ModifyHandler::Real => (IniTyped::Double(strtod_prefix(v)), None),
             ModifyHandler::StringUnempty => {
                 if new_value.is_some_and(|n| n.first().is_none_or(|&c| c == 0)) {
@@ -662,7 +686,7 @@ impl IniRegistry {
                 ),
                 None,
             ),
-            ModifyHandler::Timeout => (IniTyped::Long(atol(v)), None),
+            ModifyHandler::Timeout | ModifyHandler::Atol => (IniTyped::Long(atol(v)), None),
             ModifyHandler::ExceptionStringParamMaxLen => {
                 let i = atol(v);
                 if !(0..=1_000_000).contains(&i) {
@@ -1304,6 +1328,34 @@ mod tests {
         assert_eq!(r.order, ["aardvark", "alpha", "Beta", "zeta"]);
         r.ini_restore("zeta", &mut d);
         assert_eq!(r.get_long("zeta"), 1);
+    }
+
+    #[test]
+    fn long_range_rejects_values_out_of_range() {
+        const H: ModifyHandler = ModifyHandler::LongRange {
+            min: 0,
+            max: 255,
+            message: "Invalid \"{name}\" setting. Should be between 0 and 255",
+        };
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let mut r = IniRegistry::new();
+        r.set_config("x.counter", "300");
+        r.set_config("x.quantity", "abc");
+        r.register(IniDirective::new("x.counter", Some("8"), Access::ALL, H, "x"), &mut d);
+        r.register(IniDirective::new("x.quantity", Some("8"), Access::ALL, H, "x"), &mut d);
+        // At startup a value out of range keeps the default; "abc" is 0.
+        assert_eq!(r.get("x.counter"), Some(&b"8"[..]));
+        assert_eq!(r.get("x.quantity"), Some(&b"abc"[..]));
+        assert_eq!(r.get_long("x.quantity"), 0);
+        let msgs: Vec<&str> = d.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(msgs[0], "Invalid \"x.counter\" setting. Should be between 0 and 255");
+        assert!(msgs[1].starts_with("Invalid \"x.quantity\" setting. Invalid quantity"));
+        // ini_set() is refused with the same warning.
+        d.clear();
+        assert_eq!(r.ini_set("x.counter", b"-1", &mut d), None);
+        assert_eq!(d.len(), 1);
+        assert_eq!(r.ini_set("x.counter", b"255", &mut d), Some(b"8".to_vec()));
+        assert_eq!(r.get_long("x.counter"), 255);
     }
 
     #[test]

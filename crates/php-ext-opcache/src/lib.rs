@@ -67,6 +67,7 @@ impl Extension for Opcache {
     fn register(&self, module: &mut ModuleBuilder<'_>) {
         // Register INI directives
         register_ini(module);
+        check_jit_at_registration(module.vm());
 
         // Includes of deleted files served from the cache (`validate_timestamps=0`).
         Vm::set_cached_include_hook(opcache_cached_include);
@@ -202,6 +203,23 @@ fn accel_fatal(vm: &Vm, message: &str) -> ! {
 
 fn accel_log_warning(vm: &mut Vm, message: &str) {
     vm_accel_log(vm, AccelLog::Warning, message);
+}
+
+/// `OnUpdateJit` (`zend_jit_config`) on the configured `opcache.jit` when
+/// the directives are registered (`ZEND_INI_STAGE_STARTUP`): an invalid
+/// value warns and the directive keeps its default. Runs for every VM, so
+/// each one gets the default; the warning goes to the module diagnostics,
+/// which the SAPI reports once.
+fn check_jit_at_registration(vm: &mut Vm) {
+    if vm.ini.config_value("opcache.jit").is_some()
+        && JitConfig::parse(&get_ini_string(vm, "opcache.jit")).is_err()
+    {
+        vm.module_diagnostics.push(php_support::Diagnostic::new(
+            php_support::diag::ErrorLevel::WARNING,
+            "Invalid \"opcache.jit\" setting. Should be \"disable\", \"on\", \"off\", \"tracing\", \"function\" or 4-digit number",
+        ));
+        vm.ini.reset_to_default("opcache.jit");
+    }
 }
 
 /// The startup-stage checks of opcache's INI handlers
@@ -346,33 +364,55 @@ fn on_update_jit(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
 }
 
 /// The shared-memory set-up of `accel_post_startup` /
-/// `zend_accel_init_shm`, for its fatal errors: the interned strings
-/// buffer must fit in `opcache.memory_consumption`, and file-cache-only
-/// mode needs `opcache.file_cache`.
+/// `zend_accel_init_shm`, for its fatal errors, in php-src's order: the
+/// interned strings buffer must fit in `opcache.memory_consumption`,
+/// file-cache-only and read-only mode need `opcache.file_cache`, and that
+/// must be an accessible directory.
 fn check_startup_shm(vm: &Vm) {
-    /// `sizeof(zend_accel_shared_globals)` on 64-bit builds.
-    const SHARED_GLOBALS_SIZE: i64 = 1088;
-    const MIB: i64 = 1024 * 1024;
     if !is_opcache_enabled(vm) {
         return;
     }
-    if vm.ini_bool("opcache.file_cache_read_only")
-        && get_ini_string(vm, "opcache.file_cache").is_empty()
-    {
+    let file_cache = get_ini_string(vm, "opcache.file_cache");
+    if !vm.ini_bool("opcache.file_cache_only") {
+        check_startup_interned_strings(vm);
+    } else if file_cache.is_empty() {
+        accel_fatal(
+            vm,
+            "opcache.file_cache_only is set without a proper setting of opcache.file_cache",
+        );
+    }
+    let read_only = vm.ini_bool("opcache.file_cache_read_only");
+    if read_only && file_cache.is_empty() {
         accel_fatal(
             vm,
             "opcache.file_cache_read_only is set without a proper setting of opcache.file_cache",
         );
     }
-    if vm.ini_bool("opcache.file_cache_only") {
-        if get_ini_string(vm, "opcache.file_cache").is_empty() {
-            accel_fatal(
-                vm,
-                "opcache.file_cache_only is set without a proper setting of opcache.file_cache",
-            );
-        }
-        return;
+    // A read-only file cache must be readable, any other one writable too.
+    let mode = php_streams::sys::R_OK
+        | php_streams::sys::X_OK
+        | if read_only { 0 } else { php_streams::sys::W_OK };
+    if !file_cache.is_empty() && !is_accessible_dir(&file_cache, mode) {
+        accel_fatal(
+            vm,
+            "opcache.file_cache must be a full path of an accessible directory",
+        );
     }
+}
+
+/// `IS_ABSOLUTE_PATH`, `zend_stat` + `S_ISDIR` and `access(mode)`.
+fn is_accessible_dir(path: &str, mode: i32) -> bool {
+    php_streams::paths::is_absolute(path.as_bytes())
+        && std::fs::metadata(path).is_ok_and(|m| m.is_dir())
+        && php_streams::sys::access(path.as_bytes(), mode).is_ok()
+}
+
+/// `zend_accel_init_shm`: the interned strings buffer must fit in
+/// `opcache.memory_consumption`.
+fn check_startup_interned_strings(vm: &Vm) {
+    /// `sizeof(zend_accel_shared_globals)` on 64-bit builds.
+    const SHARED_GLOBALS_SIZE: i64 = 1088;
+    const MIB: i64 = 1024 * 1024;
     let interned = vm.ini_long("opcache.interned_strings_buffer");
     let size = if interned > 0 {
         SHARED_GLOBALS_SIZE + interned.saturating_mul(MIB)
@@ -409,6 +449,37 @@ fn on_update_enable(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
     )?;
     Ok(false)
 }
+
+/// `OnUpdateCounter`.
+const COUNTER: ModifyHandler = ModifyHandler::LongRange {
+    min: 0,
+    max: 255,
+    message: "Invalid \"{name}\" setting; using default value instead. Should be between 0 and 255",
+};
+/// `OnUpdateUnrollL`: `0 < val < ZEND_JIT_TRACE_MAX_LOOPS_UNROLL` (10).
+const UNROLL_L: ModifyHandler = ModifyHandler::LongRange {
+    min: 1,
+    max: 9,
+    message: "Invalid \"{name}\" setting. Should be between 1 and 10",
+};
+/// `OnUpdateUnrollC`: `0 < val < ZEND_JIT_TRACE_MAX_CALL_DEPTH` (10).
+const UNROLL_C: ModifyHandler = ModifyHandler::LongRange {
+    min: 1,
+    max: 9,
+    message: "Invalid \"{name}\" setting. Should be between 1 and 10",
+};
+/// `OnUpdateUnrollR`: `0 <= val < ZEND_JIT_TRACE_MAX_RET_DEPTH` (4).
+const UNROLL_R: ModifyHandler = ModifyHandler::LongRange {
+    min: 0,
+    max: 3,
+    message: "Invalid \"{name}\" setting. Should be between 0 and 4",
+};
+/// `OnUpdateMaxTraceLength`: `3 < val <= ZEND_JIT_TRACE_MAX_LENGTH` (1024).
+const MAX_TRACE_LENGTH: ModifyHandler = ModifyHandler::LongRange {
+    min: 4,
+    max: 1024,
+    message: "Invalid \"{name}\" setting. Should be between 4 and 1024",
+};
 
 fn register_ini(m: &mut ModuleBuilder<'_>) {
     let d = |name: &'static str, val: Option<&'static str>, acc: Access, handler: ModifyHandler| {
@@ -476,7 +547,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.memory_consumption",
         Some("128"),
         Access::SYSTEM,
-        ModifyHandler::Long,
+        ModifyHandler::Atol,
     ))
     .ini(d(
         "opcache.interned_strings_buffer",
@@ -488,7 +559,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.max_accelerated_files",
         Some("10000"),
         Access::SYSTEM,
-        ModifyHandler::Long,
+        ModifyHandler::Atol,
     ))
     .ini(d(
         "opcache.max_wasted_percentage",
@@ -638,7 +709,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.jit_buffer_size",
         Some("64M"),
         Access::SYSTEM,
-        ModifyHandler::None,
+        ModifyHandler::Long,
     ))
     .ini(d(
         "opcache.jit_debug",
@@ -656,37 +727,37 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.jit_blacklist_root_trace",
         Some("16"),
         Access::ALL,
-        ModifyHandler::Long,
+        COUNTER,
     ))
     .ini(d(
         "opcache.jit_blacklist_side_trace",
         Some("8"),
         Access::ALL,
-        ModifyHandler::Long,
+        COUNTER,
     ))
     .ini(d(
         "opcache.jit_hot_func",
         Some("127"),
         Access::SYSTEM,
-        ModifyHandler::Long,
+        COUNTER,
     ))
     .ini(d(
         "opcache.jit_hot_loop",
         Some("61"),
         Access::SYSTEM,
-        ModifyHandler::Long,
+        COUNTER,
     ))
     .ini(d(
         "opcache.jit_hot_return",
         Some("8"),
         Access::SYSTEM,
-        ModifyHandler::Long,
+        COUNTER,
     ))
     .ini(d(
         "opcache.jit_hot_side_exit",
         Some("8"),
         Access::ALL,
-        ModifyHandler::Long,
+        COUNTER,
     ))
     .ini(d(
         "opcache.jit_max_exit_counters",
@@ -698,7 +769,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.jit_max_loop_unrolls",
         Some("8"),
         Access::ALL,
-        ModifyHandler::Long,
+        UNROLL_L,
     ))
     .ini(d(
         "opcache.jit_max_polymorphic_calls",
@@ -710,13 +781,13 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.jit_max_recursive_calls",
         Some("2"),
         Access::ALL,
-        ModifyHandler::Long,
+        UNROLL_C,
     ))
     .ini(d(
         "opcache.jit_max_recursive_returns",
         Some("2"),
         Access::ALL,
-        ModifyHandler::Long,
+        UNROLL_R,
     ))
     .ini(d(
         "opcache.jit_max_root_traces",
@@ -740,7 +811,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.jit_max_trace_length",
         Some("1024"),
         Access::ALL,
-        ModifyHandler::Long,
+        MAX_TRACE_LENGTH,
     ));
 }
 
