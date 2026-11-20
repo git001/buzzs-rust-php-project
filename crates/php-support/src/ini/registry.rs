@@ -86,6 +86,15 @@ pub enum ModifyHandler {
         /// The warning, worded as in php-src.
         message: &'static str,
     },
+    /// `OnUpdateLong` whose `mask` bits are fixed after startup (opcache's
+    /// `OnUpdateJitDebug`): a later change of one of them warns with
+    /// `message` in `ini_set()` and is rejected.
+    LongFixedBits {
+        /// The bits that cannot change after startup.
+        mask: i64,
+        /// The warning, worded as in php-src.
+        message: &'static str,
+    },
     /// `OnUpdateReal` (`zend_strtod`).
     Real,
     /// `OnUpdateString` / `OnUpdateStr`.
@@ -666,6 +675,20 @@ impl IniRegistry {
                 let t = quantity(diag, v);
                 if !(min..=max).contains(&t) {
                     warn(diag, message.replace("{name}", name));
+                    return Err(());
+                }
+                (IniTyped::Long(t), None)
+            }
+            ModifyHandler::LongFixedBits { mask, message } => {
+                let t = quantity(diag, v);
+                let old = match entry.typed {
+                    IniTyped::Long(l) => l,
+                    _ => t,
+                };
+                if stage != Stage::Startup && (old ^ t) & mask != 0 {
+                    if stage == Stage::Runtime {
+                        warn(diag, message.to_string());
+                    }
                     return Err(());
                 }
                 (IniTyped::Long(t), None)
@@ -1366,6 +1389,27 @@ mod tests {
         assert_eq!(d.len(), 1);
         assert_eq!(r.ini_set("x.counter", b"255", &mut d), Some(b"8".to_vec()));
         assert_eq!(r.get_long("x.counter"), 255);
+    }
+
+    #[test]
+    fn long_fixed_bits_refuse_runtime_changes_of_the_mask() {
+        const H: ModifyHandler = ModifyHandler::LongFixedBits {
+            mask: 0x1f0,
+            message: "Some bits cannot be changed after startup",
+        };
+        let mut d: Vec<Diagnostic> = Vec::new();
+        let mut r = IniRegistry::new();
+        r.set_config("x.debug", "0x10");
+        r.register(IniDirective::new("x.debug", Some("0"), Access::ALL, H, "x"), &mut d);
+        // Any value at startup.
+        assert_eq!(r.get_long("x.debug"), 0x10);
+        assert!(d.is_empty());
+        // Bits outside the mask may change, the masked ones may not.
+        assert_eq!(r.ini_set("x.debug", b"0x11", &mut d), Some(b"0x10".to_vec()));
+        assert!(d.is_empty());
+        assert_eq!(r.ini_set("x.debug", b"0x20", &mut d), None);
+        assert_eq!(d[0].message, "Some bits cannot be changed after startup");
+        assert_eq!(r.get_long("x.debug"), 0x11);
     }
 
     #[test]

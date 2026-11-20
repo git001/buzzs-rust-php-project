@@ -450,6 +450,12 @@ fn on_update_enable(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
     Ok(false)
 }
 
+/// `OnUpdateJitDebug` (`zend_jit_debug_config`): the profiling and
+/// debugger bits (`ZEND_JIT_DEBUG_PERSISTENT`) are fixed after startup.
+const JIT_DEBUG: ModifyHandler = ModifyHandler::LongFixedBits {
+    mask: 0x1f0,
+    message: "Some opcache.jit_debug bits cannot be changed after startup",
+};
 /// `OnUpdateCounter`.
 const COUNTER: ModifyHandler = ModifyHandler::LongRange {
     min: 0,
@@ -715,7 +721,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         "opcache.jit_debug",
         Some("0"),
         Access::ALL,
-        ModifyHandler::Long,
+        JIT_DEBUG,
     ))
     .ini(d(
         "opcache.jit_bisect_limit",
