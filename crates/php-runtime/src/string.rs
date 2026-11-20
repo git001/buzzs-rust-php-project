@@ -139,6 +139,19 @@ thread_local! {
     static PERMANENT_INTERNED: RefCell<InternTable> = RefCell::new(InternTable::default());
     static REQUEST_INTERNED: RefCell<InternTable> = RefCell::new(InternTable::default());
     static SCOPE: Cell<InternScope> = const { Cell::new(InternScope::Request) };
+    /// The hash of the bytes being looked up, while [`with_probe_hash`]
+    /// runs; 0 otherwise.
+    static PROBE_HASH: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Runs the intern table lookups in `f` for bytes whose hash is `h`, so
+/// each lookup uses `h` instead of hashing the bytes again (a lookup in
+/// both tables, then the insert, would hash them three times).
+fn with_probe_hash<R>(h: u64, f: impl FnOnce() -> R) -> R {
+    PROBE_HASH.set(h);
+    let r = f();
+    PROBE_HASH.set(0);
+    r
 }
 
 /// An intern table entry: the header of a live interned string. It does
@@ -201,7 +214,14 @@ impl InternKey {
 
 impl Hash for InternKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(zend_hash_bytes(&self.0));
+        let probe = PROBE_HASH.get();
+        let h = if probe == 0 {
+            zend_hash_bytes(&self.0)
+        } else {
+            debug_assert_eq!(probe, zend_hash_bytes(&self.0), "stale probe hash");
+            probe
+        };
+        state.write_u64(h);
     }
 }
 
@@ -809,10 +829,18 @@ impl ZStr {
         if SCOPE.get() == InternScope::Permanent {
             return Self::intern_permanent(bytes);
         }
-        if let Some(existing) = Self::existing_interned(bytes) {
+        match bytes {
+            [] => return Self::empty(),
+            &[c] => return Self::from_byte(c),
+            _ => {}
+        }
+        let h = zend_hash_bytes(bytes);
+        if let Some(existing) = with_probe_hash(h, || Self::existing_interned(bytes)) {
             return existing;
         }
-        Self::register(Self::from_parts(bytes, &[], INTERNED))
+        let s = Self::from_parts(bytes, &[], INTERNED);
+        s.header().hash.set(h);
+        Self::register(s)
     }
 
     /// Returns the canonical permanent (immortal) interned instance for `bytes`,
@@ -825,23 +853,33 @@ impl ZStr {
             _ => {}
         }
         let key = InternKey::new(bytes);
-        if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
-            let found = ManuallyDrop::new(ZStr(entry.0));
-            return ZStr::clone(&found);
-        }
-        if let Some(entry) = REQUEST_INTERNED.with(|set| set.borrow_mut().take(key)) {
-            let s = ZStr(entry.0);
-            s.header().rc.set(0);
-            s.header().meta.set(s.header().meta.get() | PERMANENT);
-            let _ = s.hash_value();
-            PERMANENT_INTERNED.with(|set| {
-                set.borrow_mut().insert(InternEntry(s.0));
-            });
-            return s;
+        let h = zend_hash_bytes(bytes);
+        let found = with_probe_hash(h, || {
+            if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
+                return Ok(entry);
+            }
+            Err(REQUEST_INTERNED.with(|set| set.borrow_mut().take(key)))
+        });
+        match found {
+            Ok(entry) => {
+                let found = ManuallyDrop::new(ZStr(entry.0));
+                return ZStr::clone(&found);
+            }
+            Err(Some(entry)) => {
+                let s = ZStr(entry.0);
+                s.header().rc.set(0);
+                s.header().meta.set(s.header().meta.get() | PERMANENT);
+                let _ = s.hash_value();
+                PERMANENT_INTERNED.with(|set| {
+                    set.borrow_mut().insert(InternEntry(s.0));
+                });
+                return s;
+            }
+            Err(None) => {}
         }
         let s = Self::from_parts(bytes, &[], INTERNED | PERMANENT);
         s.header().rc.set(0);
-        let _ = s.hash_value();
+        s.header().hash.set(h);
         PERMANENT_INTERNED.with(|set| {
             set.borrow_mut().insert(InternEntry(s.0));
         });
@@ -916,11 +954,21 @@ impl ZStr {
                 _ => {}
             }
             let key = InternKey::new(self.as_bytes());
-            if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
+            let h = self.hash_value();
+            let (permanent, request) = with_probe_hash(h, || {
+                match PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
+                    Some(entry) => (Some(entry), None),
+                    None => (
+                        None,
+                        REQUEST_INTERNED.with(|set| set.borrow_mut().take(key)),
+                    ),
+                }
+            });
+            if let Some(entry) = permanent {
                 let found = ManuallyDrop::new(ZStr(entry.0));
                 return ZStr::clone(&found);
             }
-            if let Some(entry) = REQUEST_INTERNED.with(|set| set.borrow_mut().take(key)) {
+            if let Some(entry) = request {
                 let s = ZStr(entry.0);
                 s.header().rc.set(0);
                 s.header().meta.set(s.header().meta.get() | PERMANENT);
@@ -946,7 +994,7 @@ impl ZStr {
                 INTERNED | PERMANENT | (meta & VALID_UTF8),
             );
             s.header().rc.set(0);
-            let _ = s.hash_value();
+            s.header().hash.set(h);
             PERMANENT_INTERNED.with(|set| {
                 set.borrow_mut().insert(InternEntry(s.0));
             });
@@ -956,7 +1004,16 @@ impl ZStr {
         if self.is_interned() {
             return self;
         }
-        if let Some(existing) = Self::existing_interned(self.as_bytes()) {
+        let h = match self.as_bytes() {
+            [] | [_] => 0,
+            _ => self.hash_value(),
+        };
+        let existing = if h == 0 {
+            Self::existing_interned(self.as_bytes())
+        } else {
+            with_probe_hash(h, || Self::existing_interned(self.as_bytes()))
+        };
+        if let Some(existing) = existing {
             return existing;
         }
         let meta = self.header().meta.get();
@@ -964,11 +1021,9 @@ impl ZStr {
             self.header().meta.set(meta | INTERNED);
             return Self::register(self);
         }
-        Self::register(Self::from_parts(
-            self.as_bytes(),
-            &[],
-            INTERNED | (meta & VALID_UTF8),
-        ))
+        let s = Self::from_parts(self.as_bytes(), &[], INTERNED | (meta & VALID_UTF8));
+        s.header().hash.set(h);
+        Self::register(s)
     }
 
     /// The interned instance holding `bytes`, if there is one: the static
@@ -980,11 +1035,16 @@ impl ZStr {
             _ => {}
         }
         let key = InternKey::new(bytes);
-        if let Some(entry) = PERMANENT_INTERNED.with(|set| set.borrow().get(key).copied()) {
-            let found = ManuallyDrop::new(ZStr(entry.0));
-            return Some(ZStr::clone(&found));
-        }
-        let entry = REQUEST_INTERNED.with(|set| set.borrow().get(key).copied())?;
+        let lookup = || {
+            PERMANENT_INTERNED
+                .with(|set| set.borrow().get(key).copied())
+                .or_else(|| REQUEST_INTERNED.with(|set| set.borrow().get(key).copied()))
+        };
+        let entry = if PROBE_HASH.get() == 0 {
+            with_probe_hash(zend_hash_bytes(bytes), lookup)
+        } else {
+            lookup()
+        }?;
         let found = ManuallyDrop::new(ZStr(entry.0));
         Some(ZStr::clone(&found))
     }
