@@ -65,9 +65,6 @@ impl Extension for Opcache {
     }
 
     fn register(&self, module: &mut ModuleBuilder<'_>) {
-        // Also register "opcache" in loaded extensions so tests with `--EXTENSIONS-- opcache` pass
-        module.vm().loaded_extensions.push("opcache".to_string());
-
         // Register INI directives
         register_ini(module);
 
@@ -415,7 +412,7 @@ fn on_update_enable(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
 
 fn register_ini(m: &mut ModuleBuilder<'_>) {
     let d = |name: &'static str, val: Option<&'static str>, acc: Access, handler: ModifyHandler| {
-        IniDirective::new(name, val, acc, handler, "opcache")
+        IniDirective::new(name, val, acc, handler, "Zend OPcache")
     };
 
     m.ini_on_modify("opcache.enable", on_update_enable);

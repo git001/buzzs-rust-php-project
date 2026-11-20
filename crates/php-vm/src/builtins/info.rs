@@ -609,8 +609,9 @@ pub(crate) fn user_functions(vm: &Vm) -> Vec<ZStr> {
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn get_extension_funcs(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let name = s(a, 0).to_string_lossy();
-    // "zend*" names the Core module.
-    let module = if name.len() >= 4 && name[..4].eq_ignore_ascii_case("zend") {
+    // "zend" names the Core module (php-src compares including the NUL,
+    // so "Zend OPcache" is not Core).
+    let module = if name.eq_ignore_ascii_case("zend") {
         "Core".to_string()
     } else {
         match canonical_module(vm, &name) {
