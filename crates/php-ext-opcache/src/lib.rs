@@ -510,25 +510,25 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ))
     .ini(d(
         "opcache.preferred_memory_model",
-        None,
+        Some(""),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
     .ini(d(
         "opcache.blacklist_filename",
-        None,
+        Some(""),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
     .ini(d(
         "opcache.max_file_size",
         Some("0"),
-        Access::ALL,
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
         "opcache.error_log",
-        None,
+        Some(""),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
@@ -606,7 +606,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ))
     .ini(d(
         "opcache.restrict_api",
-        None,
+        Some(""),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
@@ -618,25 +618,25 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     ))
     .ini(d(
         "opcache.preload",
-        None,
+        Some(""),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
     .ini(d(
         "opcache.preload_user",
-        None,
+        Some(""),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
     .ini(d(
         "opcache.jit",
-        Some("tracing"),
+        Some("disable"),
         Access::ALL,
         ModifyHandler::None,
     ))
     .ini(d(
         "opcache.jit_buffer_size",
-        Some("0"),
+        Some("64M"),
         Access::SYSTEM,
         ModifyHandler::None,
     ))
@@ -667,19 +667,19 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     .ini(d(
         "opcache.jit_hot_func",
         Some("127"),
-        Access::ALL,
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
         "opcache.jit_hot_loop",
-        Some("64"),
-        Access::ALL,
+        Some("61"),
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
         "opcache.jit_hot_return",
         Some("8"),
-        Access::ALL,
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
@@ -691,7 +691,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     .ini(d(
         "opcache.jit_max_exit_counters",
         Some("8192"),
-        Access::ALL,
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
@@ -721,13 +721,13 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     .ini(d(
         "opcache.jit_max_root_traces",
         Some("1024"),
-        Access::ALL,
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
         "opcache.jit_max_side_traces",
         Some("128"),
-        Access::ALL,
+        Access::SYSTEM,
         ModifyHandler::Long,
     ))
     .ini(d(
