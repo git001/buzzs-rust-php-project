@@ -179,10 +179,17 @@ pub(crate) fn docref(vm: &mut Vm, level: i64, message: &[u8]) -> Result<(), Thro
 /// `zend_error(level, message)` ("in Unknown on line 0" outside PHP code).
 fn plain_error(vm: &mut Vm, level: i64, message: &str) -> Result<(), Throw> {
     if vm.is_executing() {
-        vm.raise(level, message)
-    } else {
-        vm.error_at(level, message, &ZStr::from("Unknown"), 0)
+        return vm.raise(level, message);
     }
+    if phase() != Phase::Startup {
+        return vm.error_at(level, message, &ZStr::from("Unknown"), 0);
+    }
+    // As in `docref`: a startup error does not count as sent headers, or
+    // every later directive would fail `check_state`.
+    let sent = vm.headers_sent;
+    let r = vm.error_at(level, message, &ZStr::from("Unknown"), 0);
+    vm.headers_sent = sent;
+    r
 }
 
 /// The VM seen as a [`SessionHost`]; owns the session state while an entry

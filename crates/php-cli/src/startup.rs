@@ -281,6 +281,23 @@ fn load_extensions(r: &Reporter, cfg: &Config) {
     }
 }
 
+/// Reports what the extensions raised while registering their INI
+/// directives (`MINIT`). The CLI builds a VM, and with it the extensions,
+/// for every request, but PHP starts its modules once: only the first
+/// VM's diagnostics are reported.
+pub fn report_module_diagnostics(cfg: &Config, diagnostics: &[Diagnostic]) {
+    thread_local! {
+        static REPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if REPORTED.with(|r| r.replace(true)) {
+        return;
+    }
+    let r = Reporter::new(cfg);
+    for d in diagnostics {
+        r.diagnostic(d);
+    }
+}
+
 /// Runs the startup checks; `Err(status)` when startup fails.
 pub fn module_startup(cfg: &Config) -> Result<(), i32> {
     let r = Reporter::new(cfg);

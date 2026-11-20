@@ -285,6 +285,7 @@ impl Vm {
             ini_stage: crate::ext::IniStage::Runtime,
             magic_call_name: None,
             startup_diagnostics: Vec::new(),
+            module_diagnostics: Vec::new(),
             log_hook: None,
             main_return: Value::Null,
             native_stack_base: 0,

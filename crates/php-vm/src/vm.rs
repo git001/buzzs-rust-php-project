@@ -2301,6 +2301,10 @@ pub struct Vm {
     /// INI warnings raised while building the registry at startup (the
     /// SAPI reports them as "PHP Startup: ...").
     pub startup_diagnostics: Vec<php_support::Diagnostic>,
+    /// INI warnings raised while the extensions registered their
+    /// directives (`zend_register_ini_entries` in `MINIT`, e.g. an invalid
+    /// quantity given with `-d`); the SAPI reports them once at startup.
+    pub module_diagnostics: Vec<php_support::Diagnostic>,
     /// SAPI log sink for `log_errors` (`sapi_module.log_message`);
     /// `None` writes to stderr / the `error_log` file.
     pub log_hook: Option<Box<dyn FnMut(&[u8])>>,

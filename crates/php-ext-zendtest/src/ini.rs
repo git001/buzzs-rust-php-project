@@ -205,25 +205,7 @@ fn print_mshutdown(vm: &mut Vm) {
     }
 }
 
-/// The startup warnings of `OnUpdateLong` for values given in php.ini /
-/// with `-d` (the registry's diagnostics are not surfaced to modules).
-fn startup_warnings(vm: &mut Vm) {
-    for (name, _, _, handler) in DIRECTIVES {
-        if !matches!(handler, ModifyHandler::Long) {
-            continue;
-        }
-        let Some(v) = vm.ini_string(name) else {
-            continue;
-        };
-        if let (_, Some(err)) = php_support::ini::parse_quantity(&v) {
-            let msg = php_support::ini::quantity::quantity_warning(name, &err);
-            let _ = vm.raise(crate::util::E_WARNING, &msg);
-        }
-    }
-}
-
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    m.on_request_startup(startup_warnings);
     for (name, default, access, handler) in DIRECTIVES {
         m.ini(IniDirective::new(
             name,

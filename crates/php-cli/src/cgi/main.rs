@@ -678,6 +678,7 @@ fn new_prepared_vm(cfg: &Config, ini: Vec<(String, String)>) -> PreparedVm {
 
 /// What every VM of this binary gets after module startup.
 fn configure(vm: &mut Vm, cfg: &Config) {
+    startup::report_module_diagnostics(cfg, &std::mem::take(&mut vm.module_diagnostics));
     vm.set_configuration(cfg.configuration.values.clone());
     vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));
     INI_FILES.with(|f| *f.borrow_mut() = (cfg.opened_path.clone(), cfg.scanned_files.clone()));

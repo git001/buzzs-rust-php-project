@@ -511,10 +511,12 @@ impl<'a> ModuleBuilder<'a> {
     }
 
     /// Registers an INI directive. Values given with `-d` before startup
-    /// apply.
+    /// apply; what their handler reports on them (an invalid quantity, …)
+    /// is kept in [`Vm::module_diagnostics`] for the SAPI.
     pub fn ini(&mut self, directive: IniDirective) -> &mut Self {
         let mut sink: Vec<php_support::Diagnostic> = Vec::new();
         self.vm.ini.register(directive, &mut sink);
+        self.vm.module_diagnostics.append(&mut sink);
         self
     }
 
