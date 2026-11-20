@@ -1293,15 +1293,19 @@ fn ini_restore(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if n == "memory_limit" || n == "max_memory_limit" {
         vm.ini.memory_usage = u64::try_from(php_memlimit::real_usage()).unwrap_or(u64::MAX);
     }
+    // `zend_restore_ini_entry_cb`: the handler sees the original value at
+    // the runtime stage before it is restored; if it refuses (opcache.enable
+    // once disabled), the directive keeps its value.
+    if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
+        if let Some(orig) = vm.ini.runtime_restore_value(&n) {
+            vm.ini_stage = crate::ext::IniStage::Runtime;
+            if !h(vm, &orig)? {
+                return Ok(Value::Null);
+            }
+        }
+    }
     vm.ini.ini_restore(&n, &mut sink);
     vm.sync_ini(&n);
-    if let Some(h) = vm.ini_modify_hooks.get(n.as_str()).copied() {
-        let v = vm.ini.get(&n).map(<[u8]>::to_vec).unwrap_or_default();
-        vm.ini_stage = crate::ext::IniStage::Restore;
-        let r = h(vm, &v);
-        vm.ini_stage = crate::ext::IniStage::Runtime;
-        r?;
-    }
     Ok(Value::Null)
 }
 

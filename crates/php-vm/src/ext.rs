@@ -371,7 +371,9 @@ pub enum IniStage {
     /// `ini_set()` / `ini_alter()` (`ZEND_INI_STAGE_RUNTIME`).
     #[default]
     Runtime,
-    /// `ini_restore()` / request end (`ZEND_INI_STAGE_DEACTIVATE`).
+    /// Request end (`ZEND_INI_STAGE_DEACTIVATE`). `ini_restore()` runs at
+    /// [`IniStage::Runtime`], as in php-src, and a handler refusing the
+    /// original value keeps the directive as it is.
     Restore,
 }
 

@@ -498,6 +498,16 @@ impl IniRegistry {
         }
     }
 
+    /// The value `ini_restore($name)` goes back to, when the directive is
+    /// modified and may be restored at run time; `None` when there is
+    /// nothing to restore (php-src then calls no `on_modify` handler).
+    #[must_use]
+    pub fn runtime_restore_value(&self, name: &str) -> Option<Vec<u8>> {
+        let e = self.entries.get(name)?;
+        (e.modified && e.modifiable.allows(Access::USER))
+            .then(|| e.orig_value.clone().unwrap_or_default())
+    }
+
     /// `ini_restore($name)`.
     pub fn ini_restore(&mut self, name: &str, diag: &mut dyn DiagnosticSink) {
         self.restore(name, Stage::Runtime, diag);
