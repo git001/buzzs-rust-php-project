@@ -136,6 +136,25 @@ pub enum LogLevel {
     Debug = 7,
 }
 
+impl LogLevel {
+    /// The level `php_apache_sapi_log_message()` logs a syslog priority
+    /// at (`APLOG_*` equal `LOG_*`); anything else, such as the -1 of
+    /// `error_log($message, 4)`, is `APLOG_ERR`.
+    #[must_use]
+    pub fn from_syslog(severity: i32) -> Self {
+        match severity {
+            0 => LogLevel::Emerg,
+            1 => LogLevel::Alert,
+            2 => LogLevel::Crit,
+            4 => LogLevel::Warning,
+            5 => LogLevel::Notice,
+            6 => LogLevel::Info,
+            7 => LogLevel::Debug,
+            _ => LogLevel::Err,
+        }
+    }
+}
+
 /// The INI access level of a per-directory entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirStatus {

@@ -18,7 +18,6 @@
 //! The `php` binary calls [`maybe_run`] first; it returns `None` unless
 //! `-S` was given.
 
-pub mod capture;
 pub mod cookie;
 pub mod headers;
 pub mod log;

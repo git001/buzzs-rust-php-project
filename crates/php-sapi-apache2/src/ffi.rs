@@ -428,9 +428,9 @@ impl Drop for ApacheSubRequest {
 }
 
 /// Logs a server-level message (`ap_log_error`).
-pub fn log_server(level: LogLevel, msg: &str) {
+pub fn log_server(level: LogLevel, msg: &[u8]) {
     if let Some(api) = api() {
-        let c = cstring(msg.as_bytes());
+        let c = cstring(msg);
         // SAFETY: the message is logged with a "%s" format.
         unsafe { (api.log_server)(level as c_int, c.as_ptr()) }
     }
@@ -466,7 +466,7 @@ pub unsafe extern "C" fn phprust_post_config(ini_dir: *const c_char) -> c_int {
         let dir = dir.map(|d| std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&d)));
         let (cfg, warnings) = crate::config::ProcessConfig::load(dir.as_deref());
         for w in warnings {
-            log_server(LogLevel::Warning, &format!("PHP Warning:  {w}"));
+            log_server(LogLevel::Warning, format!("PHP Warning:  {w}").as_bytes());
         }
         crate::config::install(cfg);
     });

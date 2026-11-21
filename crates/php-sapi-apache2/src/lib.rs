@@ -8,7 +8,7 @@
 //!   /`PhpRustAllowThreads` directives and the hooks; it reaches Rust
 //!   through [`ffi`].
 //! * [`handler`] — `php_handler()`: filtering, the request lock and
-//!   thread, the `max_execution_time` watchdog, error-log capture.
+//!   thread, the `max_execution_time` watchdog.
 //! * [`request`] — one request's lifecycle around the [`php_vm::Vm`].
 //! * [`vars`] — `$_GET`/`$_POST`/`$_COOKIE`/`$_FILES`/`$_SERVER`/`$_ENV`/
 //!   `$_REQUEST`; [`multipart`] — the rfc1867 upload parser.

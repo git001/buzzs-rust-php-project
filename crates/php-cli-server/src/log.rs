@@ -59,7 +59,18 @@ pub fn write(ty: i32, msg: &[u8]) {
     if level() < ty {
         return;
     }
-    crate::capture::write_stderr(&format_line(msg));
+    raw(&format_line(msg));
+}
+
+/// `sapi_cli_server_log_message()`: the PHP error log (while `error_log`
+/// is unset) as console lines, `[time] message`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConsoleLog;
+
+impl php_sapi::SapiModule for ConsoleLog {
+    fn log_message(&self, message: &[u8], _severity: i32) {
+        write(LOG_MESSAGE, message);
+    }
 }
 
 /// Convenience wrapper for string messages.

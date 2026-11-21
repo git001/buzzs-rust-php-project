@@ -1,8 +1,10 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The content handler on the httpd side (`php_handler()`): request
-//! filtering, the per-process request lock, the request thread, the
-//! `max_execution_time` watchdog and the error-log capture.
+//! filtering, the per-process request lock, the request thread and the
+//! `max_execution_time` watchdog. The PHP error log reaches httpd's error
+//! log through the SAPI logger ([`crate::functions::ApacheLog`]); stderr
+//! is httpd's error log itself, as for `mod_php`.
 //!
 //! # The watchdog
 //! php-src arms `ITIMER_PROF` and its `SIGPROF` handler flags the timeout
@@ -125,12 +127,7 @@ pub fn handle(r: &dyn Backend, make: BackendFactory) -> i32 {
     let _guard = REQUEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let capture = StderrCapture::start();
-    let status = run_thread(make, params, Some((r, capture.as_ref())));
-    if let Some(c) = capture {
-        forward_log(r, &c.finish());
-    }
-    status
+    run_thread(make, params, Some(r))
 }
 
 fn log_with_file(r: &dyn Backend, pre: &str, file: &[u8], post: &str) {
@@ -144,16 +141,12 @@ fn log_with_file(r: &dyn Backend, pre: &str, file: &[u8], post: &str) {
 /// watchdog, as [`handle`] does once its checks passed; `r` receives the
 /// log entries.  Public for the SAPI's own tests.
 pub fn run_watched(r: &dyn Backend, make: BackendFactory, params: RunParams) -> i32 {
-    run_thread(make, params, Some((r, None)))
+    run_thread(make, params, Some(r))
 }
 
 /// Runs the request on the current thread, enforcing `max_execution_time`
 /// with a background watchdog thread when `watch` is given.
-fn run_thread(
-    make: BackendFactory,
-    params: RunParams,
-    watch: Option<(&dyn Backend, Option<&StderrCapture>)>,
-) -> i32 {
+fn run_thread(make: BackendFactory, params: RunParams, watch: Option<&dyn Backend>) -> i32 {
     let _ = php_memlimit::bind_to_current_thread();
     let prev_in_request = IN_REQUEST.with(|c| c.replace(true));
     struct InRequestGuard(bool);
@@ -167,18 +160,15 @@ fn run_thread(
     let timer = params.timer.clone();
     let (tx, rx) = mpsc::channel::<()>();
 
-    let watchdog_handle = if let Some((r, capture)) = watch {
+    let watchdog_handle = if let Some(r) = watch {
         if let Some(clock) = current_cpu_clock() {
             let timer_clone = timer.clone();
             let raw_r: (usize, usize) = unsafe { std::mem::transmute(r as *const dyn Backend) };
-            let raw_cap: Option<usize> = capture.map(|c| c as *const StderrCapture as usize);
             std::thread::Builder::new()
                 .name("php-watchdog".into())
                 .spawn(move || {
                     let r: &dyn Backend = unsafe { std::mem::transmute(raw_r) };
-                    let capture: Option<&StderrCapture> =
-                        raw_cap.map(|p| unsafe { &*(p as *const StderrCapture) });
-                    let mut sink = EngineTimeout { r, capture };
+                    let mut sink = EngineTimeout { r };
                     watchdog(&timer_clone, &rx, &mut || clock_ns(clock), &mut sink);
                 })
                 .ok()
@@ -220,7 +210,6 @@ pub(crate) trait TimeoutSink {
 /// The production [`TimeoutSink`]: php-vm's interrupt module.
 struct EngineTimeout<'a> {
     r: &'a dyn Backend,
-    capture: Option<&'a StderrCapture>,
 }
 
 impl TimeoutSink for EngineTimeout<'_> {
@@ -233,7 +222,7 @@ impl TimeoutSink for EngineTimeout<'_> {
     }
 
     fn kill(&mut self, secs: i64, hard: i64) {
-        hard_timeout(self.r, self.capture, secs, hard);
+        hard_timeout(secs, hard);
     }
 
     fn is_aborted(&self) -> bool {
@@ -307,12 +296,8 @@ fn clock_ns(clock: libc::clockid_t) -> i64 {
 /// starts a replacement child and the client sees the response cut off.
 /// The executing file and line belong to the request thread, so they are
 /// reported as `Unknown` / 0, as php-src does when nothing executes.
-fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64, hard: i64) -> ! {
+fn hard_timeout(secs: i64, hard: i64) -> ! {
     use std::io::Write;
-    if let Some(c) = capture {
-        c.restore();
-        forward_log(r, &c.snapshot());
-    }
     let msg = format!(
         "\nFatal error: Maximum execution time of {secs}+{hard} seconds exceeded (terminated) in Unknown on line 0\n"
     );
@@ -320,155 +305,6 @@ fn hard_timeout(r: &dyn Backend, capture: Option<&StderrCapture>, secs: i64, har
     // SAFETY: terminating the process without running destructors is the
     // intent: other threads may hold locks and the request_rec.
     unsafe { libc::_exit(124) }
-}
-
-/// Forwards captured stderr once stderr is restored: lines httpd itself
-/// logged during the request (the main server's error log *is* stderr)
-/// are written back verbatim; the rest (the VM's error log when
-/// `error_log` is unset) becomes `ap_log_rerror` entries, one per PHP
-/// message, at the level `php_error_cb` would use.
-fn forward_log(r: &dyn Backend, data: &[u8]) {
-    use std::io::Write;
-    let mut pending: Vec<u8> = Vec::new();
-    let flush_pending = |pending: &mut Vec<u8>| {
-        for msg in split_log_messages(pending) {
-            r.log(log_level_of(&msg), &msg);
-        }
-        pending.clear();
-    };
-    for line in data.split_inclusive(|&c| c == b'\n') {
-        if is_httpd_log_line(line) {
-            flush_pending(&mut pending);
-            let mut line = line.to_vec();
-            if line.last() != Some(&b'\n') {
-                line.push(b'\n');
-            }
-            let _ = std::io::stderr().write_all(&line);
-        } else {
-            pending.extend_from_slice(line);
-        }
-    }
-    flush_pending(&mut pending);
-}
-
-/// Whether a captured line was written by httpd's logger
-/// (`[date] [module:level] ...`).
-fn is_httpd_log_line(line: &[u8]) -> bool {
-    line.first() == Some(&b'[') && line.windows(3).take(64).any(|w| w == b"] [")
-}
-
-/// The httpd level `php_error_cb` uses for a logged PHP message.
-pub fn log_level_of(msg: &[u8]) -> LogLevel {
-    const LEVELS: &[(&[u8], LogLevel)] = &[
-        (b"PHP Fatal error:", LogLevel::Err),
-        (b"PHP Recoverable fatal error:", LogLevel::Err),
-        (b"PHP Parse error:", LogLevel::Err),
-        (b"PHP Warning:", LogLevel::Warning),
-        (b"PHP Notice:", LogLevel::Notice),
-        (b"PHP Deprecated:", LogLevel::Info),
-    ];
-    LEVELS
-        .iter()
-        .find(|(p, _)| msg.starts_with(p))
-        .map_or(LogLevel::Err, |(_, l)| *l)
-}
-
-/// Splits captured stderr into log messages.
-pub fn split_log_messages(data: &[u8]) -> Vec<Vec<u8>> {
-    let mut out: Vec<Vec<u8>> = Vec::new();
-    for line in data.split(|&c| c == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        match out.last_mut() {
-            Some(prev) if !line.starts_with(b"PHP ") => {
-                prev.push(b'\n');
-                prev.extend_from_slice(line);
-            }
-            _ => out.push(line.to_vec()),
-        }
-    }
-    out
-}
-
-/// Redirects the process's stderr into a memory file for the duration of
-/// a request.
-#[derive(Debug)]
-struct StderrCapture {
-    saved: libc::c_int,
-    memfd: libc::c_int,
-    forwarded: std::sync::atomic::AtomicI64,
-}
-
-impl StderrCapture {
-    fn start() -> Option<Self> {
-        // SAFETY: plain fd syscalls on descriptors we own; on failure
-        // everything opened so far is closed again.
-        unsafe {
-            let memfd = libc::memfd_create(c"phprust-stderr".as_ptr(), libc::MFD_CLOEXEC);
-            if memfd < 0 {
-                return None;
-            }
-            let saved = libc::dup(2);
-            if saved < 0 {
-                libc::close(memfd);
-                return None;
-            }
-            if libc::dup2(memfd, 2) < 0 {
-                libc::close(saved);
-                libc::close(memfd);
-                return None;
-            }
-            Some(StderrCapture {
-                saved,
-                memfd,
-                forwarded: std::sync::atomic::AtomicI64::new(0),
-            })
-        }
-    }
-
-    /// The bytes written so far and not yet returned by a snapshot.
-    fn snapshot(&self) -> Vec<u8> {
-        use std::sync::atomic::Ordering;
-        let from = self.forwarded.load(Ordering::SeqCst);
-        let mut out = Vec::new();
-        let mut buf = [0u8; 8192];
-        let mut off = from;
-        loop {
-            // SAFETY: pread into our buffer from our memfd.
-            let n = unsafe { libc::pread(self.memfd, buf.as_mut_ptr().cast(), buf.len(), off) };
-            let Ok(n) = usize::try_from(n) else {
-                break;
-            };
-            if n == 0 {
-                break;
-            }
-            out.extend_from_slice(&buf[..n]);
-            off += i64::try_from(n).unwrap_or(0);
-        }
-        self.forwarded.store(off, Ordering::SeqCst);
-        out
-    }
-
-    /// Points stderr back at the original descriptor.
-    fn restore(&self) {
-        // SAFETY: `saved` is a descriptor we own (dup of the original 2).
-        unsafe {
-            libc::dup2(self.saved, 2);
-        }
-    }
-
-    /// Restores stderr and returns the captured bytes.
-    fn finish(self) -> Vec<u8> {
-        self.restore();
-        let data = self.snapshot();
-        // SAFETY: closing the descriptors we own.
-        unsafe {
-            libc::close(self.saved);
-            libc::close(self.memfd);
-        }
-        data
-    }
 }
 
 #[cfg(test)]
@@ -515,23 +351,6 @@ mod tests {
             htaccess: true,
         });
         assert_eq!(handle(&m, Box::new(|| None)), DECLINED);
-    }
-
-    #[test]
-    fn httpd_lines_are_recognised() {
-        assert!(is_httpd_log_line(
-            b"[Tue Nov 03 20:03:58.704347 2026] [php:notice] [pid 1] x\n"
-        ));
-        assert!(!is_httpd_log_line(b"PHP Warning:  x"));
-        assert!(!is_httpd_log_line(b"[just brackets]"));
-    }
-
-    #[test]
-    fn log_levels() {
-        assert_eq!(log_level_of(b"PHP Warning:  x"), LogLevel::Warning);
-        assert_eq!(log_level_of(b"PHP Deprecated:  x"), LogLevel::Info);
-        assert_eq!(log_level_of(b"PHP Fatal error:  x"), LogLevel::Err);
-        assert_eq!(log_level_of(b"other"), LogLevel::Err);
     }
 
     /// A [`TimeoutSink`] recording what the watchdog reported.
@@ -633,17 +452,5 @@ mod tests {
         let mut now = || -> i64 { unreachable!("the request already ended") };
         watchdog(&timer, &rx, &mut now, &mut sink);
         assert_eq!(sink.expired, 0);
-    }
-
-    #[test]
-    fn log_messages_are_grouped() {
-        let v = split_log_messages(
-            b"PHP Warning:  a in x on line 1\nPHP Fatal error:  Uncaught E\nStack trace:\n#0 {main}\nplain\n",
-        );
-        assert_eq!(v.len(), 2);
-        assert_eq!(
-            v[1],
-            b"PHP Fatal error:  Uncaught E\nStack trace:\n#0 {main}\nplain"
-        );
     }
 }

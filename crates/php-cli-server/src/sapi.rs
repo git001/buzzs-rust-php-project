@@ -136,7 +136,6 @@ pub struct CgiInfo {
 
 thread_local! {
     static CURRENT: RefCell<Option<Rc<RequestCtx>>> = const { RefCell::new(None) };
-    static ORIG_ERROR_LOG: Cell<Option<NativeFn>> = const { Cell::new(None) };
 }
 
 /// Runs `f` with the current request context (`None` outside a request).
@@ -635,22 +634,6 @@ fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value(CGI_SAPI_NAME))
 }
 
-/// `sapi_cgi_log_message()`: the message and a newline on stderr.
-fn error_log_cgi(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let ty = if a.has(1) { a.int(1) } else { 0 };
-    if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
-        vm.flush_stdout();
-        let mut line = a.str(0).as_bytes().to_vec();
-        line.push(b'\n');
-        let _ = std::io::stderr().write_all(&line);
-        return Ok(Value::Bool(true));
-    }
-    match ORIG_ERROR_LOG.with(Cell::get) {
-        Some(orig) => orig(vm, a),
-        None => Ok(Value::Bool(false)),
-    }
-}
-
 #[allow(clippy::unnecessary_wraps)]
 fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(ctx_or(false, |c| c.aborted.get())))
@@ -659,21 +642,6 @@ fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 #[allow(clippy::unnecessary_wraps)]
 fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::from(ctx_or(false, |c| c.aborted.get()))))
-}
-
-/// `error_log()`: type 0 without an `error_log` file goes to the console
-/// log (`sapi_cli_server_log_message`).
-fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let ty = if a.has(1) { a.int(1) } else { 0 };
-    if ty == 0 && vm.ini_string("error_log").is_none_or(|v| v.is_empty()) {
-        vm.flush_stdout();
-        crate::log::write(crate::log::LOG_MESSAGE, a.str(0).as_bytes());
-        return Ok(Value::Bool(true));
-    }
-    match ORIG_ERROR_LOG.with(Cell::get) {
-        Some(orig) => orig(vm, a),
-        None => Ok(Value::Bool(false)),
-    }
 }
 
 /// `apache_request_headers()` / `getallheaders()`.
@@ -823,17 +791,22 @@ impl Extension for CliServerModule {
                     std::mem::forget(v);
                 }
             }
-            if let Some(b) = vm.native_function("error_log") {
-                ORIG_ERROR_LOG.with(|c| c.set(Some(b.handler)));
-            }
+            // `sapi_module.log_message`: the CGI SAPI's stderr, the built-in
+            // server's console.
+            let log: Rc<dyn php_sapi::SapiModule> = if self.cgi {
+                Rc::new(php_sapi::StderrLog)
+            } else {
+                Rc::new(crate::log::ConsoleLog)
+            };
+            vm.set_sapi_module(log);
         }
         for (name, v) in UPLOAD_ERR {
             m.constant(name, Value::Int(*v));
         }
-        let (sapi, sapi_name, log): (&str, NativeFn, NativeFn) = if self.cgi {
-            (CGI_SAPI_NAME, php_sapi_name_cgi, error_log_cgi)
+        let (sapi, sapi_name): (&str, NativeFn) = if self.cgi {
+            (CGI_SAPI_NAME, php_sapi_name_cgi)
         } else {
-            ("cli-server", php_sapi_name, error_log)
+            ("cli-server", php_sapi_name)
         };
         m.constant("PHP_SAPI", str_value(sapi))
             .function_static("header(string $header, bool $replace = true, int $response_code = 0): void", header)
@@ -855,10 +828,6 @@ impl Extension for CliServerModule {
             .function_static("getmypid(): int|false", getmypid)
             .function_static("connection_aborted(): bool", connection_aborted)
             .function_static("connection_status(): int", connection_status)
-            .function_static(
-                "error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool",
-                log,
-            )
             .function_static("apache_request_headers(): array", apache_request_headers)
             .function_static("getallheaders(): array", apache_request_headers)
             .function_static("apache_response_headers(): array", apache_response_headers);
@@ -998,16 +967,8 @@ pub fn run_request(
 ) -> (Outcome, Vm) {
     CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
     *vm.slot.borrow_mut() = Some(ctx.clone());
-    // The CGI SAPI logs to its own stderr (`sapi_cgi_log_message`).
-    let capture = ctx.cgi.is_none();
-    if capture {
-        crate::capture::start();
-    }
     let mut machine = vm.vm;
     let outcome = run_request_inner(&mut machine, ctx, cfg, is_static);
-    if capture {
-        crate::capture::stop();
-    }
     *vm.slot.borrow_mut() = None;
     CURRENT.with(|c| *c.borrow_mut() = None);
     (outcome, machine)
