@@ -1091,11 +1091,11 @@ mod tests {
         )
     }
 
+    /// Uploads into PHP's temporary directory: each file gets its own
+    /// random name (`php_open_temporary_fd()`), so the tests can share it.
     fn tmp_settings() -> UploadSettings {
-        let dir = std::env::temp_dir().join(format!("phprust-mp-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
         UploadSettings {
-            upload_tmp_dir: dir.as_os_str().as_bytes().to_vec(),
+            upload_tmp_dir: php_streams::temp::temp_dir(),
             ..UploadSettings::default()
         }
     }

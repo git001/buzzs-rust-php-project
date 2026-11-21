@@ -45,6 +45,29 @@ impl Drop for ServerProc {
     }
 }
 
+/// A new document root in PHP's temporary directory: `php_open_temporary_fd()`
+/// reserves a random name (`rpb-<name>-...`), the directory is that name
+/// plus `.d`, created without following anything planted there. The
+/// reserved file goes right away; the directory with the server.
+fn temp_root(name: &str) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let prefix = format!("rpb-{name}-");
+    let (file, reserved) = php_streams::temp::open_temporary_fd(
+        None,
+        Some(prefix.as_bytes()),
+        php_streams::temp::SILENT,
+    )
+    .expect("temporary file");
+    drop(file);
+    let reserved = PathBuf::from(std::ffi::OsString::from_vec(reserved));
+    let mut root = reserved.clone().into_os_string();
+    root.push(".d");
+    let root = PathBuf::from(root);
+    std::fs::create_dir(&root).expect("document root");
+    let _ = std::fs::remove_file(&reserved);
+    root
+}
+
 /// Starts `php -n [-d ini]... -t <root> -S 127.0.0.1:0` serving `script`
 /// as `/test.php`.
 fn start(name: &str, script: &str, ini: &[&str]) -> ServerProc {
@@ -54,10 +77,7 @@ fn start(name: &str, script: &str, ini: &[&str]) -> ServerProc {
 /// [`start`] with `env` added to the server's environment (and
 /// `HTTP_PROXY` removed from it unless given).
 fn start_env(name: &str, script: &str, ini: &[&str], env: &[(&str, &str)]) -> ServerProc {
-    let root =
-        std::env::temp_dir().join(format!("php-cli-server-rpb-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = temp_root(name);
     std::fs::write(root.join("test.php"), script).unwrap();
     let mut cmd = Command::new(php_binary());
     cmd.env_remove("HTTP_PROXY").envs(env.iter().copied());
