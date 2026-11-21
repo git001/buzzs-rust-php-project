@@ -522,6 +522,27 @@ echo "$own $bad\n";
 }
 
 #[test]
+fn every_thread_starts_with_the_process_lc_ctype() {
+    // `zend_reset_lc_ctype_locale()` at process start (the standard
+    // extension's `module_startup`): "C.UTF-8", so `escapeshellarg()`
+    // keeps multibyte characters (bug74589_utf8.phpt), on every thread.
+    const REQUEST: &str = "<?php echo setlocale(LC_CTYPE, 0), ' ', escapeshellarg('a_新建');";
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            on_thread(|| {
+                let sink = Sink::default();
+                let mut vm = new_vm(&sink);
+                vm.run_script(REQUEST.as_bytes(), "/ctype.php");
+                sink.take()
+            })
+        })
+        .collect();
+    for w in workers {
+        assert_eq!(w.join().expect("worker thread"), "C.UTF-8 'a_新建'");
+    }
+}
+
+#[test]
 fn umask_comes_back_at_request_end() {
     // A request's umask() lasts until its end (`BG(umask)` restored in
     // `PHP_RSHUTDOWN(basic)`) and, with each worker's own file-system

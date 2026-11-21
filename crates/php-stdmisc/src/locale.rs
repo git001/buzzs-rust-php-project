@@ -108,7 +108,9 @@ pub struct LocaleState {
 
 /// `zend_reset_lc_ctype_locale()`: the process's `LC_CTYPE` = "C.UTF-8"
 /// (or "C"), which PHP does at startup so that multibyte-aware functions
-/// such as `escapeshellarg()` see UTF-8. Every thread starts from it.
+/// such as `escapeshellarg()` and iconv's `//TRANSLIT` see UTF-8. Every
+/// thread starts from it. Once per process, before request threads run
+/// (the standard extension's `module_startup`).
 pub fn reset_lc_ctype() {
     if !sys::set_process_locale(libc::LC_CTYPE, b"C.UTF-8") {
         let _ = sys::set_process_locale(libc::LC_CTYPE, b"C");

@@ -63,4 +63,9 @@ impl Extension for StdMisc {
         misc::register(m);
         ini::register(m);
     }
+
+    /// `php_module_startup()`'s `zend_reset_lc_ctype_locale()`.
+    fn module_startup(&self) {
+        php_stdmisc::locale::reset_lc_ctype();
+    }
 }

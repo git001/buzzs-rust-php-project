@@ -23,7 +23,6 @@ pub mod mime;
 
 pub use crate::core::{iconv_string, Limit, StringResult, ASCII, UCS4};
 pub use crate::error::{charset_too_long, show_error, Diagnostic, IconvErr, CSNMAXLEN};
-pub use crate::ffi::reset_lc_ctype_locale;
 pub use crate::filter::IconvFilter;
 pub use crate::mime::{Scheme, MIME_DECODE_CONTINUE_ON_ERROR, MIME_DECODE_STRICT};
 

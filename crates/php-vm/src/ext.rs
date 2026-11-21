@@ -377,14 +377,42 @@ pub enum IniStage {
     Restore,
 }
 
-/// A native extension module.
-pub trait Extension {
+/// A native extension module. (`Any` identifies it by its type: several
+/// modules can share a name, as ext/standard's parts all do.)
+pub trait Extension: std::any::Any {
     /// The extension name as reported by `get_loaded_extensions()`
     /// (`"ctype"`, `"json"`, ...).
     fn name(&self) -> &'static str;
 
-    /// Registers functions, constants, INI entries and classes (`MINIT`).
+    /// Registers functions, constants, INI entries and classes into one
+    /// VM: the table part of `MINIT` plus `GINIT` (`globals_ctor`). Runs for
+    /// every VM, so once per thread that starts one; what the whole
+    /// process shares belongs in [`Extension::module_startup`].
     fn register(&self, module: &mut ModuleBuilder<'_>);
+
+    /// The process-wide part of `MINIT` (`php_module_startup()`): state
+    /// every thread shares, such as the C library's global locale. Runs
+    /// once per process, before the first VM registers the extension;
+    /// VMs that start meanwhile on other threads wait until it is done.
+    /// It must not start a VM itself.
+    fn module_startup(&self) {}
+}
+
+/// Runs [`Extension::module_startup`] of `e` unless the process already
+/// did. Extensions are told apart by their type, not their name, which
+/// the parts of ext/standard share. The lock is held while it runs, so no
+/// VM registers the extension before its process-wide start is complete.
+fn module_startup_once(e: &dyn Extension) {
+    static STARTED: std::sync::Mutex<Vec<std::any::TypeId>> = std::sync::Mutex::new(Vec::new());
+    // Through the vtable: the type of the extension behind `e`.
+    let id = std::any::Any::type_id(e);
+    let mut started = STARTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !started.contains(&id) {
+        e.module_startup();
+        started.push(id);
+    }
 }
 
 /// Registration interface handed to [`Extension::register`].
@@ -798,6 +826,7 @@ impl Vm {
             {
                 vm.loaded_extensions.push(e.name().to_string());
             }
+            module_startup_once(*e);
             // Attribute the functions/classes/constants it adds to it
             // (ReflectionExtension, get_defined_constants(true)).
             crate::reflection::record_module(&vm, e.name(), true);

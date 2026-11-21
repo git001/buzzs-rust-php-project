@@ -342,7 +342,6 @@ impl Extension for IconvExt {
     }
 
     fn register(&self, m: &mut ModuleBuilder<'_>) {
-        php_iconv::reset_lc_ctype_locale();
         for (name, value) in php_iconv::constants() {
             let v = match value {
                 ConstValue::Str(s) => Value::string(s),

@@ -531,6 +531,5 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         LOCALE.with(|l| l.borrow_mut().request_shutdown());
         publish_locale();
     });
-    locale::reset_lc_ctype();
     publish_locale();
 }

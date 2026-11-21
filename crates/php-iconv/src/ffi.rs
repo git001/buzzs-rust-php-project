@@ -161,16 +161,3 @@ pub fn glibc_version() -> String {
         .to_string_lossy()
         .into_owned()
 }
-
-/// `zend_reset_lc_ctype_locale()`: PHP runs with `LC_CTYPE` set to
-/// `C.UTF-8` (falling back to `C`), which affects glibc's `//TRANSLIT`.
-pub fn reset_lc_ctype_locale() {
-    // SAFETY: the arguments are valid C strings.  setlocale mutates
-    // process-global state; PHP calls this once at startup, before other
-    // threads use locale-dependent functions.
-    unsafe {
-        if libc::setlocale(libc::LC_CTYPE, c"C.UTF-8".as_ptr()).is_null() {
-            libc::setlocale(libc::LC_CTYPE, c"C".as_ptr());
-        }
-    }
-}

@@ -221,22 +221,31 @@ fn check_jit_at_registration(vm: &mut Vm) {
 /// The startup-stage checks of opcache's INI handlers
 /// (`OnUpdateMemoryConsumption`, `OnUpdateInternedStringsBuffer`,
 /// `OnUpdateMaxAcceleratedFiles`, `OnUpdateMaxWastedPercentage`): a value
-/// out of range is logged and the directive keeps its default. Runs once,
-/// before the first request.
+/// out of range is logged and the directive keeps its default. Runs
+/// before the first request of each thread, so every thread's VM gets the
+/// defaults; php-src checks once at process start, so only the first
+/// thread logs.
 fn check_startup_ini(vm: &mut Vm) {
     thread_local! {
         static CHECKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if CHECKED.with(|c| c.replace(true)) {
         return;
     }
+    let report = !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed);
+    let warn = |vm: &mut Vm, message: &str| {
+        if report {
+            accel_log_warning(vm, message);
+        }
+    };
     /// `MAX_INTERNED_STRINGS_BUFFER_SIZE` on 64-bit builds.
     const MAX_INTERNED_STRINGS_BUFFER_SIZE: i64 = 32767;
     /// `MIN_ACCEL_FILES` / `MAX_ACCEL_FILES`.
     const MIN_ACCEL_FILES: i64 = 200;
     const MAX_ACCEL_FILES: i64 = 1_000_000;
     if vm.ini_long("opcache.memory_consumption") < 8 {
-        accel_log_warning(
+        warn(
             vm,
             "opcache.memory_consumption is set below the required 8MB.\n",
         );
@@ -244,12 +253,12 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     let size = vm.ini_long("opcache.interned_strings_buffer");
     if size < 0 {
-        accel_log_warning(
+        warn(
             vm,
             &format!("opcache.interned_strings_buffer must be greater than or equal to 0, {size} given.\n"),
         );
     } else if size > MAX_INTERNED_STRINGS_BUFFER_SIZE {
-        accel_log_warning(
+        warn(
             vm,
             &format!(
                 "opcache.interned_strings_buffer must be less than or equal to {MAX_INTERNED_STRINGS_BUFFER_SIZE}, {size} given.\n"
@@ -261,12 +270,12 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     let files = vm.ini_long("opcache.max_accelerated_files");
     if files < MIN_ACCEL_FILES {
-        accel_log_warning(
+        warn(
             vm,
             &format!("opcache.max_accelerated_files is set below the required minimum ({MIN_ACCEL_FILES}).\n"),
         );
     } else if files > MAX_ACCEL_FILES {
-        accel_log_warning(
+        warn(
             vm,
             &format!("opcache.max_accelerated_files is set above the limit ({MAX_ACCEL_FILES}).\n"),
         );
@@ -276,7 +285,7 @@ fn check_startup_ini(vm: &mut Vm) {
     }
     let wasted = vm.ini_long("opcache.max_wasted_percentage");
     if wasted <= 0 || wasted > 50 {
-        accel_log_warning(
+        warn(
             vm,
             "opcache.max_wasted_percentage must be set between 1 and 50.\n",
         );
@@ -287,7 +296,7 @@ fn check_startup_ini(vm: &mut Vm) {
         && vm.ini_bool("opcache.enable_file_override")
         && vm.ini_bool("opcache.file_cache_only")
     {
-        accel_log_warning(
+        warn(
             vm,
             "file_override_enabled has no effect when file_cache_only is set",
         );

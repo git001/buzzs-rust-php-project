@@ -316,13 +316,12 @@ fn load_extensions(r: &Reporter, cfg: &Config) {
 
 /// Reports what the extensions raised while registering their INI
 /// directives (`MINIT`). The CLI builds a VM, and with it the extensions,
-/// for every request, but PHP starts its modules once: only the first
-/// VM's diagnostics are reported.
+/// for every request, and a threaded SAPI one per thread, but PHP starts
+/// its modules once per process: only the process's first VM's
+/// diagnostics are reported.
 pub fn report_module_diagnostics(cfg: &Config, diagnostics: &[Diagnostic]) {
-    thread_local! {
-        static REPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if REPORTED.with(|r| r.replace(true)) {
+    static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
     }
     let r = Reporter::new(cfg);

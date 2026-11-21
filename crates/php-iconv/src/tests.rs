@@ -7,7 +7,7 @@
 use super::*;
 
 fn ic() -> Iconv {
-    reset_lc_ctype_locale();
+    php_stdmisc::locale::reset_lc_ctype();
     Iconv::new()
 }
 
@@ -433,7 +433,7 @@ fn ob_handler_phpt() {
 
 #[test]
 fn stream_filter_basics() {
-    reset_lc_ctype_locale();
+    php_stdmisc::locale::reset_lc_ctype();
     // iconv_stream_filter.phpt data: ISO-2022-JP -> EUC-JP.
     let mut f = IconvFilter::from_filter_name(b"convert.iconv.ISO-2022-JP/EUC-JP").expect("filter");
     let out = f

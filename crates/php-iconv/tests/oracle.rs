@@ -231,7 +231,7 @@ fn run_line(ic: &Iconv, line: &str) -> Option<String> {
 
 #[test]
 fn oracle() {
-    php_iconv::reset_lc_ctype_locale();
+    php_stdmisc::locale::reset_lc_ctype();
     let data = include_str!("data/oracle.tsv");
     let ic = Iconv::new();
     let mut failures = Vec::new();
