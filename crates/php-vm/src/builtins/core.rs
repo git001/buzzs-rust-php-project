@@ -1155,7 +1155,7 @@ fn trigger_error(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if level == 256 {
         vm.deprecated("Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead")?;
     }
-    vm.error(level, &msg.to_string_lossy())?;
+    vm.error_bytes(level, msg.as_bytes())?;
     Ok(Value::Bool(true))
 }
 
