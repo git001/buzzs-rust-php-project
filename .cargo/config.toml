@@ -2,6 +2,17 @@
 # jobs, 3 test threads per test binary (13 Nov 2026).
 [build]
 jobs = 3
+# Every function starts on a 64-byte boundary. Rust aligns functions to 16
+# bytes only, so the interpreter's dispatch loop (php_vm::exec::hot::
+# run_steps) landed wherever the code before it ended: removing unrelated
+# code moved it from offset 0 to 32 within a cache line, and micro_bench
+# took 2.6 % longer with the same instructions (perf TopdownL2: fetch
+# bandwidth 7.1 % -> 8.2 %). Aligned, it is back and stable: micro_bench
+# 3494 -> 3400 ms, bench_mix 6179 -> 6053 ms; the binary grows by 1.6 %
+# (21 Nov 2026). An LLVM option, not a rustc one: check it still applies
+# when the LLVM version changes. A RUSTFLAGS environment variable (as
+# coverage tools set) replaces this list rather than adding to it.
+rustflags = ["-C", "llvm-args=-align-all-functions=6"]
 
 [env]
 RUST_TEST_THREADS = "3"
