@@ -35,6 +35,13 @@ impl Extension for Spl {
         dispatch::register_classes(m.vm());
         funcs::register(m);
         m.info(info);
+        // The loaders and `spl_autoload_extensions()` belong to one request:
+        // `PHP_RINIT(spl)` resets the extensions, `zend_autoload_shutdown`
+        // (step 8 of `php_request_shutdown`) frees the loaders. A VM serving
+        // the next request, or a new VM on the same thread, starts without
+        // the previous request's closures.
+        m.on_request_startup(|_| php_spl::functions::reset_request());
+        m.on_request_shutdown(|_| php_spl::functions::reset_request());
         // Ahead of the stream layer's shutdown hook (which closes all
         // resources): see `files::shutdown`.
         m.vm().shutdown_hooks.insert(0, files::shutdown);
