@@ -79,10 +79,9 @@ impl Signals {
         }
     }
 
-    #[inline]
     /// Sets the flag; the first raise since the last clear counts the
     /// thread in [`THREADS_DUE`].
-    #[inline(never)]
+    #[inline]
     fn raise(&self) {
         if !self.due.swap(true, Ordering::AcqRel) {
             THREADS_DUE.fetch_add(1, Ordering::Release);
