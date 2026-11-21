@@ -531,6 +531,23 @@ pub fn shutdown(vm: &mut Vm) {
     close_bailed(vm);
 }
 
+/// The resource list at [`php_vm::Vm::finalize`]: every stream is released
+/// without `fclose()`'s callbacks. No user filter or wrapper runs (they
+/// reach the VM only through [`bridge::run`], which nothing enters here);
+/// each descriptor closes as its stream drops.
+pub fn finalize() {
+    drop(DEFERRED.with(|d| std::mem::take(&mut *d.borrow_mut())));
+    drop(BAILED.with(|b| std::mem::take(&mut *b.borrow_mut())));
+    let cells: Vec<Rc<StreamCell>> =
+        STREAMS.with(|m| m.borrow().values().filter_map(Weak::upgrade).collect());
+    for c in cells {
+        if c.handle() > 3 {
+            drop(c.take());
+        }
+    }
+    RELEASED.with(|r| r.borrow_mut().clear());
+}
+
 /// Runs `f` (closing stream `id`) as `fclose()` does: user filters still
 /// see the stream's resource.
 pub fn fclosing<R>(id: u64, f: impl FnOnce() -> R) -> R {

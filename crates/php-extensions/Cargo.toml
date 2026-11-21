@@ -55,6 +55,7 @@ php-ext-zendtest = { path = "../php-ext-zendtest", features = ["observer"] }
 php-ext-opcache = { path = "../php-ext-opcache" }
 
 [dev-dependencies]
+php-sapi = { path = "../php-sapi" }
 php-memlimit = { path = "../php-memlimit" }
 php-streams = { path = "../php-streams" }
 

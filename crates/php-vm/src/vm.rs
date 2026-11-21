@@ -2307,6 +2307,8 @@ pub struct Vm {
     pub loaded_extensions: Vec<String>,
     /// Request shutdown hooks of extensions.
     pub shutdown_hooks: Vec<fn(&mut Vm)>,
+    /// Extension callbacks of [`Vm::finalize`] (`ModuleBuilder::on_finalize`).
+    pub(crate) finalize_hooks: Vec<fn(&mut Vm)>,
     /// Request startup hooks of extensions (`RINIT`).
     pub startup_hooks: Vec<fn(&mut Vm)>,
     /// Module startup hooks of extensions, run after registration.

@@ -8,6 +8,7 @@
 //! SAPI.
 
 mod module;
+pub mod panic;
 mod upload;
 
 pub use module::{SapiModule, StderrLog};
@@ -88,7 +89,6 @@ pub fn handle_auth_data(auth: Option<&[u8]>) -> AuthData {
     (None, None, None)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{handle_auth_data, RequestInfo};
@@ -133,5 +133,4 @@ mod tests {
             (Some(b"user".to_vec()), Some(b"pass".to_vec()), None)
         );
     }
-
 }

@@ -386,6 +386,7 @@ dependencies = [
  "libc",
  "php-ext-streams",
  "php-lexer",
+ "php-log",
  "php-memlimit",
  "php-runtime",
  "php-sapi",
@@ -1075,6 +1076,7 @@ dependencies = [
  "php-ext-zip",
  "php-ext-zlib",
  "php-memlimit",
+ "php-sapi",
  "php-streams",
  "php-vm",
 ]
@@ -1164,6 +1166,7 @@ dependencies = [
  "libc",
  "php-date",
  "php-observability",
+ "php-sapi",
  "php-streams",
  "php-support",
 ]

@@ -11,6 +11,7 @@ php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
 php-sapi = { path = "../php-sapi" }
+php-log = { path = "../php-log" }
 php-sapi-input = { path = "../php-sapi-input" }
 php-lexer = { path = "../php-lexer" }
 php-stdmisc = { path = "../php-stdmisc" }

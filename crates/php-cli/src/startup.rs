@@ -27,33 +27,11 @@ pub struct Reporter {
     display_startup: bool,
     html: bool,
     log: bool,
-    log_host: StartupLog,
+    /// Where the error log goes during startup: the configuration's
+    /// settings and the CLI/CGI logger (stderr).
+    log_host: php_log::ConfiguredLog,
     prepend: String,
     append: String,
-}
-
-/// Where the error log goes during startup: the `error_log`, `error_log_mode`
-/// and `syslog.*` settings of the configuration, and the CLI/CGI logger
-/// (stderr). Dates are in UTC, as before the modules are activated.
-#[derive(Debug, Clone)]
-struct StartupLog {
-    error_log: Option<Vec<u8>>,
-    error_log_mode: i64,
-    syslog: php_log::SyslogSettings,
-}
-
-impl php_log::LogHost for StartupLog {
-    fn error_log_mode(&mut self) -> i64 {
-        self.error_log_mode
-    }
-
-    fn syslog_settings(&mut self) -> php_log::SyslogSettings {
-        self.syslog.clone()
-    }
-
-    fn sapi_log_message(&mut self, message: &[u8], severity: i32) {
-        php_sapi::SapiModule::log_message(&php_sapi::StderrLog, message, severity);
-    }
 }
 
 fn display_mode(v: &str) -> Display {
@@ -91,17 +69,10 @@ impl Reporter {
             display_startup: b("display_startup_errors", true),
             html: b("html_errors", false),
             log: b("log_errors", false),
-            log_host: StartupLog {
-                error_log: cfg.get("error_log").map(|v| v.as_bytes().to_vec()),
-                error_log_mode: cfg
-                    .get("error_log_mode")
-                    .map_or(0o644, |v| php_support::ini::parse_quantity(v.as_bytes()).0),
-                syslog: php_log::SyslogSettings::from_ini(
-                    cfg.get("syslog.ident").map(str::as_bytes),
-                    cfg.get("syslog.facility").map(str::as_bytes),
-                    cfg.get("syslog.filter").map(str::as_bytes),
-                ),
-            },
+            log_host: php_log::ConfiguredLog::from_ini(
+                |k| cfg.get(k).map(str::as_bytes),
+                std::rc::Rc::new(php_sapi::StderrLog),
+            ),
             prepend: cfg
                 .get("error_prepend_string")
                 .unwrap_or_default()
@@ -120,12 +91,9 @@ impl Reporter {
         let shown = self.display != Display::Off && self.display_startup;
         if self.log || !shown {
             let line = format!("PHP {kind}:  {message} in Unknown on line 0");
-            let error_log = self.log_host.error_log.clone();
-            php_log::php_log_err_with_severity(
+            self.log_host.clone().log(
                 line.as_bytes(),
                 php_log::severity_of_error_type(i64::from(level)),
-                error_log.as_deref(),
-                &mut self.log_host.clone(),
             );
         }
         if !shown {

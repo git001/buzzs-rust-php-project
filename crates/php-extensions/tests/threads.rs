@@ -582,6 +582,25 @@ fn umask_comes_back_at_request_end() {
     assert_eq!(other, format!("{:o}\n", php_streams::sys::current_umask()));
 }
 
+/// A temporary file of the test's own, and how many descriptors of this
+/// process point at it: other tests running meanwhile open files of their
+/// own, so only these count.
+fn own_file() -> (Vec<u8>, impl Fn() -> usize) {
+    let (file, path) =
+        php_streams::temp::create_temporary(None, Some(b"threads-fds-"), 0, &mut || {})
+            .expect("temporary file");
+    drop(file);
+    let target = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&path));
+    let count = move || {
+        std::fs::read_dir("/proc/self/fd").map_or(0, |dir| {
+            dir.filter_map(Result::ok)
+                .filter(|e| std::fs::read_link(e.path()).is_ok_and(|l| l == target))
+                .count()
+        })
+    };
+    (path, count)
+}
+
 #[test]
 fn cycles_do_not_outlive_their_request() {
     // `zend_objects_store_free_object_storage()` and the global symbol
@@ -597,21 +616,20 @@ fn cycles_do_not_outlive_their_request() {
         $b = new stdClass;
         $a->b = $b;
         $b->a = $a;
-        $a->f = fopen('/dev/null', 'r');
+        $a->f = fopen('@FILE@', 'r');
         $a->s = str_repeat('x', 1 << 20);
         echo 'ok';";
-    fn open_fds() -> usize {
-        std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count)
-    }
-    let (grown, fds_before, fds_after, out) = on_thread(|| {
+    let (path, open_fds) = own_file();
+    let script = CYCLES.replace("@FILE@", &String::from_utf8_lossy(&path));
+    let (grown, fds_before, fds_after, out) = on_thread(move || {
         let sink = Sink::default();
         let mut vm = new_vm(&sink);
-        vm.run_script(CYCLES.as_bytes(), "/cycles.php");
+        vm.run_script(script.as_bytes(), "/cycles.php");
         vm.request_reset();
         let fds_before = open_fds();
         let first = php_memlimit::current().raw_usage();
         for _ in 0..20 {
-            vm.run_script(CYCLES.as_bytes(), "/cycles.php");
+            vm.run_script(script.as_bytes(), "/cycles.php");
             vm.request_reset();
         }
         let grown = php_memlimit::current().raw_usage().saturating_sub(first);
@@ -619,8 +637,127 @@ fn cycles_do_not_outlive_their_request() {
     })
     .join()
     .expect("worker thread");
+    let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&path));
     assert_eq!(out, "ok".repeat(21));
     assert_eq!(fds_after, fds_before, "descriptors left open");
     // Each request left 2 MiB behind before.
     assert!(grown < 64 << 10, "{grown} bytes left behind by 20 requests");
+}
+
+/// A test extension whose `buzz_test_panic()` panics, as a bug in Buzz
+/// would: the request cannot end normally.
+struct PanicProbe;
+
+impl php_vm::ext::Extension for PanicProbe {
+    fn name(&self) -> &'static str {
+        "panic_probe"
+    }
+
+    fn register(&self, m: &mut php_vm::ext::ModuleBuilder<'_>) {
+        m.function_static("buzz_test_panic(): void", |_, _| panic!("probe panicked"));
+    }
+}
+
+#[test]
+fn a_panic_ends_only_its_own_request_and_leaves_nothing_behind() {
+    // The request holds open files, an object cycle and an array cycle of
+    // a megabyte each when it panics. The panic comes back as a value; the
+    // request's state is released without running PHP code
+    // (`Vm::finalize`: the destructor below must not run), so the thread's
+    // descriptors and memory are what they were before the request.
+    // Requests on other threads carry on meanwhile.
+    const PANICS: &str = "<?php
+        class D { public $self; public $data; function __destruct() { echo \"dtor\\n\"; } }
+        $files = [fopen('@FILE@', 'r'), fopen('@FILE@', 'r')];
+        $d = new D;
+        $d->self = $d;
+        $d->data = str_repeat('x', 1 << 20);
+        $r = [];
+        $r[0] = &$r;
+        $r[1] = str_repeat('y', 1 << 20);
+        echo 'before ';
+        buzz_test_panic();
+        echo 'unreachable';";
+    let (path, open_fds) = own_file();
+    let script = PANICS.replace("@FILE@", &String::from_utf8_lossy(&path));
+    let start = Arc::new(Barrier::new(2));
+    let neighbour = {
+        let start = Arc::clone(&start);
+        on_thread(move || {
+            start.wait();
+            (0..REQUESTS.len())
+                .map(|i| {
+                    let sink = Sink::default();
+                    let mut vm = new_vm(&sink);
+                    request(&mut vm, &sink, i)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let panicking = on_thread(move || {
+        let sink = Sink::default();
+        let exts: Vec<&dyn php_vm::ext::Extension> = php_extensions::ALL
+            .iter()
+            .copied()
+            .chain(std::iter::once(&PanicProbe as &dyn php_vm::ext::Extension))
+            .collect();
+        let opts = VmOptions {
+            ini: vec![("display_errors".into(), "1".into())],
+        };
+        let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
+        vm.run_script(b"<?php echo 'warm';", "/warm.php");
+        vm.request_reset();
+        let _ = sink.take();
+        let fds_before = open_fds();
+        let mem_before = php_memlimit::current().raw_usage();
+        start.wait();
+        let caught = php_sapi::panic::guard(|| vm.run_script(script.as_bytes(), "/panics.php"))
+            .expect_err("the request panics");
+        let finalized = php_sapi::panic::guard(|| vm.finalize());
+        let out = sink.take();
+        // Measured with the VM still alive: the request's state is gone
+        // already (dropping the VM frees its tables, which would hide a
+        // leak).
+        let fds_after = open_fds();
+        let mem_after = php_memlimit::current().raw_usage();
+        php_sapi::panic::discard(vm);
+        (
+            caught.message,
+            finalized.is_ok(),
+            out,
+            fds_before,
+            fds_after,
+            mem_before,
+            mem_after,
+        )
+    });
+    let (message, finalized, out, fds_before, fds_after, mem_before, mem_after) =
+        panicking.join().expect("the panic stays inside its guard");
+    let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&path));
+    assert_eq!(message, "probe panicked");
+    assert!(finalized, "finalize itself did not panic");
+    assert_eq!(
+        out, "before ",
+        "no destructor, shutdown function or output after the panic"
+    );
+    assert_eq!(fds_after, fds_before, "descriptors left open");
+    // The request built 2 MiB of cycles. What is left is the compiled
+    // script with its class, which the VM keeps until it is dropped right
+    // after (about 120 KiB).
+    let left = mem_after.saturating_sub(mem_before);
+    assert!(left < 512 << 10, "{left} bytes left behind");
+    assert_eq!(
+        neighbour.join().expect("neighbour thread"),
+        fresh_outputs(),
+        "the neighbour's requests are unaffected"
+    );
+    // A new thread with a new VM works.
+    let again = on_thread(|| {
+        let sink = Sink::default();
+        let mut vm = new_vm(&sink);
+        request(&mut vm, &sink, 0)
+    })
+    .join()
+    .expect("new thread");
+    assert_eq!(again, fresh_outputs()[0]);
 }

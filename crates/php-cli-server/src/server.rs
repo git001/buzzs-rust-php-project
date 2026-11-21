@@ -460,6 +460,9 @@ impl Server {
         match outcome {
             Outcome::Done => self.close(fd),
             Outcome::ServeStatic => self.begin_send_static(fd),
+            Outcome::InternalError => {
+                self.send_error_page(fd, 500, Some("Internal error".to_string()));
+            }
         }
     }
 }
@@ -519,10 +522,13 @@ impl Prepared {
                     return;
                 };
                 let ctx = Rc::new(RequestCtx::new(job.request, job.stream, job.addr));
-                let (outcome, vm) = crate::sapi::run_request(vm, &ctx, &config, job.is_static);
+                let (outcome, vm) =
+                    crate::sapi::run_request_guarded(vm, &ctx, &config, job.is_static);
                 let _ = dtx.send(outcome);
                 drop(vm);
-                drop(ctx);
+                // The thread ends here either way; after a panic with
+                // thread-locals whose state is unknown.
+                php_sapi::panic::discard(ctx);
             })
             .ok()?;
         Some(Prepared {
@@ -565,6 +571,10 @@ fn run_php(c: &mut Client, prepared: Option<Prepared>, is_static: bool) -> Outco
 /// Exit status of a request child that asks for the static file.
 const EXIT_SERVE_STATIC: i32 = 10;
 
+/// Exit status of a request child whose request panicked before sending
+/// headers: the server answers with the 500 page.
+const EXIT_INTERNAL_ERROR: i32 = 11;
+
 /// Runs the PHP part of a request in a forked child of the server, which
 /// inherits the started-up `template` VM (PHP's per-request startup
 /// without paying for module startup again) and leaves the server's state
@@ -598,7 +608,7 @@ fn run_php_forked(
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
                 let request = std::mem::take(&mut c.reader.request);
                 let ctx = Rc::new(RequestCtx::new(request, stream, c.addr.clone()));
-                let (outcome, vm) = crate::sapi::run_request(vm, &ctx, config, is_static);
+                let (outcome, vm) = crate::sapi::run_request_guarded(vm, &ctx, config, is_static);
                 // The process ends right away: skip the VM's destruction.
                 std::mem::forget(vm);
                 if outcome == Outcome::Done {
@@ -611,6 +621,7 @@ fn run_php_forked(
                 match outcome {
                     Outcome::Done => 0,
                     Outcome::ServeStatic => EXIT_SERVE_STATIC,
+                    Outcome::InternalError => EXIT_INTERNAL_ERROR,
                 }
             }
             _ => 0,
@@ -631,10 +642,10 @@ fn run_php_forked(
         }
     }
     let _ = c.stream.set_nonblocking(true);
-    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == EXIT_SERVE_STATIC {
-        Outcome::ServeStatic
-    } else {
-        Outcome::Done
+    match libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status)) {
+        Some(EXIT_SERVE_STATIC) => Outcome::ServeStatic,
+        Some(EXIT_INTERNAL_ERROR) => Outcome::InternalError,
+        _ => Outcome::Done,
     }
 }
 

@@ -26,6 +26,7 @@
 //! destination needs (asked for only then, as php-src reads them), the
 //! date in the request's timezone and the SAPI logger.
 
+mod configured;
 pub mod syslog;
 
 use std::borrow::Cow;
@@ -37,6 +38,7 @@ use std::sync::OnceLock;
 
 use php_observability::{constants, Format, Level, LogEvent, LogKind, RequestFields};
 
+pub use configured::ConfiguredLog;
 pub use syslog::{SyslogFilter, SyslogSettings};
 
 /// Where `error_log` sends a message.

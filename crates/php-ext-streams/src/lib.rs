@@ -89,6 +89,18 @@ fn shutdown(vm: &mut Vm) {
     php_streams::state::reset_request();
 }
 
+/// [`php_vm::Vm::finalize`]: the request's streams close without user
+/// callbacks; the rest of the request state is reset as at a normal end.
+fn finalize(_vm: &mut Vm) {
+    userfilter::shutdown();
+    res::finalize();
+    res::reset_default_context();
+    dirs::reset_request();
+    io_poll::reset_request();
+    http::shutdown();
+    php_streams::state::reset_request();
+}
+
 impl Extension for Streams {
     fn name(&self) -> &'static str {
         "standard"
@@ -117,6 +129,7 @@ impl Extension for Streams {
             }
         }
         m.on_request_shutdown(shutdown);
+        m.on_finalize(finalize);
         php_vm::ext::set_resource_refs_hook(res::context_refs_held);
         m.vm()
             .register_interrupt_handler(res::close_deferred_on_interrupt);

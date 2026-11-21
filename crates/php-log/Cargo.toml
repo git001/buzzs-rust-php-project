@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 php-support = { path = "../php-support" }
 php-observability = { path = "../php-observability" }
+php-sapi = { path = "../php-sapi" }
 libc = "0.2"
 
 [dev-dependencies]

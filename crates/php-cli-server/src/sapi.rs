@@ -758,6 +758,10 @@ pub enum Outcome {
     Done,
     /// The router declined a static file: serve it.
     ServeStatic,
+    /// The request panicked (a bug in Buzz) before sending its headers:
+    /// the server answers with the 500 page. (Once headers went out, the
+    /// request ends as [`Outcome::Done`]: the connection closes.)
+    InternalError,
 }
 
 /// Makes `php://input` read the request body.
@@ -861,6 +865,55 @@ pub fn prepare_vm(cfg: &ServerConfig) -> PreparedVm {
     let slot = Rc::new(RefCell::new(None));
     let vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
     PreparedVm { vm, slot }
+}
+
+/// [`run_request`] behind the panic boundary. A panic (a bug in Buzz) is
+/// logged as a fatal error to the configured error log (the console
+/// without `error_log`), the request's state is released without running
+/// any more PHP code ([`Vm::finalize`]) and the VM is discarded; the
+/// request ends with [`Outcome::InternalError`], or [`Outcome::Done`] once
+/// headers were sent. The VM comes back only from a request that ended
+/// normally; after a panic the thread must end, taking its thread-locals,
+/// which may be in an unknown state too, with it.
+pub fn run_request_guarded(
+    vm: PreparedVm,
+    ctx: &Rc<RequestCtx>,
+    cfg: &ServerConfig,
+    is_static: bool,
+) -> (Outcome, Option<Vm>) {
+    CURRENT.with(|c| *c.borrow_mut() = Some(ctx.clone()));
+    *vm.slot.borrow_mut() = Some(ctx.clone());
+    let mut machine = vm.vm;
+    let result = php_sapi::panic::guard(|| run_request_inner(&mut machine, ctx, cfg, is_static));
+    *vm.slot.borrow_mut() = None;
+    CURRENT.with(|c| *c.borrow_mut() = None);
+    let panicked = match result {
+        Ok(outcome) => return (outcome, Some(machine)),
+        Err(panicked) => panicked,
+    };
+    let mut log = php_log::ConfiguredLog::from_ini(
+        |name| {
+            cfg.ini
+                .iter()
+                .rev()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.as_bytes())
+        },
+        Rc::new(crate::log::ConsoleLog),
+    );
+    log.log(
+        format!("PHP Fatal error:  {panicked}").as_bytes(),
+        php_log::severity_of_error_type(1),
+    );
+    let sent = php_sapi::panic::guard(|| ctx.headers_sent()).unwrap_or(true);
+    let _ = php_sapi::panic::guard(|| machine.finalize());
+    php_sapi::panic::discard(machine);
+    let outcome = if sent {
+        Outcome::Done
+    } else {
+        Outcome::InternalError
+    };
+    (outcome, None)
 }
 
 /// Runs the PHP part of a request (`php_cli_server_dispatch` from request

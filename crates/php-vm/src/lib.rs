@@ -282,6 +282,7 @@ impl Vm {
             fibers: Vec::new(),
             loaded_extensions: Vec::new(),
             shutdown_hooks: Vec::new(),
+            finalize_hooks: Vec::new(),
             startup_hooks: Vec::new(),
             module_startup_hooks: Vec::new(),
             ini_modify_hooks: std::collections::HashMap::new(),
@@ -432,6 +433,42 @@ impl Vm {
     }
 
     /// Request shutdown: shutdown functions, destructors, output flush.
+    /// The global symbol table, the objects still alive (emptied and
+    /// marked destructed, so no destructor runs for them any more) and the
+    /// cycles left that hold no object: what a request leaves behind once
+    /// it ran no PHP code any more.
+    fn release_request_state(&mut self) {
+        let globals = std::mem::take(&mut *self.globals.borrow_mut());
+        drop(globals);
+        object::free_object_storage();
+        self.gc_release_request_cycles();
+    }
+
+    /// Ends a request that could not end normally: a panic (a bug in Buzz)
+    /// left the VM in an unknown state, so nothing of the request's PHP
+    /// code may run any more, neither shutdown functions nor destructors,
+    /// output handlers, user stream wrappers or filters, nor session save
+    /// handlers. What the request holds is released all the same: the
+    /// extensions' finalize hooks ([`ModuleBuilder::on_finalize`]) close
+    /// their streams, sockets and connections without calling back into
+    /// PHP, then the request's variables, objects and reference cycles are
+    /// freed as at a normal end, and the memory accounting ends the
+    /// request. Called once, in place of [`Vm::shutdown`]; the host then
+    /// drops the VM and, as its thread-locals may be in an unknown state
+    /// too, ends the thread.
+    ///
+    /// [`ModuleBuilder::on_finalize`]: crate::ext::ModuleBuilder::on_finalize
+    pub fn finalize(&mut self) {
+        object::set_destructors_enabled(false);
+        self.frames.clear();
+        self.shutdown_functions.clear();
+        for hook in self.finalize_hooks.clone() {
+            hook(self);
+        }
+        self.release_request_state();
+        php_memlimit::request_end();
+    }
+
     /// php-src's `fast_shutdown`: set when the process exits after this
     /// request and [`Vm::discard`] releases the VM. Request shutdown then
     /// does not destroy the global symbol table nor free the objects left
@@ -511,10 +548,7 @@ impl Vm {
         // requests (a server, a reused VM) is left with nothing of this
         // request; php-src's request heap frees what php-src leaves.
         if !self.fast_shutdown {
-            let globals = std::mem::take(&mut *self.globals.borrow_mut());
-            drop(globals);
-            object::free_object_storage();
-            self.gc_release_request_cycles();
+            self.release_request_state();
         }
         php_memlimit::request_end();
         self.exit_status

@@ -608,6 +608,16 @@ impl<'a> ModuleBuilder<'a> {
         self
     }
 
+    /// Registers a callback of [`Vm::finalize`]: the end of a request that
+    /// could not end normally (it panicked). It releases what the
+    /// extension holds for the request (streams, sockets, connections,
+    /// locks) without running any PHP code: no user callback, wrapper,
+    /// filter or handler may be called, as the request's state is unknown.
+    pub fn on_finalize(&mut self, f: fn(&mut Vm)) -> &mut Self {
+        self.vm.finalize_hooks.push(f);
+        self
+    }
+
     /// Registers a callback run once all extensions are registered
     /// (`MINIT` work that needs other modules' classes or functions).
     pub fn on_module_startup(&mut self, f: fn(&mut Vm)) -> &mut Self {
