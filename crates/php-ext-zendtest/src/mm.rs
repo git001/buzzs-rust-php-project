@@ -87,7 +87,7 @@ fn observe(event: HeapEvent) {
 
 /// The original heap's address (`ZT_G(original_heap)`).
 fn original_heap() -> usize {
-    std::ptr::addr_of!(php_memlimit::GLOBAL).addr()
+    std::ptr::from_ref(php_memlimit::current()).addr()
 }
 
 /// `zend_test_mm_custom_handlers_init`.

@@ -54,5 +54,8 @@ php-ext-gd = { path = "../php-ext-gd" }
 php-ext-zendtest = { path = "../php-ext-zendtest", features = ["observer"] }
 php-ext-opcache = { path = "../php-ext-opcache" }
 
+[dev-dependencies]
+php-memlimit = { path = "../php-memlimit" }
+
 [lints]
 workspace = true

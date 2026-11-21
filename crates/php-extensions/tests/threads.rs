@@ -14,6 +14,10 @@ use std::sync::{Arc, Barrier};
 
 use php_vm::{Vm, VmOptions};
 
+// The accounting allocator, so that `memory_limit` applies; each VM thread
+// takes its own (`on_thread`).
+php_memlimit::install_global_allocator!();
+
 /// Requests that read and change per-request state: declarations, static
 /// variables, autoloaders, resources, INI values, seeded randomness,
 /// output buffers, the default time zone, error handlers, destructors.
@@ -134,7 +138,10 @@ fn on_thread<T: Send + 'static>(
 ) -> std::thread::JoinHandle<T> {
     std::thread::Builder::new()
         .stack_size(256 << 20)
-        .spawn(f)
+        .spawn(|| {
+            php_memlimit::attach_thread();
+            f()
+        })
         .expect("spawn a VM thread")
 }
 
@@ -286,4 +293,41 @@ echo "B done\n";
         b_took >= std::time::Duration::from_secs(2),
         "B took {b_took:?}"
     );
+}
+
+#[test]
+fn a_memory_limit_ends_only_its_own_request() {
+    // `memory_limit` per thread (php-src ZTS: a heap per thread): A
+    // allocates past its 8M while B, with 128M, holds 16M at the same time.
+    const HOG: &str = r#"<?php
+ini_set('memory_limit', '8M');
+$s = str_repeat('x', 4 << 20);
+$t = str_repeat('y', 6 << 20);
+echo "A survived\n";
+"#;
+    const WORK: &str = r#"<?php
+ini_set('memory_limit', '128M');
+$s = str_repeat('x', 16 << 20);
+echo strlen($s), ' ', memory_get_usage() > (16 << 20) ? 'counted' : 'missing', "\n";
+"#;
+    let start = Arc::new(Barrier::new(2));
+    let run = |src: &'static str, start: Arc<Barrier>| {
+        on_thread(move || {
+            let sink = Sink::default();
+            let mut vm = new_vm(&sink);
+            start.wait();
+            vm.run_script(src.as_bytes(), "/memory.php");
+            sink.take()
+        })
+    };
+    let a = run(HOG, Arc::clone(&start));
+    let b = run(WORK, start);
+    let a_out = a.join().expect("thread A");
+    let b_out = b.join().expect("thread B");
+    assert!(
+        a_out.contains("Allowed memory size of 8388608 bytes exhausted")
+            && !a_out.contains("A survived"),
+        "{a_out}"
+    );
+    assert_eq!(b_out, "16777216 counted\n");
 }

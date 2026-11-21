@@ -1054,6 +1054,7 @@ dependencies = [
  "php-ext-zendtest",
  "php-ext-zip",
  "php-ext-zlib",
+ "php-memlimit",
  "php-vm",
 ]
 

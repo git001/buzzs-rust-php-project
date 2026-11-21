@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! End-to-end checks with `GLOBAL` installed as this test binary's global
-//! allocator. Everything runs in one `#[test]` because the limit is
+//! End-to-end checks with the thread dispatcher installed as this test
+//! binary's global allocator, on a thread without its own (so `GLOBAL`). Everything runs in one `#[test]` because the limit is
 //! process-wide state.
 
 use std::hint::black_box;
@@ -28,11 +28,11 @@ fn global_allocator_lifecycle() {
         php_memlimit::CHUNK_SIZE
     );
 
-    // The request thread's small blocks come from its heap; the heap's
-    // chunks are not part of the usage figures.
+    // The request thread owns the accounting; every block comes from
+    // mimalloc, the `zend_mm`-style heap stays unused.
     assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
     let small: Vec<Box<[u8; 40]>> = (0..1000).map(|_| Box::new([7u8; 40])).collect();
-    assert!(php_memlimit::GLOBAL.heap_chunks() >= 1);
+    assert_eq!(php_memlimit::GLOBAL.heap_chunks(), 0);
     assert!(small.iter().all(|b| b.iter().all(|&x| x == 7)));
     drop(black_box(small));
     assert_eq!(
@@ -83,7 +83,7 @@ fn global_allocator_lifecycle() {
     assert!(php_memlimit::fallible(|| buf.try_reserve_exact(M)).is_ok());
     drop(buf);
 
-    // Request end lifts the limit and gives the heap up (this thread was
+    // Request end lifts the limit and gives ownership up (this thread was
     // bound by `request_start`).
     php_memlimit::request_end();
     assert_eq!(php_memlimit::limit(), None);
@@ -92,8 +92,8 @@ fn global_allocator_lifecycle() {
     assert_eq!(php_memlimit::check(), None);
     drop(big);
 
-    // php-cli's way: bound explicitly before the request, the thread keeps
-    // the heap through the teardown that follows `request_end`.
+    // php-cli's way: bound explicitly before the request, the thread stays
+    // the owner through the teardown that follows `request_end`.
     assert!(php_memlimit::bind_to_current_thread());
     php_memlimit::request_start(Some(10 * M)).expect("10M fits");
     let small: Vec<Box<[u8; 24]>> = (0..100).map(|_| Box::new([1u8; 24])).collect();
@@ -101,13 +101,13 @@ fn global_allocator_lifecycle() {
     assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
     drop(black_box(small));
 
-    // gc_mem_caches() gives runs without a live block back (1024 blocks of
-    // 3 KiB fill 256 runs of their own) to mimalloc.
+    // gc_mem_caches() has no heap to collect: mimalloc gives empty pages
+    // back itself (php-src without its allocator returns 0 as well).
     let boxes: Vec<Box<[u8; 3072]>> = (0..1024).map(|_| Box::new([2u8; 3072])).collect();
     assert!(boxes.iter().all(|b| b[3071] == 2));
     drop(black_box(boxes));
-    assert!(php_memlimit::gc_mem_caches() > 0);
-    assert!(php_memlimit::GLOBAL.heap_chunks() >= 1);
+    assert_eq!(php_memlimit::gc_mem_caches(), 0);
+    assert_eq!(php_memlimit::GLOBAL.heap_chunks(), 0);
     php_memlimit::unbind_current_thread();
     assert!(!php_memlimit::GLOBAL.is_bound_to_current_thread());
 }

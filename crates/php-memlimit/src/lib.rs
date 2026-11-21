@@ -42,6 +42,10 @@ mod counting;
 mod heap;
 mod limit;
 
+use std::alloc::{GlobalAlloc, Layout};
+use std::cell::{Cell, RefCell};
+use std::sync::{Mutex, PoisonError};
+
 pub use mimalloc::MiMalloc;
 
 pub use counting::{
@@ -55,46 +59,140 @@ pub use limit::{
     DEFAULT_LIMIT, LIMIT_MAX, PHP_BASELINE,
 };
 
-/// The process-wide accounting allocator: the request thread's small-block
-/// heap, over [`MiMalloc`] (mimalloc) for everything else.
+/// The process's accounting allocator over [`MiMalloc`] (mimalloc), for
+/// every thread without one of its own ([`attach_thread`]): the CLI
+/// SAPIs' request thread, I/O and timer threads.
 ///
 /// It only sees allocations once installed with
 /// [`install_global_allocator!`]; until then usage reads as
 /// [`PHP_BASELINE`] and only [`try_reserve`] enforces the limit.
-pub static GLOBAL: CountingAlloc<MiMalloc> = CountingAlloc::new(MiMalloc);
+pub static GLOBAL: CountingAlloc<MiMalloc> = CountingAlloc::without_heap(MiMalloc);
 
-/// Declares [`GLOBAL`] as the program's `#[global_allocator]`. Invoke once,
-/// at item level, in the binary crate (`php-cli`'s `main.rs`).
+thread_local! {
+    /// The calling thread's own allocator ([`attach_thread`]); `None`:
+    /// [`GLOBAL`]. Constant-initialised and without a destructor, so the
+    /// allocator can read it at any time, also while the thread's other
+    /// thread-locals are destroyed.
+    static THREAD: Cell<Option<&'static CountingAlloc<MiMalloc>>> = const { Cell::new(None) };
+    /// Hands the thread's own allocator back when the thread ends.
+    static DETACH: RefCell<Option<Detach>> = const { RefCell::new(None) };
+}
+
+/// Allocators of ended threads, for the next thread to attach.
+static POOL: Mutex<Vec<&'static CountingAlloc<MiMalloc>>> = Mutex::new(Vec::new());
+
+/// The allocator that accounts the calling thread's memory: its own
+/// ([`attach_thread`]) or [`GLOBAL`]. Every function of this crate without
+/// a receiver works on it.
+#[inline]
+#[must_use]
+pub fn current() -> &'static CountingAlloc<MiMalloc> {
+    THREAD.with(Cell::get).unwrap_or(&GLOBAL)
+}
+
+/// Gives the calling thread its own allocator, so that its usage, peak and
+/// `memory_limit` are its own (php-src ZTS: `AG(mm_heap)` per thread):
+/// the worker threads of a threaded server call it before their first
+/// request. Process-wide settings ([`set_hard_limit_handler`],
+/// [`set_pending_hook`], [`set_heap_observer`], [`set_tracked`]) are
+/// taken from [`GLOBAL`], so set them first. The allocator goes back to a
+/// pool when the thread ends. Idempotent.
+pub fn attach_thread() {
+    if THREAD.with(Cell::get).is_some() {
+        return;
+    }
+    let pooled = POOL.lock().unwrap_or_else(PoisonError::into_inner).pop();
+    let own: &'static CountingAlloc<MiMalloc> =
+        pooled.unwrap_or_else(|| Box::leak(Box::new(CountingAlloc::without_heap(MiMalloc))));
+    own.inherit(&GLOBAL);
+    let _ = own.bind_to_current_thread();
+    THREAD.with(|t| t.set(Some(own)));
+    DETACH.with(|d| *d.borrow_mut() = Some(Detach(own)));
+}
+
+/// Returns a thread's own allocator to [`POOL`] when the thread ends.
+struct Detach(&'static CountingAlloc<MiMalloc>);
+
+impl Drop for Detach {
+    fn drop(&mut self) {
+        // From here on the thread's frees go to `GLOBAL`.
+        let _ = THREAD.try_with(|t| t.set(None));
+        self.0.unbind_current_thread();
+        self.0.reset_counts();
+        POOL.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(self.0);
+    }
+}
+
+/// The program's allocator: every call goes to the calling thread's
+/// accounting allocator ([`current`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ThreadAlloc;
+
+// SAFETY: every method forwards its arguments unchanged to one
+// `CountingAlloc`, whose `GlobalAlloc` impl upholds the contract. A block
+// may be freed or resized through another thread's allocator than the one
+// that served it: none of them has a heap (`without_heap`), so every block
+// is a block of the one `MiMalloc` they all wrap, which frees it whoever
+// asks.
+unsafe impl GlobalAlloc for ThreadAlloc {
+    #[inline]
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded unchanged (see the impl).
+        unsafe { current().alloc(layout) }
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded unchanged (see the impl).
+        unsafe { current().alloc_zeroed(layout) }
+    }
+
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: forwarded unchanged (see the impl).
+        unsafe { current().dealloc(ptr, layout) }
+    }
+
+    #[inline]
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: forwarded unchanged (see the impl).
+        unsafe { current().realloc(ptr, layout, new_size) }
+    }
+}
+
+/// Declares [`ThreadAlloc`] as the program's `#[global_allocator]`. Invoke
+/// once, at item level, in the binary crate (`php-cli`'s `main.rs`).
 #[macro_export]
 macro_rules! install_global_allocator {
     () => {
         #[global_allocator]
-        static PHP_MEMLIMIT_GLOBAL_ALLOCATOR: &'static $crate::CountingAlloc<$crate::MiMalloc> =
-            &$crate::GLOBAL;
+        static PHP_MEMLIMIT_GLOBAL_ALLOCATOR: $crate::ThreadAlloc = $crate::ThreadAlloc;
     };
 }
 
-/// `memory_get_usage(false)` on [`GLOBAL`].
+/// `memory_get_usage(false)` on [`current`].
 pub fn usage() -> usize {
-    GLOBAL.usage()
+    current().usage()
 }
 
-/// `memory_get_usage(true)` on [`GLOBAL`].
+/// `memory_get_usage(true)` on [`current`].
 pub fn real_usage() -> usize {
-    GLOBAL.real_usage()
+    current().real_usage()
 }
 
-/// [`CountingAlloc::uncounted_bytes`] on [`GLOBAL`].
+/// [`CountingAlloc::uncounted_bytes`] on [`current`].
 pub fn uncounted_bytes() -> usize {
-    GLOBAL.uncounted_bytes()
+    current().uncounted_bytes()
 }
 
-/// `memory_get_usage($real_usage)` on [`GLOBAL`].
+/// `memory_get_usage($real_usage)` on [`current`].
 pub fn memory_get_usage(real_usage: bool) -> usize {
-    GLOBAL.memory_usage(real_usage)
+    current().memory_usage(real_usage)
 }
 
-/// [`CountingAlloc::set_tracked`] on [`GLOBAL`].
+/// [`CountingAlloc::set_tracked`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
 pub fn set_tracked(tracked: bool) {
     GLOBAL.set_tracked(tracked);
 }
@@ -126,164 +224,164 @@ fn atol(s: &[u8]) -> i64 {
     }
 }
 
-/// `memory_get_peak_usage(false)` on [`GLOBAL`].
+/// `memory_get_peak_usage(false)` on [`current`].
 pub fn peak() -> usize {
-    GLOBAL.peak()
+    current().peak()
 }
 
-/// `memory_get_peak_usage($real_usage)` on [`GLOBAL`].
+/// `memory_get_peak_usage($real_usage)` on [`current`].
 pub fn memory_get_peak_usage(real_usage: bool) -> usize {
-    GLOBAL.peak_usage(real_usage)
+    current().peak_usage(real_usage)
 }
 
-/// `memory_reset_peak_usage()` on [`GLOBAL`].
+/// `memory_reset_peak_usage()` on [`current`].
 pub fn reset_peak() {
-    GLOBAL.reset_peak();
+    current().reset_peak();
 }
 
-/// [`CountingAlloc::gc_mem_caches`] on [`GLOBAL`] (`gc_mem_caches()`:
+/// [`CountingAlloc::gc_mem_caches`] on [`current`] (`gc_mem_caches()`:
 /// `zend_mm_gc`, the bytes of the heap's empty runs given back).
 pub fn gc_mem_caches() -> usize {
-    GLOBAL.gc_mem_caches()
+    current().gc_mem_caches()
 }
 
-/// [`CountingAlloc::collect_heap`] on [`GLOBAL`]: `zend_mm_gc` without the
+/// [`CountingAlloc::collect_heap`] on [`current`]: `zend_mm_gc` without the
 /// observer report. [`request_end`] runs it for a thread that
 /// [`request_start`] bound; a long-running SAPI that tears its `Vm` down
 /// after `request_end` can call it again afterwards, so that the blocks the
 /// teardown freed are collected too.
 pub fn collect_heap() -> usize {
-    GLOBAL.collect_heap()
+    current().collect_heap()
 }
 
-/// [`CountingAlloc::set_observer`] on [`GLOBAL`].
+/// [`CountingAlloc::set_observer`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
 pub fn set_heap_observer(observer: HeapObserver) -> bool {
     GLOBAL.set_observer(observer)
 }
 
-/// [`CountingAlloc::observe`] on [`GLOBAL`].
+/// [`CountingAlloc::observe`] on [`current`].
 pub fn observe_heap(on: bool) {
-    GLOBAL.observe(on);
+    current().observe(on);
 }
 
-/// [`CountingAlloc::is_observing`] on [`GLOBAL`].
+/// [`CountingAlloc::is_observing`] on [`current`].
 pub fn is_observing_heap() -> bool {
-    GLOBAL.is_observing()
+    current().is_observing()
 }
 
-/// [`CountingAlloc::bind_to_current_thread`] on [`GLOBAL`]:
+/// [`CountingAlloc::bind_to_current_thread`] on [`current`]:
 /// [`request_start`] binds the request thread for the request; a SAPI
 /// that runs its requests on one thread (php-cli) calls this earlier, on
 /// that thread (e.g. before module startup), so that startup allocations
 /// use the heap too and the binding outlives [`request_end`] (the teardown
 /// stays on the owner path). `false` while another thread owns it.
 pub fn bind_to_current_thread() -> bool {
-    GLOBAL.bind_to_current_thread()
+    current().bind_to_current_thread()
 }
 
-/// [`CountingAlloc::unbind_current_thread`] on [`GLOBAL`] ([`request_end`]
+/// [`CountingAlloc::unbind_current_thread`] on [`current`] ([`request_end`]
 /// does it for a thread that [`request_start`] bound; an explicitly bound
 /// thread calls it when it is done with the heap).
 pub fn unbind_current_thread() {
-    GLOBAL.unbind_current_thread();
+    current().unbind_current_thread();
 }
 
-/// [`CountingAlloc::set_baseline`] on [`GLOBAL`].
+/// [`CountingAlloc::set_baseline`] on [`current`].
 pub fn set_baseline() {
-    GLOBAL.set_baseline();
+    current().set_baseline();
 }
 
-/// [`CountingAlloc::persistent`] on [`GLOBAL`]: runs `f` with the bytes it
+/// [`CountingAlloc::persistent`] on [`current`]: runs `f` with the bytes it
 /// allocates or frees (net) left out of `memory_get_usage()`, like
 /// php-src's persistent (`pemalloc`) tables. Wrap only the buffer
 /// operation (a `Vec`'s growth or release) in it.
 pub fn persistent<R>(f: impl FnOnce() -> R) -> R {
-    GLOBAL.persistent(f)
+    current().persistent(f)
 }
 
 /// The current soft limit of [`GLOBAL`] (`None` = unlimited).
 pub fn limit() -> Option<usize> {
-    GLOBAL.limit()
+    current().limit()
 }
 
-/// [`CountingAlloc::set_limit`] on [`GLOBAL`].
+/// [`CountingAlloc::set_limit`] on [`current`].
 pub fn set_limit(limit: Option<usize>) -> Result<(), SetLimitError> {
-    GLOBAL.set_limit(limit)
+    current().set_limit(limit)
 }
 
-/// [`CountingAlloc::hard_limit`] on [`GLOBAL`].
+/// [`CountingAlloc::hard_limit`] on [`current`].
 pub fn hard_limit() -> Option<usize> {
-    GLOBAL.hard_limit()
+    current().hard_limit()
 }
 
-/// [`CountingAlloc::set_hard_limit_percent`] on [`GLOBAL`].
+/// [`CountingAlloc::set_hard_limit_percent`] on [`current`].
 pub fn set_hard_limit_percent(percent: i64) -> Result<(), HardLimitPercentError> {
-    GLOBAL.set_hard_limit_percent(percent)
+    current().set_hard_limit_percent(percent)
 }
 
-/// [`CountingAlloc::apply_memory_limit_ini`] on [`GLOBAL`].
+/// [`CountingAlloc::apply_memory_limit_ini`] on [`current`].
 pub fn apply_memory_limit_ini(
     value: u64,
     max_memory_limit: u64,
 ) -> Result<MemoryLimitIni, SetLimitError> {
-    GLOBAL.apply_memory_limit_ini(value, max_memory_limit)
+    current().apply_memory_limit_ini(value, max_memory_limit)
 }
 
-/// [`CountingAlloc::check`] on [`GLOBAL`].
+/// [`CountingAlloc::check`] on [`current`].
 #[inline]
 pub fn check() -> Option<OverLimit> {
-    GLOBAL.check()
+    current().check()
 }
 
-/// [`CountingAlloc::is_pending`] on [`GLOBAL`].
+/// [`CountingAlloc::is_pending`] on [`current`].
 #[inline]
 pub fn is_pending() -> bool {
-    GLOBAL.is_pending()
+    current().is_pending()
 }
 
-/// [`CountingAlloc::take`] on [`GLOBAL`].
+/// [`CountingAlloc::take`] on [`current`].
 pub fn take() -> Option<OverLimit> {
-    GLOBAL.take()
+    current().take()
 }
 
-/// [`CountingAlloc::clear`] on [`GLOBAL`].
+/// [`CountingAlloc::clear`] on [`current`].
 pub fn clear() {
-    GLOBAL.clear();
+    current().clear();
 }
 
-/// [`CountingAlloc::try_reserve`] on [`GLOBAL`].
+/// [`CountingAlloc::try_reserve`] on [`current`].
 pub fn try_reserve(bytes: usize) -> Result<(), OverLimit> {
-    GLOBAL.try_reserve(bytes)
+    current().try_reserve(bytes)
 }
 
-/// [`CountingAlloc::try_reserve_n`] on [`GLOBAL`].
+/// [`CountingAlloc::try_reserve_n`] on [`current`].
 pub fn try_reserve_n(count: usize, elem_size: usize, extra: usize) -> Result<(), OverLimit> {
-    GLOBAL.try_reserve_n(count, elem_size, extra)
+    current().try_reserve_n(count, elem_size, extra)
 }
 
-/// [`CountingAlloc::would_fit`] on [`GLOBAL`].
+/// [`CountingAlloc::would_fit`] on [`current`].
 pub fn would_fit(bytes: usize) -> bool {
-    GLOBAL.would_fit(bytes)
+    current().would_fit(bytes)
 }
 
-/// [`CountingAlloc::set_hard_limit_handler`] on [`GLOBAL`].
+/// [`CountingAlloc::set_hard_limit_handler`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
 pub fn set_hard_limit_handler(handler: HardLimitHandler) -> bool {
     GLOBAL.set_hard_limit_handler(handler)
 }
 
-/// [`CountingAlloc::set_pending_hook`] on [`GLOBAL`].
+/// [`CountingAlloc::set_pending_hook`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
 pub fn set_pending_hook(hook: PendingHook) -> bool {
     GLOBAL.set_pending_hook(hook)
 }
 
-/// [`CountingAlloc::request_start`] on [`GLOBAL`].
+/// [`CountingAlloc::request_start`] on [`current`].
 pub fn request_start(limit: Option<usize>) -> Result<(), SetLimitError> {
-    GLOBAL.request_start(limit)
+    current().request_start(limit)
 }
 
-/// [`CountingAlloc::request_end`] on [`GLOBAL`].
+/// [`CountingAlloc::request_end`] on [`current`].
 pub fn request_end() {
-    GLOBAL.request_end();
+    current().request_end();
 }
 
 #[cfg(test)]

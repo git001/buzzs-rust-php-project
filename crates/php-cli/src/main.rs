@@ -785,7 +785,7 @@ fn request_startup(vm: &mut Vm) {
     }
     let limit = u64::try_from(vm.ini_long("memory_limit")).unwrap_or(u64::MAX);
     if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
-        php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
+        php_memlimit::current().force_limit(Some(php_memlimit::DEFAULT_LIMIT));
     }
 }
 

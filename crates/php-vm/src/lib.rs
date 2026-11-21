@@ -345,7 +345,7 @@ impl Vm {
             }
             "memory_limit" | "max_memory_limit" => {
                 let limit = u64::try_from(self.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
-                php_memlimit::GLOBAL.force_limit(php_memlimit::limit_from_ini(limit));
+                php_memlimit::current().force_limit(php_memlimit::limit_from_ini(limit));
             }
             "serialize_precision" => {
                 self.serialize_precision = self.ini.get_long("serialize_precision")
@@ -387,7 +387,7 @@ impl Vm {
         // memory_limit accounting starts with the request.
         let limit = u64::try_from(self.ini.get_long("memory_limit")).unwrap_or(u64::MAX);
         if php_memlimit::request_start(php_memlimit::limit_from_ini(limit)).is_err() {
-            php_memlimit::GLOBAL.force_limit(Some(php_memlimit::DEFAULT_LIMIT));
+            php_memlimit::current().force_limit(Some(php_memlimit::DEFAULT_LIMIT));
         }
         let t = self.ini.get_long("max_execution_time");
         self.set_time_limit(t);
