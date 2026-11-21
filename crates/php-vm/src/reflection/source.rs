@@ -127,15 +127,6 @@ pub(crate) fn const_value(vm: &Vm, file: &[u8], line: u32, name: &[u8]) -> Optio
     None
 }
 
-/// The doc comment of enum case `name` declared in the class at `file:line`.
-pub(crate) fn case_doc_comment(vm: &Vm, file: &[u8], line: u32, name: &[u8]) -> Option<Vec<u8>> {
-    let (c, _) = class_ast(vm, file, line)?;
-    c.members.iter().find_map(|m| match &m.kind {
-        ClassMemberKind::EnumCase(ec) if ec.name.name == name => ec.doc_comment.clone(),
-        _ => None,
-    })
-}
-
 /// Collects the parameter lists of every function-like declaration.
 struct ParamCollector {
     line: u32,
@@ -380,59 +371,6 @@ pub(crate) fn literal_value(e: &Expr) -> Option<php_runtime::Value> {
         },
         _ => return None,
     })
-}
-
-/// Finds the doc comment of the property hook declared at `file:line-end`.
-struct HookDoc {
-    line: u32,
-    end: u32,
-    found: Option<Vec<u8>>,
-}
-
-impl HookDoc {
-    fn check(&mut self, hooks: Option<&Vec<ast::PropertyHook>>) {
-        for h in hooks.into_iter().flatten() {
-            if self.found.is_none()
-                && h.span.line == self.line
-                && (h.end_line == self.end || self.end == 0)
-            {
-                self.found.clone_from(&h.doc_comment);
-            }
-        }
-    }
-}
-
-impl php_parser::visit::Visitor for HookDoc {
-    fn visit_class(&mut self, c: &ClassDecl) {
-        for m in &c.members {
-            match &m.kind {
-                ClassMemberKind::Property(g) => {
-                    for p in &g.props {
-                        self.check(p.hooks.as_ref());
-                    }
-                }
-                ClassMemberKind::Method(md) => {
-                    for p in &md.params {
-                        self.check(p.hooks.as_ref());
-                    }
-                }
-                _ => {}
-            }
-        }
-        php_parser::visit::walk_class(self, c);
-    }
-}
-
-/// The doc comment of the property hook declared at `file:line-end`.
-pub(crate) fn hook_doc_comment(vm: &Vm, file: &[u8], line: u32, end: u32) -> Option<Vec<u8>> {
-    let p = program(vm, file)?;
-    let mut v = HookDoc {
-        line,
-        end,
-        found: None,
-    };
-    php_parser::visit::walk_stmts(&mut v, &p.statements);
-    v.found
 }
 
 /// Collects `static $x = expr;` initializers within a line range.

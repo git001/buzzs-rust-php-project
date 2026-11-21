@@ -405,17 +405,7 @@ fn rf_get_doc_comment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     Ok(match &f.func {
-        Func::User(u) => match &u.doc_comment {
-            Some(d) => Value::Str(d.clone()),
-            None if u.hook_prop.is_some() => super::source::hook_doc_comment(
-                vm,
-                u.code.filename.as_bytes(),
-                u.line_start,
-                u.line_end,
-            )
-            .map_or(Value::Bool(false), |d| Value::Str(ZStr::from(d))),
-            None => Value::Bool(false),
-        },
+        Func::User(u) => u.doc_comment.clone().map_or(Value::Bool(false), Value::Str),
         Func::Builtin(_) => builtin_doc_comment(vm, &f).map_or(Value::Bool(false), Value::Str),
     })
 }

@@ -832,7 +832,7 @@ pub(crate) fn enum_case_string(
 ) -> VmResult<Vec<u8>> {
     let v = vm.enum_case(cls, &c.name)?;
     let mut b = Buf::default();
-    if let Some(d) = &super::constant::const_doc_comment(vm, cls, c) {
+    if let Some(d) = &super::constant::const_doc_comment(c) {
         b.s(indent).z(d).c(b'\n');
     }
     b.s(indent).s("Case ").z(&c.name);
