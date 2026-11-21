@@ -39,13 +39,13 @@ env -u LANGUAGE target/debug/phpt-runner --php target/debug/php -j 3 -q --no-art
 
 The workspace has ~100 crates in strict layers:
 
-1. **Engine pipeline**: `php-lexer` → `php-parser` (AST with exact parse-error messages) → `php-vm` (`compiler/` lowers AST to op arrays; `exec.rs` is the interpreter loop `execute_ex`; classes, exceptions, generators, fibers, GC, reflection live alongside) → `php-cli` (the `php` binary). `php-cli-server` (`php -S`) and `php-sapi-apache2` (mod_php) are the other SAPIs.
+1. **Engine pipeline**: `php-lexer` → `php-parser` (AST with exact parse-error messages) → `php-vm` (`compiler/` lowers AST to op arrays; `exec.rs` is the interpreter loop `execute_ex`; classes, exceptions, generators, fibers, GC, reflection live alongside) → `php-cli` (the `php` binary). `php-cli-server` (`php -S`) is the other SAPI; FastCGI/FPM and an HTTP server follow (mod_php was dropped: php.net advises against it for new installations).
 2. **`php-runtime`** is the shared vocabulary: `Value` (zval), `ZStr` (zend_string), `ZArray` (ordered hash table), operators and type juggling, var_dump/serialize. Crates coordinate only through its types.
 3. **Library / binding split.** Each PHP extension is two crates:
    - `php-<name>` holds the pure logic. It is VM-independent and has its own oracle-driven test suite.
    - `php-ext-<name>` is a thin binding through `php_vm::ext` (`Extension`, `ModuleBuilder`, `ClassBuilder`, `Args`/ZPP). Native functions are registered from PHP stub signatures. The library calls back into the VM through a host trait that the ext crate implements; `crates/php-ext-json/src/host.rs` is the reference example, including how VM throws and runtime errors convert both ways.
    - Per-request extension state lives in thread-locals reset at request shutdown.
-   - `crates/php-extensions/src/lib.rs` lists every extension `php`, `php-cgi`, `php -S` and the servers load (`crates/php-sapi-apache2/src/extensions.rs` a subset); `Vm::with_extensions` registers them. A new ext crate is not live until it is added there.
+   - `crates/php-extensions/src/lib.rs` lists every extension `php`, `php-cgi`, `php -S` and the servers load; `Vm::with_extensions` registers them. A new ext crate is not live until it is added there.
 4. **`phpt-runner`** ports `run-tests.php`: all `.phpt` sections, parallel scheduling, baseline and scope handling.
 
 Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/zend_hash.c`); match that C source's observable behaviour.
@@ -90,7 +90,6 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 - `crates/php-spl`      — SPL data structures, iterators, ArrayObject core over php-runtime (ref: ext/spl)
 - `crates/php-session`  — session core: serializers, save handlers, ID generation, INI semantics (ref: ext/session)
 - `crates/php-mysqlnd`  — pure-Rust MySQL client protocol (ref: ext/mysqlnd); `php-ext-mysqli` binds ext/mysqli on it
-- `crates/php-sapi-apache2` — mod_php: Apache 2.4 module SAPI (ref: sapi/apache2handler)
 - `crates/php-zip`      — libzip binding with ext/zip semantics
 - `crates/php-fileinfo` — libmagic binding with ext/fileinfo semantics
 - `crates/php-sodium`   — libsodium binding with ext/sodium semantics
@@ -137,4 +136,3 @@ When coordinating subagents on a large task:
 
 ## Test services
 - MariaDB 10.11 is installed for ext/mysqli tests: database `test`, user `phptest` / password `phptest` on 127.0.0.1:3306 (set `MYSQL_TEST_HOST=127.0.0.1 MYSQL_TEST_USER=phptest MYSQL_TEST_PASSWD=phptest MYSQL_TEST_DB=test` when running those tests, e.g. via the runner's `--env`). Start/stop with `sudo systemctl start|stop mariadb`.
-- Apache 2.4 + apache2-dev (`apxs`) are installed for the mod_php SAPI; keep `apache2` stopped unless testing it.

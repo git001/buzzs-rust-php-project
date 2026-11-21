@@ -1,7 +1,8 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Request reset restoring clean VM state across request boundaries
-//! without rebuilding the VM (for persistent worker SAPIs such as mod_php).
+//! without rebuilding the VM (for SAPIs whose workers serve request after
+//! request, such as FastCGI/FPM).
 
 use crate::class::cflags;
 use crate::func::Func;

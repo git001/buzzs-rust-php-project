@@ -8,8 +8,8 @@
 //!   objects, exceptions, generators, closures, includes, error reporting
 //!   and the builtin function library.
 //!
-//! The SAPIs (`crates/php-cli`, `crates/php-cli-server`,
-//! `crates/php-sapi-apache2`) create a [`Vm`] with [`Vm::with_extensions`],
+//! The SAPIs (`crates/php-cli`, `crates/php-cli-server`) create a [`Vm`]
+//! with [`Vm::with_extensions`],
 //! set the command line arguments and run a script with
 //! [`Vm::run_script`]. [`Vm::new`] creates the bare VM of the engine's own
 //! tests.

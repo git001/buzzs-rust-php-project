@@ -281,7 +281,7 @@ fn enum_constants_and_cases_keep_declaration_order() {
 /// its own table, and dropping the VM frees every function and class the
 /// script compiled: no declared function's code holds the table that holds
 /// the function (the `Rc` cycle leaked every user declaration of each
-/// request under `php -S`, `--repeat` and `mod_php`).
+/// request under `php -S` and `--repeat`).
 #[test]
 fn dropping_the_vm_frees_the_scripts_declarations() {
     let sink = Sink::default();

@@ -56,7 +56,6 @@ members = [
     "crates/php-ext-stdmisc",
     "crates/php-mysqlnd",
     "crates/php-ext-mysqli",
-    "crates/php-sapi-apache2",
     "crates/php-zip",
     "crates/php-fileinfo",
     "crates/php-sodium",

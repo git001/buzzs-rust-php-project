@@ -61,8 +61,7 @@ Cargo workspace, ~100 crates, strictly layered:
 
 1. **Engine pipeline**: `php-lexer` (tokenizer) → `php-parser` (AST, exact parse-error
    messages) → `php-vm` (compiler to op arrays + executor, classes, exceptions, generators,
-   fibers) → `php-cli` (the `php` binary; also `php-cli-server` for `php -S`,
-   `php-sapi-apache2` for mod_php).
+   fibers) → `php-cli` (the `php` binary; also `php-cli-server` for `php -S`).
 2. **`php-runtime`** is the shared vocabulary: `Value` (zval), `ZStr` (zend_string), `ZArray`
    (ordered hash table), operators/type juggling. All crates coordinate through its types.
 3. **Library / binding split**: each PHP extension is two crates.
@@ -140,4 +139,3 @@ Git worktree and branch:
 - MariaDB 10.11 for ext/mysqli tests: db `test`, user `phptest`/`phptest` on 127.0.0.1:3306.
   Set `MYSQL_TEST_HOST=127.0.0.1 MYSQL_TEST_USER=phptest MYSQL_TEST_PASSWD=phptest
   MYSQL_TEST_DB=test`. Start/stop: `sudo systemctl start|stop mariadb`.
-- Apache 2.4 + `apxs` for the mod_php SAPI; keep `apache2` stopped unless testing it.

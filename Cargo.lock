@@ -1287,35 +1287,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "php-sapi-apache2"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
- "php-ext-date",
- "php-ext-filter",
- "php-ext-hash",
- "php-ext-json",
- "php-ext-pcre",
- "php-ext-pdo",
- "php-ext-random",
- "php-ext-session",
- "php-ext-spl",
- "php-ext-stdarr",
- "php-ext-stdmisc",
- "php-ext-stdstr",
- "php-ext-streams",
- "php-memlimit",
- "php-runtime",
- "php-sapi",
- "php-sapi-input",
- "php-stdmisc",
- "php-streams",
- "php-support",
- "php-vm",
-]
-
-[[package]]
 name = "php-sapi-input"
 version = "0.1.0"
 dependencies = [

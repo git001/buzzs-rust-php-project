@@ -40,7 +40,7 @@ impl Vm {
     /// already: shutdown functions, destructors, the extensions' request
     /// shutdown hooks (which close every stream and write the session),
     /// output flushing, headers. A host that runs another request on the
-    /// same thread (`--repeat`, the built-in web server, mod_php) must drop
+    /// same thread (`--repeat`, the built-in web server, a FastCGI worker) must drop
     /// the `Vm` instead.
     pub fn discard(self) {
         let Vm {
