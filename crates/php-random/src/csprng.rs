@@ -23,9 +23,7 @@ pub fn fill_throw(buf: &mut [u8]) -> Result<()> {
 
 /// A random `u64` from the CSPRNG (`php_random_bytes_throw(&u64, 8)`).
 pub fn next_u64() -> Result<u64> {
-    let mut b = [0u8; 8];
-    fill_throw(&mut b)?;
-    Ok(u64::from_le_bytes(b))
+    getrandom::u64().map_err(|_| RandomError::RandomException(CSPRNG_FAILURE.to_owned()))
 }
 
 /// `php_random_int`: uniform integer in `[min, max]` straight from the
