@@ -40,17 +40,11 @@ pub struct EnvState {
 pub fn getenv_all() -> ZArray {
     let mut out = ZArray::new();
     let t = out.make_mut();
-    for e in sys::environ_entries() {
-        let Some(p) = e.iter().position(|&c| c == b'=') else {
-            continue;
-        };
-        if p == 0 || e[..p].iter().any(|c| matches!(c, b' ' | b'.' | b'[')) {
+    for (k, v) in sys::environ_entries() {
+        if k.first() == Some(&b'=') || k.iter().any(|c| matches!(c, b' ' | b'.' | b'[')) {
             continue;
         }
-        t.insert(
-            ArrayKey::from_bytes(&e[..p]),
-            Value::Str(ZStr::new(&e[p + 1..])),
-        );
+        t.insert(ArrayKey::from_bytes(&k), Value::Str(ZStr::new(v)));
     }
     out
 }
@@ -84,31 +78,29 @@ impl EnvState {
         }
         let eq = setting.iter().position(|&c| c == b'=');
         let key = &setting[..eq.unwrap_or(setting.len())];
-        self.entries.retain(|(k, _)| k != key);
-        let previous = sys::getenv(key);
-        let ok = match eq {
-            None => {
-                sys::unsetenv(key);
-                true
-            }
-            Some(i) => sys::setenv(key, &setting[i + 1..]),
+        // A second putenv() of the same name keeps the value from before the
+        // first: php-src deletes the old entry first, whose destructor puts
+        // that value back, and then records it again as the previous one.
+        let previous = match self.entries.iter().position(|(k, _)| k == key) {
+            Some(i) => self.entries.remove(i).1,
+            None => sys::getenv(key),
         };
-        if ok {
-            self.entries.push((key.to_vec(), previous));
-            if key.eq_ignore_ascii_case(b"TZ") {
-                sys::tzset();
-            }
+        match eq {
+            None => sys::unsetenv(key),
+            Some(i) => sys::setenv(key, &setting[i + 1..]),
         }
-        Ok(ok)
+        self.entries.push((key.to_vec(), previous));
+        if key.eq_ignore_ascii_case(b"TZ") {
+            sys::tzset();
+        }
+        Ok(true)
     }
 
     /// Request shutdown: restores the variables changed by `putenv()`.
     pub fn request_shutdown(&mut self) {
         for (key, prev) in self.entries.drain(..) {
             match prev {
-                Some(v) => {
-                    let _ = sys::setenv(&key, &v);
-                }
+                Some(v) => sys::setenv(&key, &v),
                 None => sys::unsetenv(&key),
             }
             if key.eq_ignore_ascii_case(b"TZ") {

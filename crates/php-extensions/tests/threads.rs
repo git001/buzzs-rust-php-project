@@ -406,3 +406,46 @@ echo getcwd() === realpath('@DIR@') ? 'cwd' : 'other cwd', ' ',
         "the process's directory stays"
     );
 }
+
+#[test]
+fn putenv_in_parallel_requests_stays_consistent() {
+    // The environment is the process's, as in php-src ZTS, where
+    // `tsrm_env_lock` serialises every access: requests that `putenv()`,
+    // `getenv()`, list the environment and start children at the same time
+    // must each see their own variable, and nothing may read an
+    // environment array another thread is replacing.
+    const THREADS: usize = 8;
+    const REQUEST: &str = r#"<?php
+$bad = 0;
+for ($i = 0; $i < 400; $i++) {
+    putenv("BUZZ_ENV_@T@=$i");
+    $bad += getenv("BUZZ_ENV_@T@") !== "$i";
+    $bad += (getenv()["BUZZ_ENV_@T@"] ?? null) !== "$i";
+    if ($i % 40 === 0) {
+        $bad += trim(shell_exec('printenv BUZZ_ENV_@T@')) !== "$i";
+    }
+}
+echo "@T@ $bad\n";
+"#;
+    let start = Arc::new(Barrier::new(THREADS));
+    let workers: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let start = Arc::clone(&start);
+            on_thread(move || {
+                let sink = Sink::default();
+                let mut vm = new_vm(&sink);
+                start.wait();
+                let src = REQUEST.replace("@T@", &t.to_string());
+                vm.run_script(src.as_bytes(), "/env.php");
+                let out = sink.take();
+                vm.request_reset();
+                (out, std::env::var_os(format!("BUZZ_ENV_{t}")))
+            })
+        })
+        .collect();
+    for (t, w) in workers.into_iter().enumerate() {
+        let (out, left) = w.join().expect("worker thread");
+        assert_eq!(out, format!("{t} 0\n"));
+        assert_eq!(left, None, "the request end restores the environment");
+    }
+}

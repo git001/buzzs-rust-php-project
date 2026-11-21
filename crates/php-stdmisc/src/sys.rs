@@ -7,8 +7,9 @@
 //! (`OwnedFd`, `Vec<u8>`, `Result<_, i32>` with an errno) to the rest of
 //! the crate.
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::ptr;
 
 /// The calling thread's `errno`.
@@ -207,7 +208,9 @@ pub enum SpawnError {
 }
 
 /// `posix_spawn(p)`: runs `program` with `argv` and `envp` (`None` =
-/// inherit `environ`), applying `actions` in the child. `use_path` selects
+/// a copy of the process environment, taken under std's environment lock
+/// so that a concurrent `putenv()` cannot free it under the spawn),
+/// applying `actions` in the child. `use_path` selects
 /// `posix_spawnp`. Returns the child's pid. Action failures are reported
 /// through `on_action_error` (PHP only warns for `chdir`).
 pub fn spawn(
@@ -222,12 +225,15 @@ pub fn spawn(
     let argv_c: Vec<CString> = argv.iter().map(|a| cstring(a)).collect();
     let mut argv_p: Vec<*mut libc::c_char> = argv_c.iter().map(|a| a.as_ptr().cast_mut()).collect();
     argv_p.push(ptr::null_mut());
-    let envp_c: Option<Vec<CString>> = envp.map(|e| e.iter().map(|a| cstring(a)).collect());
-    let mut envp_p: Option<Vec<*mut libc::c_char>> = envp_c.as_ref().map(|e| {
-        let mut v: Vec<_> = e.iter().map(|a| a.as_ptr().cast_mut()).collect();
-        v.push(ptr::null_mut());
-        v
-    });
+    let envp_c: Vec<CString> = match envp {
+        Some(e) => e.iter().map(|a| cstring(a)).collect(),
+        None => environ_entries()
+            .iter()
+            .map(|(k, v)| cstring(&[k.as_slice(), b"=", v].concat()))
+            .collect(),
+    };
+    let mut envp_p: Vec<*mut libc::c_char> = envp_c.iter().map(|a| a.as_ptr().cast_mut()).collect();
+    envp_p.push(ptr::null_mut());
     let chdirs: Vec<Option<CString>> = actions
         .iter()
         .map(|a| match a {
@@ -264,12 +270,7 @@ pub fn spawn(
     }
     if result.is_ok() {
         let mut pid: libc::pid_t = 0;
-        let env_ptr = match envp_p.as_mut() {
-            Some(v) => v.as_ptr(),
-            // SAFETY: reading the `environ` pointer itself; posix_spawn
-            // only reads the array.
-            None => unsafe { environ_ptr() },
-        };
+        let env_ptr = envp_p.as_ptr();
         // SAFETY: all pointers are valid NUL-terminated strings / NULL-
         // terminated arrays that outlive the call; `fa` is initialised.
         let r = unsafe {
@@ -302,19 +303,6 @@ pub fn spawn(
     // SAFETY: `fa` was initialised by _init.
     unsafe { libc::posix_spawn_file_actions_destroy(&raw mut fa) };
     result
-}
-
-extern "C" {
-    static environ: *const *mut libc::c_char;
-}
-
-/// The process environment array.
-///
-/// # Safety
-/// The returned pointer is only valid until the environment is modified.
-unsafe fn environ_ptr() -> *const *mut libc::c_char {
-    // SAFETY: reading a C global; see the function contract.
-    unsafe { environ }
 }
 
 /// `waitpid(pid, &status, options)`: `Ok((pid, status))` or `Err(errno)`.
@@ -766,46 +754,33 @@ pub fn res_query(name: &[u8], rtype: i32) -> Result<Vec<u8>, i32> {
 
 // ------------------------------------------------------------- environment
 
-/// The raw `environ` entries, in order.
+/// The process environment as `(name, value)` pairs, in `environ` order
+/// (entries without `=` are left out). Every access to the environment in
+/// this module goes through std, whose lock serialises it like php-src's
+/// `tsrm_env_lock`: a `putenv()` in one request thread never frees what
+/// another one reads.
 #[must_use]
-pub fn environ_entries() -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    // SAFETY: `environ` is a NULL-terminated array of C strings; each is
-    // copied immediately. The caller must not mutate the environment from
-    // another thread concurrently (same contract as PHP's tsrm_env_lock).
-    unsafe {
-        let mut p = environ_ptr();
-        while !p.is_null() && !(*p).is_null() {
-            out.push(CStr::from_ptr(*p).to_bytes().to_vec());
-            p = p.add(1);
-        }
-    }
-    out
+pub fn environ_entries() -> Vec<(Vec<u8>, Vec<u8>)> {
+    std::env::vars_os()
+        .map(|(k, v)| (k.into_vec(), v.into_vec()))
+        .collect()
 }
 
 /// `getenv(name)`.
 #[must_use]
 pub fn getenv(name: &[u8]) -> Option<Vec<u8>> {
-    let c = cstring(name);
-    // SAFETY: valid C string; the result is copied immediately.
-    from_cstr(unsafe { libc::getenv(c.as_ptr()) })
+    std::env::var_os(OsStr::from_bytes(name)).map(OsString::into_vec)
 }
 
-/// `setenv(name, value, 1) == 0`.
-#[must_use]
-pub fn setenv(name: &[u8], value: &[u8]) -> bool {
-    let (n, v) = (cstring(name), cstring(value));
-    // SAFETY: valid C strings; setenv copies them.
-    unsafe { libc::setenv(n.as_ptr(), v.as_ptr(), 1) == 0 }
+/// `setenv(name, value, 1)`. `name` must be non-empty and free of `=`
+/// and NUL, `value` free of NUL (`putenv()` checks both).
+pub fn setenv(name: &[u8], value: &[u8]) {
+    std::env::set_var(OsStr::from_bytes(name), OsStr::from_bytes(value));
 }
 
-/// `unsetenv(name)`.
+/// `unsetenv(name)`. `name` as for [`setenv`].
 pub fn unsetenv(name: &[u8]) {
-    let n = cstring(name);
-    // SAFETY: valid C string.
-    unsafe {
-        libc::unsetenv(n.as_ptr());
-    }
+    std::env::remove_var(OsStr::from_bytes(name));
 }
 
 /// `tzset()` (after `putenv("TZ=...")`).

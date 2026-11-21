@@ -661,10 +661,8 @@ pub fn print_info(
         p.section("Environment");
         p.table_start();
         p.table_header(&[b"Variable", b"Value"]);
-        for e in crate::sys::environ_entries() {
-            if let Some(i) = e.iter().position(|&c| c == b'=') {
-                p.table_row(&[&e[..i], &e[i + 1..]]);
-            }
+        for (k, v) in crate::sys::environ_entries() {
+            p.table_row(&[&k, &v]);
         }
         p.table_end();
     }
