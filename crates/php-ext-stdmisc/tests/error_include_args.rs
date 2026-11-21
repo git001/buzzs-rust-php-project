@@ -27,7 +27,7 @@ impl Write for Sink {
 
 fn run(code: &str, include_args: bool) -> String {
     let ext = php_ext_stdmisc::StdMisc;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let opts = VmOptions {
         ini: vec![(
             "error_include_args".to_string(),

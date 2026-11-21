@@ -118,20 +118,6 @@ fn str_slice<'a>(a: &'a Args, i: usize, fallback: &'a mut Option<ZStr>) -> &'a [
     }
 }
 
-fn strlen(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let len = match a.values.get(0) {
-        Some(Value::Str(s)) => s.len(),
-        Some(Value::Reference(r)) => match &*r.borrow() {
-            Value::Str(s) => s.len(),
-            Value::Int(n) => n.to_string().len(),
-            _ => s(a, 0).len(),
-        },
-        Some(Value::Int(n)) => n.to_string().len(),
-        _ => s(a, 0).len(),
-    };
-    Ok(Value::Int(i64::try_from(len).unwrap_or(0)))
-}
-
 fn substr(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let st = s(a, 0);
     let len = opt(a, 2).map(|_| i(a, 2));
@@ -824,10 +810,36 @@ fn implode_alias_array(a: &Args) -> ZArray {
     arr(a, 0)
 }
 
-/// Registers the string functions.
+/// Registers the string functions only the VM provides, among them
+/// `Zend/zend_builtin_functions.c`'s comparisons (module `Core`).
 pub(crate) fn register(vm: &mut Vm) {
+    reg(vm, "strcmp(string $string1, string $string2): int", strcmp);
+    reg(
+        vm,
+        "strcasecmp(string $string1, string $string2): int",
+        strcasecmp,
+    );
+    reg(
+        vm,
+        "strncmp(string $string1, string $string2, int $length): int",
+        strncmp,
+    );
+    reg(
+        vm,
+        "strncasecmp(string $string1, string $string2, int $length): int",
+        strncasecmp,
+    );
     let _ = implode_alias_array;
-    reg(vm, "strlen(string $string): int", strlen);
+    reg(
+        vm,
+        "uniqid(string $prefix = \"\", bool $more_entropy = false): string",
+        uniqid,
+    );
+}
+
+/// Registers the bare VM's string functions and constants (`Vm::new`):
+/// the SAPIs get them from php-ext-stdstr and the other extensions.
+pub(crate) fn register_bare(vm: &mut Vm) {
     reg(vm, "implode($separator, $array = null): string", implode);
     alias(vm, "join", "implode");
     reg(
@@ -972,22 +984,6 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "bin2hex(string $string): string", bin2hex);
     reg(vm, "hex2bin(string $string): string|false", hex2bin);
     reg(vm, "str_rot13(string $string): string", str_rot13);
-    reg(vm, "strcmp(string $string1, string $string2): int", strcmp);
-    reg(
-        vm,
-        "strcasecmp(string $string1, string $string2): int",
-        strcasecmp,
-    );
-    reg(
-        vm,
-        "strncmp(string $string1, string $string2, int $length): int",
-        strncmp,
-    );
-    reg(
-        vm,
-        "strncasecmp(string $string1, string $string2, int $length): int",
-        strncasecmp,
-    );
     reg(
         vm,
         "strnatcmp(string $string1, string $string2): int",
@@ -1041,11 +1037,6 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "crc32(string $string): int", crc32);
     reg(vm, "number_format(float $num, int $decimals = 0, ?string $decimal_separator = \".\", ?string $thousands_separator = \",\"): string", number_format);
     reg(vm, "lcg_value(): float", lcg_value);
-    reg(
-        vm,
-        "uniqid(string $prefix = \"\", bool $more_entropy = false): string",
-        uniqid,
-    );
     reg(
         vm,
         "str_word_count(string $string, int $format = 0, ?string $characters = null): array|int",

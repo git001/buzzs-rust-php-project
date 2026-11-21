@@ -10,5 +10,8 @@ php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-json = { path = "../php-json" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

@@ -28,7 +28,7 @@ fn run(code: &str) -> String {
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let ext = Pdo;
-    let exts: [&dyn Extension; 2] = [&streams, &ext];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &streams, &ext];
     let opts = VmOptions { ini: Vec::new() };
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     let src = format!("<?php\n{code}");
@@ -257,7 +257,7 @@ fn driver_methods_are_built_per_connection() {
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let ext = Pdo;
-    let exts: [&dyn Extension; 2] = [&streams, &ext];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &streams, &ext];
     let opts = VmOptions { ini: Vec::new() };
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     vm.register_function("driver_method_id(object $pdo): int", probe);

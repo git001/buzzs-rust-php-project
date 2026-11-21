@@ -30,7 +30,7 @@ impl Write for Sink {
 fn run(code: &str) -> String {
     let sink = Sink::default();
     let ext = php_ext_zendtest::ZendTest;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
@@ -139,7 +139,7 @@ fn run_with_streams(code: &str) -> String {
     let sink = Sink::default();
     let zt = php_ext_zendtest::ZendTest;
     let streams = php_ext_streams::Streams;
-    let exts: [&dyn Extension; 2] = [&streams, &zt];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &streams, &zt];
     let opts = VmOptions {
         ini: vec![("post_max_size".into(), "100K".into())],
     };
@@ -156,7 +156,7 @@ fn run_with_ini(code: &str, ini: Vec<(String, String)>) -> String {
     let sink = Sink::default();
     let zt = php_ext_zendtest::ZendTest;
     let streams = php_ext_streams::Streams;
-    let exts: [&dyn Extension; 2] = [&streams, &zt];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &streams, &zt];
     let opts = VmOptions { ini };
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");

@@ -13,5 +13,9 @@ php-stdarr = { path = "../php-stdarr" }
 php-random = { path = "../php-random" }
 php-memlimit = { path = "../php-memlimit" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+php-ext-random = { path = "../php-ext-random" }
+
 [lints]
 workspace = true

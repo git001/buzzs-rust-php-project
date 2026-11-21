@@ -31,7 +31,7 @@ fn run(code: &str) -> String {
     let sink = Sink::default();
     let streams = php_ext_streams::Streams;
     let zlib = php_ext_zlib::Zlib;
-    let exts: [&dyn Extension; 2] = [&streams, &zlib];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &streams, &zlib];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
@@ -193,7 +193,11 @@ fn output_conflict_exception_keeps_the_original_handler() {
 fn output_compression_negotiates_server_values_and_makes_the_handler_immutable() {
     let sink = Sink::default();
     let zlib = php_ext_zlib::Zlib;
-    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&zlib]);
+    let mut vm = Vm::with_extensions(
+        &VmOptions::default(),
+        Box::new(sink.clone()),
+        &[&php_ext_stdstr::StdStr, &zlib],
+    );
     vm.run_script(
         br#"<?php
         $_SERVER['HTTP_ACCEPT_ENCODING'] = 'deflate,gzip';
@@ -218,7 +222,11 @@ fn output_compression_negotiates_server_values_and_makes_the_handler_immutable()
 fn same_value_compression_ini_writes_run_the_modify_handler() {
     let sink = Sink::default();
     let zlib = php_ext_zlib::Zlib;
-    let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &[&zlib]);
+    let mut vm = Vm::with_extensions(
+        &VmOptions::default(),
+        Box::new(sink.clone()),
+        &[&php_ext_stdstr::StdStr, &zlib],
+    );
     vm.run_script(
         br#"<?php
         ini_set('zlib.output_compression', '1');

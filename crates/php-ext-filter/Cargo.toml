@@ -14,5 +14,8 @@ php-pcre = { path = "../php-pcre" }
 php-support = { path = "../php-support" }
 php-memlimit = { path = "../php-memlimit" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

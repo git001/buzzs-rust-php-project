@@ -17,6 +17,7 @@ pub fn all() -> Vec<Box<dyn Extension>> {
         Box::new(php_ext_date::Date),
         Box::new(php_ext_json::Json),
         Box::new(php_ext_hash::Hash),
+        Box::new(php_ext_hash::StandardDigests),
         Box::new(php_ext_random::Random),
         Box::new(php_ext_filter::Filter),
         Box::new(php_ext_pcre::Pcre),

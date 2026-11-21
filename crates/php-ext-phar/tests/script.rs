@@ -45,7 +45,14 @@ fn run_as(code: &str, ini: &[(&str, &str)], sapi: Option<&str>) -> String {
     let streams = php_ext_streams::Streams;
     let spl = php_ext_spl::Spl;
     let phar = php_ext_phar::Phar;
-    let exts: [&dyn Extension; 3] = [&streams, &spl, &phar];
+    let exts: [&dyn Extension; 6] = [
+        &php_ext_stdstr::StdStr,
+        &php_ext_stdmisc::StdMisc,
+        &php_ext_hash::StandardDigests,
+        &streams,
+        &spl,
+        &phar,
+    ];
     let opts = VmOptions {
         ini: ini
             .iter()

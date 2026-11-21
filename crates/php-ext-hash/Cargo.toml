@@ -14,5 +14,8 @@ php-memlimit = { path = "../php-memlimit" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

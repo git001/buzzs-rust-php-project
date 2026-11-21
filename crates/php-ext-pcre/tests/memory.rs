@@ -46,7 +46,7 @@ var_dump($mem0 == $mem1);
     let sink = Sink::default();
     let opts = VmOptions::default();
     let ext = php_ext_pcre::Pcre;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     let status = vm.run_script(source, "bug81243.php");
     drop(vm);

@@ -15,5 +15,8 @@ php-ext-xml = { path = "../php-ext-xml" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-streams = { path = "../php-streams" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

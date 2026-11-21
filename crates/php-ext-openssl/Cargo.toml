@@ -19,5 +19,8 @@ openssl = "0.10"
 openssl-sys = "0.9"
 foreign-types = "0.3"
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

@@ -27,5 +27,8 @@ default = ["observer"]
 vm-hooks = ["observer"]
 observer = []
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

@@ -148,15 +148,20 @@ pub(crate) fn register_all(vm: &mut Vm) {
     var::register(vm);
     output::register(vm);
     string::register(vm);
-    array::register(vm);
     math::register(vm);
     info::register(vm);
 }
 
 /// Registers what the bare VM (`Vm::new`) has on top of [`register_all`]:
-/// ext/standard's `count()` and `sizeof()`, which the SAPIs get from the
-/// php-ext-stdarr extension instead.
+/// bindings of ext/standard's string, math, array and output functions
+/// (and `count()`/`sizeof()`) for scripts and tests without extensions.
+/// [`Vm::with_extensions`](crate::Vm::with_extensions) does not register
+/// them: there they come only from the extensions that provide them
+/// (php-ext-stdstr, php-ext-stdarr, php-ext-random, php-ext-session, …).
 pub(crate) fn register_bare(vm: &mut Vm) {
+    string::register_bare(vm);
+    math::register_bare(vm);
+    output::register_bare(vm);
     array::register_bare_count(vm);
     array::register_bare_array_fns(vm);
 }

@@ -33,7 +33,7 @@ fn run(code: &str) -> String {
 fn run_configured(code: &str, configure: impl FnOnce(&mut Vm)) -> String {
     let sink = Sink::default();
     let ext = php_ext_json::Json;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     configure(&mut vm);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");

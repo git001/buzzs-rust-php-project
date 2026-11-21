@@ -34,9 +34,15 @@ use php_runtime::{Value, ZArray, ZStr};
 use php_vm::ext::{Args, Extension, ModuleBuilder, Throw, VmResult};
 use php_vm::Vm;
 
-/// The `hash` extension (also providing `md5`/`sha1`/`crc32`).
+/// The `hash` extension.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Hash;
+
+/// ext/standard's digests (`md5.c`, `sha1.c`, `crc32.c`): `md5()`,
+/// `sha1()`, `crc32()` and the `_file` variants, over the same library as
+/// [`Hash`] but part of the `standard` module, as in PHP.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StandardDigests;
 
 /// Builds the throwable PHP raises for a library error inside `func`.
 pub(crate) fn throw_error(vm: &mut Vm, func: &str, e: &HashError) -> Throw {
@@ -486,6 +492,26 @@ fn sha1_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     file_digest(vm, a, "sha1")
 }
 
+impl Extension for StandardDigests {
+    fn name(&self) -> &'static str {
+        "standard"
+    }
+
+    fn register(&self, m: &mut ModuleBuilder<'_>) {
+        m.function_static("md5(string $string, bool $binary = false): string", md5)
+            .function_static(
+                "md5_file(string $filename, bool $binary = false): string|false",
+                md5_file,
+            )
+            .function_static("sha1(string $string, bool $binary = false): string", sha1)
+            .function_static(
+                "sha1_file(string $filename, bool $binary = false): string|false",
+                sha1_file,
+            )
+            .function_static("crc32(string $string): int", crc32);
+    }
+}
+
 impl Extension for Hash {
     fn name(&self) -> &'static str {
         "hash"
@@ -526,11 +552,6 @@ impl Extension for Hash {
             .function_static("mhash_count(): int", mhash_count)
             .deprecated("8.1", "")
             .function_static("mhash(int $algo, string $data, #[\\SensitiveParameter] ?string $key = null): string|false", mhash)
-            .deprecated("8.1", "")
-            .function_static("md5(string $string, bool $binary = false): string", md5)
-            .function_static("md5_file(string $filename, bool $binary = false): string|false", md5_file)
-            .function_static("sha1(string $string, bool $binary = false): string", sha1)
-            .function_static("sha1_file(string $filename, bool $binary = false): string|false", sha1_file)
-            .function_static("crc32(string $string): int", crc32);
+            .deprecated("8.1", "");
     }
 }

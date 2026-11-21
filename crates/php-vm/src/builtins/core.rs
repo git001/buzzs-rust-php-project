@@ -55,7 +55,9 @@ fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
         "func_num_args",
         "func_num_args() must be called from a function context",
     )?;
-    Ok(Value::Int(i64::try_from(vm.frames[idx].num_args()).unwrap_or(0)))
+    Ok(Value::Int(
+        i64::try_from(vm.frames[idx].num_args()).unwrap_or(0),
+    ))
 }
 
 fn func_get_arg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -1522,21 +1524,6 @@ fn getcwd(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     })
 }
 
-fn chdir(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let d = s(a, 0);
-    use std::os::unix::ffi::OsStrExt;
-    match std::env::set_current_dir(std::ffi::OsStr::from_bytes(d.as_bytes())) {
-        Ok(()) => Ok(Value::Bool(true)),
-        Err(e) => {
-            vm.docref(
-                2,
-                &format!("{} (errno {})", e.kind(), e.raw_os_error().unwrap_or(0)),
-            )?;
-            Ok(Value::Bool(false))
-        }
-    }
-}
-
 /// `ZEND_FUNCTION(exit)` (`Zend/zend_builtin_functions.c`). Since PHP 8.4
 /// `exit`/`die` compile to an ordinary call of `\exit()`, so the argument
 /// goes through `Z_PARAM_STR_OR_LONG` (null and float deprecations,
@@ -1592,12 +1579,6 @@ fn clone_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(r)
 }
 
-fn ret_zero(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(0))
-}
-fn ret_false(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(false))
-}
 fn ret_null(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
@@ -2291,220 +2272,6 @@ fn class_uses(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Array(ZArray::from_table(t)))
 }
 
-fn getenv(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    if !a.has(0) || a.at(0).is_null() {
-        let mut t = HashTable::new();
-        for (k, v) in std::env::vars_os() {
-            use std::os::unix::ffi::OsStrExt;
-            t.insert(ArrayKey::from_bytes(k.as_bytes()), sv(v.as_bytes()));
-        }
-        return Ok(Value::Array(ZArray::from_table(t)));
-    }
-    let n = s(a, 0);
-    use std::os::unix::ffi::OsStrExt;
-    match std::env::var_os(std::ffi::OsStr::from_bytes(n.as_bytes())) {
-        Some(v) => Ok(sv(v.as_bytes())),
-        None => Ok(Value::Bool(false)),
-    }
-}
-
-fn putenv(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let st = s(a, 0).to_string_lossy();
-    match st.split_once('=') {
-        // SAFETY-free: std::env::set_var is safe on this toolchain edition.
-        Some((k, v)) => std::env::set_var(k, v),
-        None => std::env::remove_var(st),
-    }
-    Ok(Value::Bool(true))
-}
-
-fn usleep(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    std::thread::sleep(std::time::Duration::from_micros(
-        u64::try_from(i(a, 0).max(0)).unwrap_or(0),
-    ));
-    Ok(Value::Null)
-}
-
-fn sleep(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    std::thread::sleep(std::time::Duration::from_secs(
-        u64::try_from(i(a, 0).max(0)).unwrap_or(0),
-    ));
-    Ok(Value::Int(0))
-}
-
-fn time(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    Ok(Value::Int(i64::try_from(t).unwrap_or(0)))
-}
-
-fn microtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    if b(a, 0) {
-        return Ok(Value::Float(d.as_secs_f64()));
-    }
-    Ok(sv(format!(
-        "{:.8} {}",
-        f64::from(d.subsec_micros()) / 1e6,
-        d.as_secs()
-    )))
-}
-
-fn hrtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let st = START.get_or_init(std::time::Instant::now);
-    let e = st.elapsed();
-    if b(a, 0) {
-        return Ok(Value::Int(
-            i64::try_from(e.as_nanos()).unwrap_or(0) + 1_000_000_000,
-        ));
-    }
-    Ok(Value::Array(ZArray::from_values([
-        Value::Int(i64::try_from(e.as_secs()).unwrap_or(0) + 1),
-        Value::Int(i64::from(e.subsec_nanos())),
-    ])))
-}
-
-fn version_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let v1 = s(a, 0);
-    let v2 = s(a, 1);
-    let c = php_version_compare(v1.as_bytes(), v2.as_bytes());
-    if a.has(2) && !a.at(2).is_null() {
-        let op = s(a, 2).to_string_lossy();
-        let r = match op.as_str() {
-            "<" | "lt" => c < 0,
-            "<=" | "le" => c <= 0,
-            ">" | "gt" => c > 0,
-            ">=" | "ge" => c >= 0,
-            "==" | "eq" => c == 0,
-            "!=" | "<>" | "ne" => c != 0,
-            _ => {
-                return Err(value_error(vm, a, 3, "must be a valid comparison operator"));
-            }
-        };
-        return Ok(Value::Bool(r));
-    }
-    Ok(Value::Int(i64::from(c)))
-}
-
-fn canon_version(v: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut prev: Option<u8> = None;
-    for &c in v {
-        let kind = |x: u8| {
-            if x.is_ascii_digit() {
-                1
-            } else if x == b'.' || x == b'-' || x == b'_' || x == b'+' {
-                2
-            } else {
-                3
-            }
-        };
-        if kind(c) == 2 {
-            if out.last() != Some(&b'.') {
-                out.push(b'.');
-            }
-        } else {
-            if let Some(p) = prev {
-                if kind(p) != 2 && kind(p) != kind(c) && out.last() != Some(&b'.') {
-                    out.push(b'.');
-                }
-            }
-            out.push(c);
-        }
-        prev = Some(c);
-    }
-    out
-}
-
-fn special_order(s: &[u8]) -> i32 {
-    let forms: [(&[u8], i32); 9] = [
-        (b"dev", 0),
-        (b"alpha", 1),
-        (b"a", 1),
-        (b"beta", 2),
-        (b"b", 2),
-        (b"RC", 3),
-        (b"rc", 3),
-        (b"#", 4),
-        (b"pl", 5),
-    ];
-    for (f, o) in forms {
-        if s.starts_with(f) {
-            return o;
-        }
-    }
-    -6
-}
-
-/// `php_version_compare`.
-pub(crate) fn php_version_compare(a: &[u8], b: &[u8]) -> i32 {
-    let ca = canon_version(a);
-    let cb = canon_version(b);
-    let pa: Vec<&[u8]> = ca.split(|&c| c == b'.').filter(|p| !p.is_empty()).collect();
-    let pb: Vec<&[u8]> = cb.split(|&c| c == b'.').filter(|p| !p.is_empty()).collect();
-    let n = pa.len().max(pb.len());
-    for idx in 0..n {
-        let x = pa.get(idx);
-        let y = pb.get(idx);
-        let r = match (x, y) {
-            (Some(x), Some(y)) => {
-                let xd = x[0].is_ascii_digit();
-                let yd = y[0].is_ascii_digit();
-                match (xd, yd) {
-                    (true, true) => {
-                        let xi: i64 = std::str::from_utf8(x)
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        let yi: i64 = std::str::from_utf8(y)
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-                        (xi > yi) as i32 - (xi < yi) as i32
-                    }
-                    (false, false) => {
-                        let (o1, o2) = (special_order(x), special_order(y));
-                        (o1 > o2) as i32 - (o1 < o2) as i32
-                    }
-                    (true, false) => {
-                        let o = special_order(y);
-                        (4 > o) as i32 - (4 < o) as i32
-                    }
-                    (false, true) => {
-                        let o = special_order(x);
-                        (o > 4) as i32 - (o < 4) as i32
-                    }
-                }
-            }
-            (Some(x), None) => {
-                if x[0].is_ascii_digit() {
-                    1
-                } else {
-                    let o = special_order(x);
-                    (o > 4) as i32 - (o < 4) as i32
-                }
-            }
-            (None, Some(y)) => {
-                if y[0].is_ascii_digit() {
-                    -1
-                } else {
-                    let o = special_order(y);
-                    (4 > o) as i32 - (4 < o) as i32
-                }
-            }
-            (None, None) => 0,
-        };
-        if r != 0 {
-            return r;
-        }
-    }
-    0
-}
-
 fn get_resource_type(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     match a.at(0) {
         Value::Resource(r) => Ok(sv(r
@@ -2567,7 +2334,6 @@ pub(crate) fn register(vm: &mut Vm) {
         class_alias,
     );
     reg(vm, "getcwd(): string|false", getcwd);
-    reg(vm, "chdir(string $directory): bool", chdir);
     reg(
         vm,
         "clone(object $object, array $withProperties = []): object",
@@ -2768,9 +2534,6 @@ pub(crate) fn register(vm: &mut Vm) {
         "unregister_tick_function(callable $callback): void",
         crate::interrupt::unregister_tick_function,
     );
-    reg(vm, "ignore_user_abort(?bool $enable = null): int", ret_zero);
-    reg(vm, "connection_status(): int", ret_zero);
-    reg(vm, "connection_aborted(): int", ret_zero);
     reg(vm, "php_sapi_name(): string|false", php_sapi_name);
     reg(
         vm,
@@ -2877,74 +2640,11 @@ pub(crate) fn register(vm: &mut Vm) {
     );
     reg(
         vm,
-        "getenv(?string $name = null, bool $local_only = false): array|string|false",
-        getenv,
-    );
-    reg(vm, "putenv(string $assignment): bool", putenv);
-    reg(vm, "usleep(int $microseconds): void", usleep);
-    reg(vm, "sleep(int $seconds): int", sleep);
-    reg(vm, "time(): int", time);
-    reg(
-        vm,
-        "microtime(bool $as_float = false): string|float",
-        microtime,
-    );
-    reg(
-        vm,
-        "hrtime(bool $as_number = false): array|int|float|false",
-        hrtime,
-    );
-    reg(
-        vm,
-        "version_compare(string $version1, string $version2, ?string $operator = null): int|bool",
-        version_compare,
-    );
-    reg(
-        vm,
         "get_resource_type($resource): string",
         get_resource_type,
     );
     reg(vm, "get_resource_id($resource): int", get_resource_id);
     reg(vm, "flush(): void", ret_null);
-    reg(
-        vm,
-        "headers_sent(&$filename = null, &$line = null): bool",
-        ret_false,
-    );
-    reg(
-        vm,
-        "header(string $header, bool $replace = true, int $response_code = 0): void",
-        ret_null,
-    );
-    reg(vm, "headers_list(): array", |_, _| {
-        Ok(Value::Array(ZArray::new()))
-    });
-    reg(vm, "php_ini_loaded_file(): string|false", ret_false);
-    reg(vm, "php_ini_scanned_files(): string|false", ret_false);
-    reg(
-        vm,
-        "setlocale(int $category, $locales, ...$rest): string|false",
-        |_, _| Ok(sv("C")),
-    );
-    reg(vm, "gethostname(): string|false", |_, _| {
-        Ok(sv("localhost"))
-    });
-    reg(vm, "getmypid(): int|false", |_, _| {
-        Ok(Value::Int(i64::from(std::process::id())))
-    });
-    reg(vm, "sys_get_temp_dir(): string", |_, _| {
-        Ok(sv(std::env::temp_dir().to_string_lossy().into_owned()))
-    });
-    reg(vm, "php_uname(string $mode = \"a\"): string", |_, a| {
-        let m = s(a, 0);
-        Ok(sv(match m.as_bytes() {
-            b"s" => "Linux",
-            b"n" => "localhost",
-            b"r" => "6.0.0",
-            b"m" => "x86_64",
-            _ => "Linux localhost 6.0.0 #1 SMP x86_64",
-        }))
-    });
 
     for (n, v) in [
         ("E_ERROR", 1),

@@ -36,7 +36,7 @@ fn run_with(ini: &[(&str, &str)], code: &str) -> String {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let sink = Sink::default();
     let ext = php_ext_stdstr::StdStr;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_random::Random, &ext];
     let opts = VmOptions {
         ini: ini
             .iter()
@@ -302,7 +302,7 @@ fn str_repeat_one_preserves_string_storage() {
     use php_runtime::{Value, ZStr};
 
     let ext = php_ext_stdstr::StdStr;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_random::Random, &ext];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(std::io::sink()), &exts);
     for input in [
         ZStr::new(b"binary\0\xff".to_vec()),

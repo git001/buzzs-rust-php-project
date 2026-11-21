@@ -30,7 +30,7 @@ impl Write for Sink {
 
 fn run(code: &str) -> String {
     let ext = php_ext_stdmisc::StdMisc;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     run_with(&VmOptions::default(), &exts, code)
 }
 
@@ -172,7 +172,7 @@ fn source_return_buffers_obey_the_output_handler_lock() {
             ini: vec![("fatal_error_backtraces".to_string(), "0".to_string())],
         };
         let ext = php_ext_stdmisc::StdMisc;
-        let exts: [&dyn Extension; 1] = [&ext];
+        let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
         let out = run_with(
             &opts,
             &exts,
@@ -326,7 +326,7 @@ fn scanner_reads_wrappers_and_include_path() {
     };
     let out = run_with(
         &opts,
-        &[&streams, &misc],
+        &[&php_ext_stdstr::StdStr, &streams, &misc],
         r#"
         class SourceWrapper {
             public $context;
@@ -368,7 +368,7 @@ fn scanner_reads_wrappers_and_include_path() {
     );
     let out = run_with(
         &VmOptions::default(),
-        &[&streams, &misc],
+        &[&php_ext_stdstr::StdStr, &streams, &misc],
         r#"
         $warnings = [];
         set_error_handler(function($n, $s) use (&$warnings) { $warnings[] = $s; });
@@ -385,7 +385,7 @@ fn scanner_distinguishes_read_failure_from_empty_source() {
     let streams = php_ext_streams::Streams;
     let out = run_with(
         &VmOptions::default(),
-        &[&streams, &misc],
+        &[&php_ext_stdstr::StdStr, &streams, &misc],
         r#"
         class ReadSource {
             public $context;
@@ -498,7 +498,7 @@ fn ini_get_all_sorts_the_shared_reflection_table() {
         let sink = Sink::default();
         let ext = php_ext_stdmisc::StdMisc;
         let fixture = IniFixture;
-        let exts: [&dyn Extension; 2] = [&ext, &fixture];
+        let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &ext, &fixture];
         let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
         let code = format!(
             "<?php
@@ -608,7 +608,7 @@ fn http_build_query_honours_the_stack_limit() {
 
 fn http_build_query_stack_limit_cases() {
     let ext = php_ext_stdmisc::StdMisc;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let code = r#"$a = null;
         for ($i = 0; $i < 3000; $i++) { $a = [$i => $a]; }
         try { http_build_query($a, 'p'); } catch (Throwable $e) { echo $e::class, ": ", $e->getMessage(), "|"; }
@@ -679,7 +679,7 @@ fn fake_parse_body(vm: &mut Vm, options: &ParseBodyOptions) -> VmResult<(ZArray,
 fn request_parse_body_runs_the_sapi_parse() {
     let sink = Sink::default();
     let ext = php_ext_stdmisc::StdMisc;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.parse_body_hook = Some(fake_parse_body);
     vm.run_script(
@@ -730,7 +730,7 @@ fn assert_startup_deprecations_and_ini_callback() {
         .collect(),
     };
     let ext = php_ext_stdmisc::StdMisc;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let out = run_with(
         &opts,
         &exts,
@@ -787,7 +787,7 @@ fn get_browser_matches_browscap_sections() {
             .collect(),
     };
     let ext = php_ext_stdmisc::StdMisc;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let out = run_with(
         &opts,
         &exts,

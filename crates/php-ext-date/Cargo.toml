@@ -11,5 +11,8 @@ php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
 php-date = { path = "../php-date" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

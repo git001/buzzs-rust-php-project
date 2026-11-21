@@ -31,7 +31,7 @@ fn run(code: &str) -> String {
 fn run_with(ini: &[(&str, &str)], code: &str) -> String {
     let sink = Sink::default();
     let ext = StdArray;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &php_ext_random::Random, &ext];
     let opts = VmOptions {
         ini: ini
             .iter()

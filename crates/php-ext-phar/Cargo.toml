@@ -16,5 +16,10 @@ php-spl = { path = "../php-spl" }
 php-ext-spl = { path = "../php-ext-spl" }
 php-openssl = { path = "../php-openssl" }
 
+[dev-dependencies]
+php-ext-hash = { path = "../php-ext-hash" }
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+php-ext-stdmisc = { path = "../php-ext-stdmisc" }
+
 [lints]
 workspace = true

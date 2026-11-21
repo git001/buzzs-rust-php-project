@@ -918,30 +918,6 @@ fn strnatcasecmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     )))
 }
 
-fn strcmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(compare::strcmp(
-        a.zstr(0).as_bytes(),
-        a.zstr(1).as_bytes(),
-    )))
-}
-
-fn strcasecmp(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(compare::strcasecmp(
-        a.zstr(0).as_bytes(),
-        a.zstr(1).as_bytes(),
-    )))
-}
-
-fn strncmp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = compare::strncmp(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
-    Ok(Value::Int(check(vm, r)?))
-}
-
-fn strncasecmp(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    let r = compare::strncasecmp(a.zstr(0).as_bytes(), a.zstr(1).as_bytes(), a.int(2));
-    Ok(Value::Int(check(vm, r)?))
-}
-
 fn substr_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let r = search::substr_count(
         a.zstr(0).as_bytes(),
@@ -1166,10 +1142,6 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("count_chars(string $string, int $mode = 0): array|string", count_chars)
         .function_static("strnatcmp(string $string1, string $string2): int", strnatcmp)
         .function_static("strnatcasecmp(string $string1, string $string2): int", strnatcasecmp)
-        .function_static("strcmp(string $string1, string $string2): int", strcmp)
-        .function_static("strcasecmp(string $string1, string $string2): int", strcasecmp)
-        .function_static("strncmp(string $string1, string $string2, int $length): int", strncmp)
-        .function_static("strncasecmp(string $string1, string $string2, int $length): int", strncasecmp)
         .function_static("substr_count(string $haystack, string $needle, int $offset = 0, ?int $length = null): int", substr_count)
         .function_static("str_pad(string $string, int $length, string $pad_string = \" \", int $pad_type = STR_PAD_RIGHT): string", str_pad)
         .function_static("str_rot13(string $string): string", str_rot13)

@@ -18,5 +18,8 @@ php-ext-xsl = { path = "../php-ext-xsl" }
 php-xsl = { path = "../php-xsl" }
 php-memlimit = { path = "../php-memlimit" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

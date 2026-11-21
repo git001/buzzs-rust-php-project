@@ -482,6 +482,7 @@ name = "php-ext-date"
 version = "0.1.0"
 dependencies = [
  "php-date",
+ "php-ext-stdstr",
  "php-runtime",
  "php-support",
  "php-vm",
@@ -492,6 +493,7 @@ name = "php-ext-dom"
 version = "0.1.0"
 dependencies = [
  "php-dom",
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-ext-xml",
  "php-ext-xsl",
@@ -533,6 +535,7 @@ dependencies = [
 name = "php-ext-filter"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-filter",
  "php-memlimit",
  "php-pcre",
@@ -591,6 +594,7 @@ dependencies = [
 name = "php-ext-hash"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-hash",
  "php-memlimit",
@@ -625,6 +629,7 @@ dependencies = [
 name = "php-ext-json"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-json",
  "php-runtime",
  "php-vm",
@@ -677,6 +682,7 @@ dependencies = [
  "libc",
  "openssl",
  "openssl-sys",
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-openssl",
  "php-runtime",
@@ -700,6 +706,7 @@ dependencies = [
 name = "php-ext-pcre"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-memlimit",
  "php-pcre",
  "php-runtime",
@@ -711,6 +718,7 @@ dependencies = [
 name = "php-ext-pdo"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-pdo",
  "php-runtime",
@@ -724,7 +732,10 @@ dependencies = [
 name = "php-ext-phar"
 version = "0.1.0"
 dependencies = [
+ "php-ext-hash",
  "php-ext-spl",
+ "php-ext-stdmisc",
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-openssl",
  "php-phar",
@@ -750,6 +761,7 @@ dependencies = [
 name = "php-ext-random"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-random",
  "php-runtime",
  "php-vm",
@@ -759,6 +771,7 @@ dependencies = [
 name = "php-ext-session"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-runtime",
  "php-session",
@@ -843,6 +856,8 @@ dependencies = [
 name = "php-ext-stdarr"
 version = "0.1.0"
 dependencies = [
+ "php-ext-random",
+ "php-ext-stdstr",
  "php-memlimit",
  "php-random",
  "php-runtime",
@@ -854,6 +869,7 @@ dependencies = [
 name = "php-ext-stdmisc"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-filter",
  "php-lexer",
@@ -869,6 +885,7 @@ dependencies = [
 name = "php-ext-stdstr"
 version = "0.1.0"
 dependencies = [
+ "php-ext-random",
  "php-memlimit",
  "php-runtime",
  "php-stdarr",
@@ -951,6 +968,7 @@ dependencies = [
 name = "php-ext-xsl"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-ext-xml",
  "php-libxml",
@@ -965,6 +983,7 @@ name = "php-ext-zendtest"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-ext-uri",
  "php-memlimit",
@@ -996,6 +1015,7 @@ name = "php-ext-zlib"
 version = "0.1.0"
 dependencies = [
  "php-bz2",
+ "php-ext-stdstr",
  "php-ext-streams",
  "php-runtime",
  "php-streams",

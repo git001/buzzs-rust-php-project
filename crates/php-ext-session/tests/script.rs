@@ -42,7 +42,7 @@ fn save_dir(name: &str) -> PathBuf {
 fn run_with(code: &str, ini: &[(&str, &str)]) -> String {
     let sink = Sink::default();
     let ext = php_ext_session::Session;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let opts = VmOptions {
         ini: ini
             .iter()
@@ -295,7 +295,7 @@ fn upload_progress_is_stored_before_request_startup() {
     .collect();
     let sink = Sink::default();
     let ext = php_ext_session::Session;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let opts = VmOptions { ini };
     let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), &exts);
     // The SAPI has parsed the cookies (php_session_rfc1867_early_find_sid).
@@ -555,7 +555,7 @@ fn session_headers_reach_the_sapi() {
     let dir = save_dir("sapi-headers");
     let sink = Sink::default();
     let ext = php_ext_session::Session;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let opts = VmOptions {
         ini: vec![(
             "session.save_path".to_string(),

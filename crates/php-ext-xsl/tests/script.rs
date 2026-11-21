@@ -123,7 +123,7 @@ fn run(code: &str) -> String {
     let sink = Sink::default();
     let xsl = php_ext_xsl::Xsl;
     let test = TestXmlExt;
-    let exts: [&dyn Extension; 2] = [&test, &xsl];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &test, &xsl];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);

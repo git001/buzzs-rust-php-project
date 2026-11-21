@@ -414,20 +414,8 @@ fn restricted_method(call: &PendingCall, name: &ZStr) -> bool {
     })
 }
 
-/// Registers the output functions.
+/// Registers the output-buffering functions.
 pub(crate) fn register(vm: &mut Vm) {
-    reg(
-        vm,
-        "sprintf(string $format, mixed ...$values): string",
-        sprintf,
-    );
-    reg(vm, "printf(string $format, mixed ...$values): int", printf);
-    reg(
-        vm,
-        "vsprintf(string $format, array $values): string",
-        vsprintf,
-    );
-    reg(vm, "vprintf(string $format, array $values): int", vprintf);
     reg(vm, "ob_start($callback = null, int $chunk_size = 0, int $flags = PHP_OUTPUT_HANDLER_STDFLAGS): bool", ob_start);
     reg(vm, "ob_get_clean(): string|false", ob_get_clean);
     reg(vm, "ob_get_flush(): string|false", ob_get_flush);
@@ -449,6 +437,23 @@ pub(crate) fn register(vm: &mut Vm) {
         "ob_get_status(bool $full_status = false): array",
         ob_get_status,
     );
+}
+
+/// Registers the bare VM's formatted output and URL-rewriter functions
+/// (`Vm::new`): the SAPIs get them from php-ext-stdstr and php-ext-session.
+pub(crate) fn register_bare(vm: &mut Vm) {
+    reg(
+        vm,
+        "sprintf(string $format, mixed ...$values): string",
+        sprintf,
+    );
+    reg(vm, "printf(string $format, mixed ...$values): int", printf);
+    reg(
+        vm,
+        "vsprintf(string $format, array $values): string",
+        vsprintf,
+    );
+    reg(vm, "vprintf(string $format, array $values): int", vprintf);
     reg(
         vm,
         "output_add_rewrite_var(string $name, string $value): bool",

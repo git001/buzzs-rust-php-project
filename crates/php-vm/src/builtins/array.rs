@@ -406,20 +406,6 @@ pub(crate) fn register_bare_array_fns(vm: &mut Vm) {
     crate::reflection::record_module(vm, "standard", false);
 }
 
-/// Registers the array functions for the bare VM.
-pub(crate) fn register(vm: &mut Vm) {
-    super::reg(
-        vm,
-        "in_array(mixed $needle, array $haystack, bool $strict = false): bool",
-        in_array,
-    );
-    super::reg(
-        vm,
-        "array_slice(array $array, int $offset, ?int $length = null, bool $preserve_keys = false): array",
-        array_slice,
-    );
-}
-
 fn count(vm: &mut Vm, a: &mut crate::func::Args) -> crate::vm::VmResult<Value> {
     let v = a.at(0);
     let mode = a.int(1);

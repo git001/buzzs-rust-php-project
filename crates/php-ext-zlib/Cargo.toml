@@ -14,5 +14,8 @@ php-ext-streams = { path = "../php-ext-streams" }
 php-zlib = { path = "../php-zlib" }
 php-bz2 = { path = "../php-bz2" }
 
+[dev-dependencies]
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+
 [lints]
 workspace = true

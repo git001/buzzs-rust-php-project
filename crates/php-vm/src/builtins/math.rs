@@ -241,8 +241,18 @@ fn random_bytes(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-/// Registers the math functions.
+/// Registers the math functions only the VM provides.
 pub(crate) fn register(vm: &mut Vm) {
+    reg(
+        vm,
+        "pow(mixed $num, mixed $exponent): object|int|float",
+        pow,
+    );
+}
+
+/// Registers the bare VM's math and random functions and constants
+/// (`Vm::new`): the SAPIs get them from php-ext-stdstr and php-ext-random.
+pub(crate) fn register_bare(vm: &mut Vm) {
     reg(vm, "abs(int|float $num): int|float", abs);
     reg(vm, "floor(int|float $num): float", floor);
     reg(vm, "ceil(int|float $num): float", ceil);
@@ -276,11 +286,6 @@ pub(crate) fn register(vm: &mut Vm) {
     reg(vm, "fmod(float $num1, float $num2): float", fmod);
     reg(vm, "fdiv(float $num1, float $num2): float", fdiv);
     reg(vm, "intdiv(int $num1, int $num2): int", intdiv);
-    reg(
-        vm,
-        "pow(mixed $num, mixed $exponent): object|int|float",
-        pow,
-    );
     reg(vm, "hypot(float $x, float $y): float", hypot);
     reg(vm, "is_nan(float $num): bool", is_nan);
     reg(vm, "is_finite(float $num): bool", is_finite);

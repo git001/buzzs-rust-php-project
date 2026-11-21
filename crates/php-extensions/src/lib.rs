@@ -19,6 +19,7 @@ pub const ALL: &[&dyn Extension] = &[
     &php_ext_ctype::Ctype,
     &php_ext_json::Json,
     &php_ext_hash::Hash,
+    &php_ext_hash::StandardDigests,
     &php_ext_random::Random,
     &php_ext_filter::Filter,
     &php_ext_pcre::Pcre,

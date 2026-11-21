@@ -31,7 +31,7 @@ impl Write for Sink {
 fn run(code: &str) -> String {
     let sink = Sink::default();
     let ext = php_ext_date::Date;
-    let exts: [&dyn Extension; 1] = [&ext];
+    let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
     let opts = VmOptions {
         ini: vec![("date.timezone".into(), "UTC".into())],
     };

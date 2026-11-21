@@ -30,7 +30,7 @@ fn run(code: &str) -> String {
     let sink = Sink::default();
     let xml = php_ext_xml::Xml;
     let dom = php_ext_dom::Dom;
-    let exts: [&dyn Extension; 2] = [&xml, &dom];
+    let exts: [&dyn Extension; 3] = [&php_ext_stdstr::StdStr, &xml, &dom];
     let mut vm = Vm::with_extensions(&VmOptions::default(), Box::new(sink.clone()), &exts);
     vm.run_script(format!("<?php {code}").as_bytes(), "test.php");
     drop(vm);
