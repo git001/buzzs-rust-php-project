@@ -8,4 +8,4 @@ pub mod duration;
 pub mod timers;
 
 pub use duration::{parse_duration, DurationError, DurationSpec, Unit};
-pub use timers::{Expired, Timer, Timers};
+pub use timers::{Expired, ForkGuard, Timer, Timers};

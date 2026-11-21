@@ -587,10 +587,17 @@ fn run_php_forked(
 ) -> Outcome {
     let _ = std::io::stderr().flush();
     let server_pid = crate::sapi::server_pid();
+    let timers = php_timer::Timers::global().prepare_fork();
     // SAFETY: the server thread is the only one doing work; the child only
     // continues on this thread with its copy of the address space and ends
     // with `_exit`.
     let pid = unsafe { libc::fork() };
+    if pid == 0 {
+        // No timer thread here: the request's max_execution_time starts one.
+        timers.child();
+    } else {
+        drop(timers);
+    }
     if pid < 0 {
         return run_php(c, Prepared::spawn(config), is_static);
     }
@@ -666,9 +673,15 @@ pub fn startup_workers() -> Vec<libc::pid_t> {
     let master = unsafe { libc::getpid() };
     let mut pids = Vec::new();
     for _ in 0..n {
+        let timers = php_timer::Timers::global().prepare_fork();
         // SAFETY: the process is single-threaded at this point (no request
         // thread has been started), so the child may continue normally.
         let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            timers.child();
+        } else {
+            drop(timers);
+        }
         if pid < 0 {
             break;
         }

@@ -106,11 +106,37 @@ fn sigprocmask_and_sigtimedwait() {
 /// Signals are process-wide and a process-directed signal reaches any
 /// thread not blocking it, so the scenarios run sequentially on the main
 /// thread (this test target has `harness = false`), like the PHP CLI.
+/// `pcntl_fork()` after the parent's timer thread started: the child's
+/// own `set_time_limit(1)` must end its loop (php-src: `php_child_init()`
+/// creates the child's timer). Before the fork guard, the child's arms
+/// went to a set whose thread had stayed in the parent: the loop ran on.
+/// Times in `posix_times()` ticks (`CLK_TCK` = 100 on Linux).
+fn time_limit_in_a_forked_child() {
+    let me = std::process::id();
+    let out = run(r#"set_time_limit(5);
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            set_time_limit(1);
+            $t = posix_times()['ticks'];
+            while (posix_times()['ticks'] - $t < 4 * 100) {}
+            exit(0);
+        }
+        $t = posix_times()['ticks'];
+        pcntl_waitpid($pid, $status);
+        echo posix_times()['ticks'] - $t < 2.5 * 100 ? "stopped" : "ran on", "\n";"#);
+    if std::process::id() != me {
+        // The child: its script ended; the harness is the parent's.
+        std::process::exit(0);
+    }
+    assert_eq!(out, "stopped\n");
+}
+
 fn main() {
     status_macros();
     handlers_are_dispatched_with_siginfo();
     argument_errors();
     sigprocmask_and_sigtimedwait();
     async_signals_and_ticks();
+    time_limit_in_a_forked_child();
     println!("pcntl script scenarios: ok");
 }

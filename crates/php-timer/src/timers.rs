@@ -47,6 +47,8 @@ struct State {
     next_id: u64,
     /// Whether the timer thread runs (started by the first deadline).
     running: bool,
+    /// Whether an action runs (on the timer thread, outside the lock).
+    acting: bool,
 }
 
 impl State {
@@ -82,6 +84,8 @@ impl State {
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    /// Signalled when an action has ended ([`Timers::prepare_fork`]).
+    acted: Condvar,
 }
 
 impl Shared {
@@ -128,6 +132,7 @@ impl Timers {
             shared: Arc::new(Shared {
                 state: Mutex::new(State::default()),
                 wake: Condvar::new(),
+                acted: Condvar::new(),
             }),
         }
     }
@@ -158,6 +163,30 @@ impl Timers {
         }
     }
 
+    /// Holds the set still for a `fork()`: waits until no action runs and
+    /// keeps the lock, so the child gets the set in a consistent state
+    /// (and not a lock the timer thread held). Fork while holding the
+    /// guard, then call [`ForkGuard::child`] in the child; in the parent,
+    /// drop it.
+    ///
+    /// The timer thread does not survive the fork. In the child, like the
+    /// kernel's timers (`fork(2)`: `timer_create`, `setitimer` and `alarm`
+    /// are not inherited), no deadline is pending; the timers stay and
+    /// work again once armed, with a new thread. php-src: `pcntl_fork()`
+    /// → `php_child_init()` → `zend_max_execution_timer_init()`.
+    #[must_use = "fork while holding the guard"]
+    pub fn prepare_fork(&self) -> ForkGuard<'_> {
+        let mut s = self.shared.lock();
+        while s.acting {
+            s = self
+                .shared
+                .acted
+                .wait(s)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        ForkGuard { state: s }
+    }
+
     /// The timers that exist (armed or not), for tests and status pages.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -168,6 +197,32 @@ impl Timers {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// The set held still for a `fork()` ([`Timers::prepare_fork`]).
+pub struct ForkGuard<'a> {
+    state: MutexGuard<'a, State>,
+}
+
+impl std::fmt::Debug for ForkGuard<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForkGuard").finish_non_exhaustive()
+    }
+}
+
+impl ForkGuard<'_> {
+    /// In the child of the fork: the set has no thread and no pending
+    /// deadline; the next arm starts a thread.
+    pub fn child(mut self) {
+        let s = &mut *self.state;
+        s.running = false;
+        s.queue.clear();
+        for slot in s.slots.values_mut() {
+            if slot.deadline.take().is_some() {
+                slot.generation += 1;
+            }
+        }
     }
 }
 
@@ -321,9 +376,23 @@ fn serve(shared: &Arc<Shared>) {
         };
         slot.deadline = None;
         let action = Arc::clone(&slot.action);
+        s.acting = true;
         drop(s);
-        action(&Expired { shared, id });
+        {
+            let _acting = Acting(shared);
+            action(&Expired { shared, id });
+        }
         s = shared.lock();
+    }
+}
+
+/// Clears [`State::acting`] when an action has ended, even by a panic.
+struct Acting<'a>(&'a Shared);
+
+impl Drop for Acting<'_> {
+    fn drop(&mut self) {
+        self.0.lock().acting = false;
+        self.0.acted.notify_all();
     }
 }
 
@@ -434,6 +503,50 @@ mod tests {
         settle();
         assert_eq!(n.load(Ordering::SeqCst), 3);
         assert_eq!(t.deadline(), None);
+    }
+
+    /// What the child of a fork sees ([`ForkGuard::child`], here without
+    /// a fork: the thread is still there, but the set no longer counts on
+    /// it): no pending deadline, and an arm starts a thread that serves it.
+    #[test]
+    fn a_forked_child_starts_without_deadlines_and_arms_again() {
+        let timers = Timers::new();
+        let (pending, n_pending) = counting(&timers);
+        pending.arm(Duration::from_millis(30));
+        timers.prepare_fork().child();
+        assert_eq!(pending.deadline(), None);
+        settle();
+        assert_eq!(
+            n_pending.load(Ordering::SeqCst),
+            0,
+            "inherited deadline ran"
+        );
+        let (later, n_later) = counting(&timers);
+        later.arm(Duration::from_millis(10));
+        settle();
+        assert_eq!(n_later.load(Ordering::SeqCst), 1);
+    }
+
+    /// The guard is only handed out between actions, so a child never
+    /// inherits a half-done one (or a lock it held).
+    #[test]
+    fn prepare_fork_waits_for_a_running_action() {
+        let timers = Timers::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        let done = Arc::new(AtomicUsize::new(0));
+        let d = Arc::clone(&done);
+        let t = timers.timer(move |_| {
+            let _ = started_tx.send(());
+            std::thread::sleep(Duration::from_millis(150));
+            d.store(1, Ordering::SeqCst);
+        });
+        t.arm(Duration::ZERO);
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("action started");
+        let guard = timers.prepare_fork();
+        assert_eq!(done.load(Ordering::SeqCst), 1, "guard during the action");
+        drop(guard);
     }
 
     #[test]

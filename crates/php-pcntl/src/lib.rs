@@ -419,7 +419,16 @@ impl<C> Pcntl<C> {
     /// In a multi-threaded host only async-signal-safe work is allowed in
     /// the child until it execs or exits.
     pub fn fork(&mut self) -> PcntlResult<i64> {
-        match sys::fork() {
+        // The timer thread (max_execution_time) does not survive the fork:
+        // the child starts with no pending deadline and a new thread on
+        // the next arm (`php_child_init()` → `zend_max_execution_timer_init()`).
+        let timers = php_timer::Timers::global().prepare_fork();
+        let forked = sys::fork();
+        match forked {
+            Ok(0) => timers.child(),
+            _ => drop(timers),
+        }
+        match forked {
             Ok(pid) => Ok(pid.into()),
             Err(e) => {
                 self.fail(e);
