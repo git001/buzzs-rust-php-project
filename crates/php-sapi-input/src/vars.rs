@@ -16,7 +16,6 @@ use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
 use php_vm::ext::{ParseBodyOptions, Rfc1867Event};
 use php_vm::{Throw, Vm, VmResult};
-use std::path::PathBuf;
 
 /// What a SAPI adds to the request variables (`sapi_module_struct`).
 pub trait SapiVariables: SapiInput {
@@ -180,6 +179,11 @@ fn warn(vm: &mut Vm, phase: Phase, message: &str, docref: bool) -> VmResult<()> 
     }
 }
 
+/// A `php_error_docref()` notice of the body parse.
+fn notice(vm: &mut Vm, phase: Phase, message: &str) -> VmResult<()> {
+    vm.raise(8, &format!("{}{message}", phase.docref_prefix()))
+}
+
 /// Records `t` as `zend_throw_exception_internal()` does: an exception
 /// thrown while another is pending gets that one as its `previous`.
 /// `exit()` and fatal errors end the parse at once.
@@ -206,23 +210,12 @@ fn pend_err(vm: &mut Vm, pending: &mut Option<Throw>, r: VmResult<()>) -> VmResu
     }
 }
 
-/// `php_get_temporary_directory()` with the request's INI settings
-/// (`sys_temp_dir`, else `TMPDIR`, else `/tmp`).
-fn temp_dir(vm: &mut Vm) -> Vec<u8> {
-    php_ext_streams::bridge::enter(vm, php_streams::temp::temp_dir)
-}
-
-/// The directories tried for uploaded files (`php_open_temporary_fd_ex()`):
-/// `upload_tmp_dir`, then the system's temporary directory.
-pub fn tmp_dirs(vm: &mut Vm) -> Vec<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let upload_dir = ini_bytes(vm, "upload_tmp_dir");
-    let system = temp_dir(vm);
-    [upload_dir, system]
-        .iter()
-        .filter(|d| !d.is_empty())
-        .map(|d| PathBuf::from(std::ffi::OsStr::from_bytes(d)))
-        .collect()
+/// `PG(upload_tmp_dir)`, with the streams layer's copy of the INI
+/// settings brought up to date (`sys_temp_dir` and `open_basedir` decide
+/// where a temporary file may go when it is not usable).
+pub fn upload_tmp_dir(vm: &Vm) -> Vec<u8> {
+    php_ext_streams::bridge::sync_settings(vm);
+    ini_bytes(vm, "upload_tmp_dir")
 }
 
 /// `php_build_argv()` for a web request: the query string split on `+`.
@@ -312,39 +305,26 @@ fn read_standard_form_data<S: SapiInput + ?Sized>(
     Ok(())
 }
 
-/// Creates and removes a `php*` file in `dir` (`php_do_open_temporary_file()`).
-fn temp_file_possible(dir: &[u8]) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let dir = PathBuf::from(std::ffi::OsStr::from_bytes(dir));
-    match rfc1867::open_temporary(std::slice::from_ref(&dir)) {
-        Some((file, path)) => {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-            true
-        }
-        None => false,
-    }
-}
-
 /// Whether the request body buffer can move to a temporary file
 /// (`php_stream_fopen_temporary_file(PG(upload_tmp_dir), "php")` in
 /// `php_stream_temp_write()`): `upload_tmp_dir`, else (with a notice when
-/// it was set) the system's temporary directory. The body itself stays in
-/// memory.
+/// it was set) the system's temporary directory. The test file is removed
+/// again; the body itself stays in memory.
 fn body_spill_possible(vm: &mut Vm, phase: Phase) -> VmResult<bool> {
-    let upload_dir = ini_bytes(vm, "upload_tmp_dir");
-    if !upload_dir.is_empty() {
-        if temp_file_possible(&upload_dir) {
-            return Ok(true);
-        }
-        // php_open_temporary_fd_ex(): "Use default temporary directory."
-        let msg = format!(
-            "{}file created in the system's temporary directory",
-            phase.docref_prefix()
-        );
-        vm.raise(8, &msg)?;
+    use std::os::unix::ffi::OsStrExt;
+    let dir = upload_tmp_dir(vm);
+    let mut fell_back = false;
+    let file =
+        php_streams::temp::create_temporary(Some(&dir), Some(b"php"), 0, &mut || fell_back = true);
+    if fell_back {
+        notice(vm, phase, php_streams::temp::FALLBACK_NOTICE)?;
     }
-    Ok(temp_file_possible(&temp_dir(vm)))
+    let Some((file, path)) = file else {
+        return Ok(false);
+    };
+    drop(file);
+    let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&path));
+    Ok(true)
 }
 
 /// `php_std_post_handler()`: the `application/x-www-form-urlencoded`
@@ -406,7 +386,7 @@ fn handle_multipart<S: SapiInput + ?Sized>(
         max_input_vars: limits.max_input_vars,
         upload_max_filesize: limits.upload_max_filesize,
         file_uploads: vm.ini_bool("file_uploads"),
-        tmp_dirs: tmp_dirs(vm),
+        upload_tmp_dir: upload_tmp_dir(vm),
         // SG(read_post_bytes): what reads before this parse took.
         read_post_bytes: s.body().read_post_bytes(),
     };
@@ -444,7 +424,9 @@ fn handle_multipart<S: SapiInput + ?Sized>(
 
     let mut pending: Option<Throw> = None;
     for w in &outcome.warnings {
-        let reported = if phase == Phase::ParseBody && w.docref {
+        let reported = if w.notice {
+            notice(vm, phase, &w.message)
+        } else if phase == Phase::ParseBody && w.docref {
             Err(vm.throw("RequestParseBodyException", &w.message))
         } else {
             warn(vm, phase, &w.message, w.docref)
@@ -846,13 +828,15 @@ mod tests {
         assert_eq!(Phase::ParseBody.docref_prefix(), "request_parse_body(): ");
     }
 
-    /// sapi/cgi/tests/bug69487.phpt: the body buffer cannot spill into a
-    /// directory that does not exist.
+    /// The body buffer can spill into `upload_tmp_dir`, else into the
+    /// system temporary directory; bug69487.phpt (sapi/cgi) covers the case
+    /// where neither works.
     #[test]
     fn temporary_files_for_the_body_buffer() {
-        use std::os::unix::ffi::OsStrExt;
-        let dir = std::env::temp_dir();
-        assert!(temp_file_possible(dir.as_os_str().as_bytes()));
-        assert!(!temp_file_possible(b"/not-supposed-to-exist"));
+        let tmp = std::env::temp_dir();
+        let mut vm = vm_with(&[("upload_tmp_dir", &tmp.to_string_lossy())]);
+        assert!(body_spill_possible(&mut vm, Phase::Startup).unwrap());
+        let mut vm = vm_with(&[("upload_tmp_dir", "/not-supposed-to-exist")]);
+        assert!(body_spill_possible(&mut vm, Phase::Startup).unwrap());
     }
 }

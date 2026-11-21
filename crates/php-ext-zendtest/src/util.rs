@@ -11,6 +11,8 @@ use php_vm::Vm;
 pub(crate) const E_ERROR: i64 = 1;
 /// `E_WARNING`.
 pub(crate) const E_WARNING: i64 = 2;
+/// `E_NOTICE`.
+pub(crate) const E_NOTICE: i64 = 8;
 
 /// Whether the running native function was called from code compiled
 /// with `declare(strict_types=1)` (`ZEND_ARG_USES_STRICT_TYPES()`): calls

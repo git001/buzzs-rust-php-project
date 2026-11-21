@@ -226,8 +226,11 @@ pub fn deferring_flush<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// Copies the INI settings consulted by the streams layer.
-fn sync_settings(vm: &Vm) {
+/// Copies the INI settings consulted by the streams layer (`sys_temp_dir`,
+/// `upload_tmp_dir`, `open_basedir`, ...) into the library: [`enter`] does
+/// it for every native function; code that calls the library outside one
+/// (the SAPIs at request startup) calls it first.
+pub fn sync_settings(vm: &Vm) {
     // Re-reading 13 directives costs thousands of instructions per stream
     // call; the registry generation tells whether any value can have
     // changed. The cached settings are still written back on every call,

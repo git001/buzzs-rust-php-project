@@ -446,6 +446,8 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         }
     }
 
+    // The copy of standard input made for `-s`/`-w`, removed at the end.
+    let mut stdin_copy: Option<Vec<u8>> = None;
     match cl.behavior {
         Behavior::Lint => {
             // `goto do_repeat`: the arguments after the first file are
@@ -477,10 +479,10 @@ fn run(argv: &[Vec<u8>]) -> i32 {
             // Standard input when no file is named ("Standard input code").
             let path = match info.path_translated.clone() {
                 Some(p) => p,
-                None => match stdin_to_temp() {
-                    Some(p) => p,
-                    None => Vec::new(),
-                },
+                None => {
+                    stdin_copy = stdin_to_temp();
+                    stdin_copy.clone().unwrap_or_default()
+                }
             };
             let mut code = if cl.behavior == Behavior::Highlight {
                 b"<?php highlight_file('".to_vec()
@@ -544,7 +546,9 @@ fn run(argv: &[Vec<u8>]) -> i32 {
     let prepared = new_prepared_vm(&cfg, ini);
     let (_, vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
     // The copy of standard input `stdin_to_temp` may have made.
-    let _ = std::fs::remove_file(stdin_temp_path());
+    if let Some(path) = stdin_copy {
+        let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&path));
+    }
     let _ = std::io::stdout().flush();
     // The process exits next: skip the VM's destruction.
     std::mem::forget(vm);
@@ -736,20 +740,23 @@ fn lint(cfg: &Config, path: Option<&[u8]>) -> Option<i32> {
     Some(if ok { 0 } else { 255 })
 }
 
-/// Where [`stdin_to_temp`] puts standard input.
-fn stdin_temp_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("php-cgi-stdin-{}", std::process::id()))
-}
-
-/// Standard input copied to a temporary file, for `-s`/`-w` without a file
+/// Standard input copied to a new temporary file (a random name created
+/// exclusively, `php_open_temporary_fd()`), for `-s`/`-w` without a file
 /// (C reads the stream directly; `highlight_file()` and
-/// `php_strip_whitespace()` take a path).
+/// `php_strip_whitespace()` take a path). Returns its path.
 fn stdin_to_temp() -> Option<Vec<u8>> {
     let mut src = Vec::new();
     std::io::stdin().lock().read_to_end(&mut src).ok()?;
-    let path = stdin_temp_path();
-    std::fs::write(&path, src).ok()?;
-    Some(path.into_os_string().into_vec())
+    let (mut file, path) = php_streams::temp::open_temporary_fd(
+        None,
+        Some(b"php-cgi-stdin-"),
+        php_streams::temp::SILENT,
+    )?;
+    if file.write_all(&src).is_err() {
+        let _ = std::fs::remove_file(std::ffi::OsStr::from_bytes(&path));
+        return None;
+    }
+    Some(path)
 }
 
 #[cfg(test)]

@@ -9,12 +9,12 @@
 //! `main/php_variables.c` (`php_std_post_handler`) and `main/rfc1867.c`
 //! (whose port lives in [`php_sapi_input::rfc1867`]).
 
-use crate::util::E_WARNING;
+use crate::util::{E_NOTICE, E_WARNING};
 use php_ext_streams::res;
 use php_runtime::{Value, ZArray, ZStr};
 use php_sapi_input::body::{self, RequestBody, SapiInput};
 use php_sapi_input::rfc1867::{self, RegValue, Target, UploadSettings};
-use php_sapi_input::vars::{content_type_key, input_settings, tmp_dirs};
+use php_sapi_input::vars::{content_type_key, input_settings, upload_tmp_dir};
 use php_stdmisc::query::{self, ParseKind, RegisterOptions};
 use php_streams::stream::Stream;
 use php_vm::ext::{Args, VmResult};
@@ -63,7 +63,7 @@ fn upload_settings(vm: &mut Vm) -> UploadSettings {
         max_input_vars: vm.ini_long("max_input_vars"),
         upload_max_filesize: vm.ini_long("upload_max_filesize"),
         file_uploads: vm.ini_bool("file_uploads"),
-        tmp_dirs: tmp_dirs(vm),
+        upload_tmp_dir: upload_tmp_dir(vm),
         read_post_bytes: 0,
     }
 }
@@ -102,7 +102,11 @@ fn handle(
         };
         vm.rfc1867_uploaded_files = outcome.uploaded;
         for w in &outcome.warnings {
-            warn(vm, &w.message, w.docref)?;
+            if w.notice {
+                vm.raise(E_NOTICE, &format!("{FUNC}(): {}", w.message))?;
+            } else {
+                warn(vm, &w.message, w.docref)?;
+            }
         }
         let settings = input_settings(vm);
         let prefix = format!("{FUNC}(): ");

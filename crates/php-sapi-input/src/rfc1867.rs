@@ -37,9 +37,9 @@ pub struct UploadSettings {
     pub upload_max_filesize: i64,
     /// `file_uploads`.
     pub file_uploads: bool,
-    /// Directories to try for temporary files, in order (`upload_tmp_dir`,
-    /// then the system temporary directory).
-    pub tmp_dirs: Vec<PathBuf>,
+    /// `upload_tmp_dir`: where uploaded files go (empty: the system
+    /// temporary directory, which is also the fallback).
+    pub upload_tmp_dir: Vec<u8>,
     /// `SG(read_post_bytes)` when the parse starts: what earlier reads of
     /// the body took (a parse at request startup before the one of
     /// `request_parse_body()`, or `php://input`). The parse counts on from
@@ -56,7 +56,7 @@ impl Default for UploadSettings {
             max_input_vars: 1000,
             upload_max_filesize: 2 * 1024 * 1024,
             file_uploads: true,
-            tmp_dirs: vec![std::env::temp_dir()],
+            upload_tmp_dir: Vec::new(),
             read_post_bytes: 0,
         }
     }
@@ -99,6 +99,9 @@ pub struct Warning {
     /// `php_error_docref()` (prefixed with the function, `"PHP Request
     /// Startup: "` during startup) rather than `sapi_error()`.
     pub docref: bool,
+    /// An `E_NOTICE` (the temporary file went to the system temporary
+    /// directory) rather than an `E_WARNING`; never an exception.
+    pub notice: bool,
 }
 
 /// The result of [`parse`].
@@ -540,31 +543,20 @@ pub fn normalize_protected_variable(var: &[u8]) -> Vec<u8> {
     v
 }
 
-/// Creates `<dir>/phpXXXXXX` (`php_open_temporary_fd_ex()`).
-pub fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
-    use std::os::unix::io::FromRawFd;
-    for dir in dirs {
-        let Ok(dir) = std::fs::canonicalize(dir) else {
-            continue;
-        };
-        let mut template = dir.as_os_str().as_bytes().to_vec();
-        if template.last() != Some(&b'/') {
-            template.push(b'/');
-        }
-        template.extend_from_slice(b"phpXXXXXX\0");
-        // SAFETY: `template` is a writable NUL-terminated buffer ending in
-        // "XXXXXX" as mkstemp requires; it is not used concurrently.
-        let fd = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
-        if fd < 0 {
-            continue;
-        }
-        template.pop();
-        // SAFETY: mkstemp returned a fresh descriptor we exclusively own.
-        let file = unsafe { std::fs::File::from_raw_fd(fd) };
-        let path = PathBuf::from(std::ffi::OsStr::from_bytes(&template));
-        return Some((file, path));
-    }
-    None
+/// `php_open_temporary_fd_ex(PG(upload_tmp_dir), "php", ...,
+/// PHP_TMP_FILE_OPEN_BASEDIR_CHECK_ON_FALLBACK)`: a new `php` + 13 random
+/// characters + 6 file in `upload_tmp_dir`, else in the system temporary
+/// directory; `fell_back` when `upload_tmp_dir` was set and failed.
+fn open_upload_file(upload_tmp_dir: &[u8]) -> (Option<(std::fs::File, PathBuf)>, bool) {
+    let mut fell_back = false;
+    let file = php_streams::temp::create_temporary(
+        Some(upload_tmp_dir),
+        Some(b"php"),
+        php_streams::temp::CHECK_ON_FALLBACK,
+        &mut || fell_back = true,
+    );
+    let file = file.map(|(f, path)| (f, PathBuf::from(std::ffi::OsStr::from_bytes(&path))));
+    (file, fell_back)
 }
 
 struct Parser {
@@ -574,7 +566,11 @@ struct Parser {
 
 impl Parser {
     fn warn(&mut self, message: String, docref: bool) {
-        self.out.warnings.push(Warning { message, docref });
+        self.out.warnings.push(Warning {
+            message,
+            docref,
+            notice: false,
+        });
     }
 
     /// `safe_php_register_variable()`: `false` once a `memory_limit`
@@ -896,7 +892,15 @@ pub fn parse_with_events(
         if cancel == 0 {
             let mut chunk = mb.read_part(FILLUNIT, Some(&mut end));
             let mut file = None;
-            if let Some((f, path)) = open_temporary(&settings.tmp_dirs) {
+            let (opened, fell_back) = open_upload_file(&settings.upload_tmp_dir);
+            if fell_back {
+                p.out.warnings.push(Warning {
+                    message: php_streams::temp::FALLBACK_NOTICE.to_string(),
+                    docref: true,
+                    notice: true,
+                });
+            }
+            if let Some((f, path)) = opened {
                 file = Some(f);
                 temp = Some(path);
             } else {
@@ -1091,7 +1095,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("phprust-mp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         UploadSettings {
-            tmp_dirs: vec![dir],
+            upload_tmp_dir: dir.as_os_str().as_bytes().to_vec(),
             ..UploadSettings::default()
         }
     }
@@ -1498,6 +1502,7 @@ mod tests {
                 message: "Actual POST length does not match Content-Length, and exceeds 100 bytes"
                     .to_string(),
                 docref: false,
+                notice: false,
             }]
         );
 

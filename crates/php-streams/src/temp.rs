@@ -3,7 +3,6 @@
 //! Temporary files (`main/php_open_temporary_file.c`, `tempnam()`,
 //! `tmpfile()`, `sys_get_temp_dir()`).
 
-use std::cell::Cell;
 use std::fs::File;
 
 use crate::diag;
@@ -22,29 +21,20 @@ pub const CHECK_ALWAYS: u32 = CHECK_ON_FALLBACK | CHECK_ON_EXPLICIT_DIR;
 
 const BASE32: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
 
-thread_local! {
-    static RNG: Cell<u64> = Cell::new(seed());
+/// `php_random_bytes_silent()`, else `php_random_generate_fallback_seed()`
+/// (the time and the process, not cryptographic): the random part of a
+/// temporary file's name.
+fn random_u64() -> u64 {
+    php_random::csprng::next_u64().unwrap_or_else(|_| fallback_seed())
 }
 
-fn seed() -> u64 {
+fn fallback_seed() -> u64 {
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     #[allow(clippy::cast_possible_truncation)]
     let t = t as u64;
     t ^ (u64::from(std::process::id()) << 32) ^ 0x9E37_79B9_7F4A_7C15
-}
-
-fn random_u64() -> u64 {
-    RNG.with(|r| {
-        // xorshift64*
-        let mut x = r.get();
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        r.set(x);
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    })
 }
 
 /// `php_get_temporary_directory()`.
@@ -92,12 +82,34 @@ fn do_open(path: &[u8], pfx: &[u8]) -> Option<(File, Vec<u8>)> {
     sys::mkstemp(&template).ok()
 }
 
+/// The notice `php_open_temporary_fd_ex()` gives when `dir` failed and the
+/// file goes to the system temporary directory instead.
+pub const FALLBACK_NOTICE: &str = "file created in the system's temporary directory";
+
 /// `php_open_temporary_fd_ex()`: creates a unique file in `dir` (or the
 /// system temporary directory), returning the open file and its path.
 pub fn open_temporary_fd(
     dir: Option<&[u8]>,
     pfx: Option<&[u8]>,
     flags: u32,
+) -> Option<(File, Vec<u8>)> {
+    create_temporary(dir, pfx, flags, &mut || {
+        if flags & SILENT == 0 {
+            diag::notice(FALLBACK_NOTICE);
+        }
+    })
+}
+
+/// [`open_temporary_fd`] for callers that report the notice themselves
+/// (the upload parser, which runs without the VM and keeps its messages
+/// in order): `on_fallback` runs where `php_open_temporary_fd_ex()` gives
+/// [`FALLBACK_NOTICE`], when a given `dir` failed and before the system
+/// directory is tried (whose `open_basedir` check may warn in turn).
+pub fn create_temporary(
+    dir: Option<&[u8]>,
+    pfx: Option<&[u8]>,
+    flags: u32,
+    on_fallback: &mut dyn FnMut(),
 ) -> Option<(File, Vec<u8>)> {
     let pfx = pfx.unwrap_or(b"tmp.");
     let fallback = || {
@@ -117,9 +129,7 @@ pub fn open_temporary_fd(
     if let Some(r) = do_open(dir, pfx) {
         return Some(r);
     }
-    if flags & SILENT == 0 {
-        diag::notice("file created in the system's temporary directory");
-    }
+    on_fallback();
     fallback()
 }
 
