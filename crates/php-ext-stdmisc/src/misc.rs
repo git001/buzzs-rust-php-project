@@ -7,7 +7,7 @@ use crate::credits;
 use crate::ctx::{global, RtExt};
 use php_runtime::{RtResult, Value, ZArray, ZStr};
 use php_stdmisc::info::{self, InfoModule, InfoPrinter, InfoSource};
-use php_stdmisc::mail::{self, ErrorLogSettings, HeadersArg, LogTarget, MailSettings, ScriptInfo};
+use php_stdmisc::mail::{self, HeadersArg, MailSettings, ScriptInfo};
 use php_stdmisc::misc::{self, AssertState};
 use php_stdmisc::system::{self, PageInfo};
 use php_vm::ext::{Args, InfoItem, ModuleBuilder, VmResult};
@@ -25,6 +25,7 @@ fn mail_settings(vm: &Vm) -> MailSettings {
             .ini_string("mail.cr_lf_mode")
             .unwrap_or_else(|| b"crlf".to_vec()),
         mixed_lf_and_crlf: vm.ini_bool("mail.mixed_lf_and_crlf"),
+        syslog: vm.syslog_settings(),
     }
 }
 
@@ -40,27 +41,6 @@ fn script_info(vm: &Vm) -> ScriptInfo {
     }
 }
 
-/// `php_format_date("d-M-Y H:i:s e", ts)` through the date extension
-/// (UTC formatting when `date()` is unavailable).
-fn log_date(vm: &mut Vm, ts: i64) -> String {
-    if vm.native_function("date").is_none() {
-        return mail::format_log_date_utc(ts);
-    }
-    match vm.call_value(
-        &Value::from("date"),
-        vec![Value::from("d-M-Y H:i:s e"), Value::Int(ts)],
-    ) {
-        Ok(Value::Str(s)) => s.to_string_lossy(),
-        _ => mail::format_log_date_utc(ts),
-    }
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
-}
-
 fn mail_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (to, subject, message) = (a.str(0), a.str(1), a.str(2));
     let headers = a.at(3);
@@ -72,7 +52,7 @@ fn mail_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let settings = mail_settings(vm);
     let script = script_info(vm);
-    let date = log_date(vm, now());
+    let date = vm.log_date(php_support::time::now());
     mail::mail_ex(
         to.as_bytes(),
         subject.as_bytes(),
@@ -110,19 +90,40 @@ fn append_mail_log(vm: &mut Vm, filename: &[u8], line: &[u8]) -> RtResult<()> {
     .map_err(|t| vm.runtime_error_from(t))
 }
 
-/// The CLI logger with dates from the date extension.
-struct VmLog {
-    date: String,
-}
-
-impl LogTarget for VmLog {
-    fn sapi_log_message(&mut self, message: &[u8]) -> bool {
-        mail::CliLogTarget.sapi_log_message(message)
-    }
-
-    fn format_date(&mut self, _ts: i64) -> String {
-        self.date.clone()
-    }
+/// `php_mail()` (`ext/standard/mail.c`, `PHPAPI`) for other extensions
+/// (`mb_send_mail()`): the `mail.*` settings, the `mail.log` line (dated
+/// in the default timezone, written through the stream layer or to
+/// syslog) and the delivery through `sendmail_path`. `headers` and
+/// `extra_cmd` are passed as given (already validated and escaped).
+pub fn php_mail(
+    vm: &mut Vm,
+    to: &[u8],
+    subject: &[u8],
+    message: &[u8],
+    headers: Option<&[u8]>,
+    extra_cmd: Option<&[u8]>,
+) -> VmResult<bool> {
+    let settings = mail_settings(vm);
+    let script = script_info(vm);
+    // The date is only needed for a `mail.log` file.
+    let date = if settings.log.is_empty() || settings.log == b"syslog" {
+        String::new()
+    } else {
+        vm.log_date(php_support::time::now())
+    };
+    mail::php_mail_ex(
+        to,
+        subject,
+        message,
+        headers,
+        extra_cmd,
+        &settings,
+        &script,
+        &|_| date.clone(),
+        vm,
+        &mut append_mail_log,
+    )
+    .vm(vm)
 }
 
 fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -130,13 +131,6 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let ty = if a.has(1) { a.int(1) } else { 0 };
     let dest = a.opt(2).map(|_| a.str(2));
     let headers = a.opt(3).map(|_| a.str(3));
-    let settings = ErrorLogSettings {
-        error_log: vm.ini_string("error_log").filter(|v| !v.is_empty()),
-        error_log_mode: vm
-            .ini_string("error_log_mode")
-            .and_then(|v| i64::from_str_radix(String::from_utf8_lossy(&v).trim(), 8).ok())
-            .unwrap_or(0o644),
-    };
     if ty == 3 && dest.as_ref().is_none_or(ZStr::is_empty) {
         // `php_stream_open_wrapper()` on an empty path.
         return Err(vm.throw("ValueError", "Path must not be empty"));
@@ -152,19 +146,15 @@ fn error_log(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let mail_settings = mail_settings(vm);
     let script = script_info(vm);
-    let mut target = VmLog {
-        date: log_date(vm, now()),
-    };
-    vm.flush_stdout();
+    let error_log = vm.error_log_setting();
     mail::error_log(
         message.as_bytes(),
         ty,
         dest.as_ref().map(ZStr::as_bytes),
         headers.as_ref().map(ZStr::as_bytes),
-        &settings,
+        error_log.as_deref(),
         &mail_settings,
         &script,
-        &mut target,
         vm,
     )
     .vm(vm)

@@ -1,10 +1,10 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `mb_send_mail()`: MIME-encodes the subject and body according to
-//! `mb_language()` and hands the message to `php-stdmisc`'s `php_mail_ex`,
-//! with `mail.log` files written through the stream layer as
-//! `php_mail_log_to_file()` does (so `mail()` and `mb_send_mail()` share
-//! the open-failure warning and the GH-7875 behaviour).
+//! `mb_language()` and hands the message to ext/standard's `php_mail()`
+//! ([`php_ext_stdmisc::php_mail`]), which also writes `mail.log`, as
+//! php-src does (so `mail()` and `mb_send_mail()` share the settings, the
+//! log and the GH-7875 behaviour).
 
 use std::collections::HashMap;
 
@@ -12,9 +12,8 @@ use php_mbstring::convert::{fast_convert, ErrorMode};
 use php_mbstring::detect::guess_encoding_for_strings;
 use php_mbstring::mime::mime_header_encode;
 use php_mbstring::{encoding, Encoding, EncodingNo};
-use php_runtime::{RtResult, Value};
-use php_stdmisc::mail::{self, MailSettings, ScriptInfo};
-use php_stdmisc::system::PageInfo;
+use php_runtime::Value;
+use php_stdmisc::mail;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
@@ -169,75 +168,6 @@ fn php_trim(s: &[u8]) -> &[u8] {
     &s[..end]
 }
 
-fn mail_settings(vm: &Vm) -> MailSettings {
-    let s = |n: &str| vm.ini_string(n).unwrap_or_default();
-    MailSettings {
-        sendmail_path: s("sendmail_path"),
-        force_extra_parameters: s("mail.force_extra_parameters"),
-        add_x_header: vm.ini_bool("mail.add_x_header"),
-        log: s("mail.log"),
-        cr_lf_mode: vm
-            .ini_string("mail.cr_lf_mode")
-            .unwrap_or_else(|| b"crlf".to_vec()),
-        mixed_lf_and_crlf: vm.ini_bool("mail.mixed_lf_and_crlf"),
-    }
-}
-
-fn script_info(vm: &Vm) -> ScriptInfo {
-    let (file, line) = vm.current_location();
-    let path = vm.script_path.as_bytes();
-    let page = PageInfo::for_script((!path.is_empty()).then_some(path));
-    ScriptInfo {
-        filename: file.as_bytes().to_vec(),
-        lineno: line,
-        uid: page.uid,
-    }
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
-}
-
-/// `php_format_date("d-M-Y H:i:s e", ts)` through the date extension
-/// (UTC formatting when `date()` is unavailable).
-fn log_date(vm: &mut Vm, ts: i64) -> String {
-    if vm.native_function("date").is_none() {
-        return mail::format_log_date_utc(ts);
-    }
-    match vm.call_value(
-        &Value::from("date"),
-        vec![Value::from("d-M-Y H:i:s e"), Value::Int(ts)],
-    ) {
-        Ok(Value::Str(s)) => s.to_string_lossy(),
-        _ => mail::format_log_date_utc(ts),
-    }
-}
-
-/// `php_mail_log_to_file()`: `php_stream_open_wrapper(filename, "a",
-/// REPORT_ERRORS | STREAM_DISABLE_OPEN_BASEDIR)`, so a file that cannot be
-/// opened warns as `mb_send_mail(): Failed to open stream: ...`, and an
-/// exception thrown by the error handler for it stops the mail from being
-/// sent (GH-7875).
-fn append_mail_log(vm: &mut Vm, filename: &[u8], line: &[u8]) -> RtResult<()> {
-    php_ext_streams::bridge::run(vm, || {
-        let mut opened = None;
-        if let Some(mut s) = php_streams::open::open_wrapper(
-            filename,
-            "a",
-            php_streams::wrapper::REPORT_ERRORS | php_streams::wrapper::STREAM_DISABLE_OPEN_BASEDIR,
-            &mut opened,
-            None,
-        ) {
-            let _ = s.write(line);
-            s.close();
-        }
-    })
-    .map_err(|t| vm.runtime_error_from(t))
-}
-
-/// `To:` sanitising (`iscntrl` → space, keeping folded continuation lines).
 fn sanitize_to(to: &[u8]) -> Vec<u8> {
     let mut r = to.to_vec();
     while r.last().is_some_and(u8::is_ascii_whitespace) || r.last() == Some(&0x0b) {
@@ -436,8 +366,10 @@ fn mb_send_mail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         hdr.extend_from_slice(body_enc.preferred_mime_name().unwrap_or("7bit").as_bytes());
     }
 
-    let settings = mail_settings(vm);
-    let extra_cmd = if settings.force_extra_parameters.is_empty() {
+    let force_extra = vm
+        .ini_string("mail.force_extra_parameters")
+        .unwrap_or_default();
+    let extra_cmd = if force_extra.is_empty() {
         match &extra {
             Some(p) => Some(
                 php_stdmisc::exec::escapeshellcmd(p.as_bytes())
@@ -446,36 +378,21 @@ fn mb_send_mail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             None => None,
         }
     } else {
-        Some(
-            php_stdmisc::exec::escapeshellcmd(&settings.force_extra_parameters)
-                .map_err(|e| state::rt_throw(vm, e))?,
-        )
-    };
-    let script = script_info(vm);
-    // The log line's date is only needed for a `mail.log` file.
-    let date = if settings.log.is_empty() || settings.log == b"syslog" {
-        String::new()
-    } else {
-        log_date(vm, now())
+        Some(php_stdmisc::exec::escapeshellcmd(&force_extra).map_err(|e| state::rt_throw(vm, e))?)
     };
     let to_arg = if to.as_bytes().is_empty() {
         to.as_bytes().to_vec()
     } else {
         to_r
     };
-    mail::php_mail_ex(
+    php_ext_stdmisc::php_mail(
+        vm,
         &to_arg,
         &subject_enc,
         &body,
         Some(&hdr),
         extra_cmd.as_deref(),
-        &settings,
-        &script,
-        &|_| date.clone(),
-        vm,
-        &mut append_mail_log,
     )
-    .map_err(|e| state::rt_throw(vm, e))
     .map(Value::Bool)
 }
 

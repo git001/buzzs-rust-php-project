@@ -38,6 +38,7 @@ mod net;
 mod proc;
 mod text;
 
+pub use misc::php_mail;
 use php_vm::ext::{Extension, ModuleBuilder};
 
 /// The `ext/standard` misc functions (registered under the `standard`

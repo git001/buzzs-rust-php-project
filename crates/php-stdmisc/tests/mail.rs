@@ -6,9 +6,10 @@
 mod common;
 
 use common::{fields, fixture_lines, show, unhex};
+use php_log::date::format_log_date_utc;
 use php_runtime::serialize::{unserialize, UnserializeOptions};
 use php_runtime::{CollectingContext, Value};
-use php_stdmisc::mail::{self, ErrorLogSettings, HeadersArg, LogTarget, MailSettings, ScriptInfo};
+use php_stdmisc::mail::{self, HeadersArg, MailSettings, ScriptInfo};
 
 fn tmpfile(tag: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("stdmisc-{tag}-{}", std::process::id()))
@@ -125,7 +126,7 @@ fn cr_lf_modes_and_log() {
         lineno: 7,
         uid: 0,
     };
-    let date = |ts: i64| mail::format_log_date_utc(ts);
+    let date = |ts: i64| format_log_date_utc(ts);
     // ext/standard/tests/mail/gh19188_lf_mode.phpt
     assert!(mail::mail(
         b"a@b",
@@ -149,14 +150,11 @@ fn cr_lf_modes_and_log() {
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&log);
     assert_eq!(
-        mail::format_log_date_utc(1_793_728_800),
+        format_log_date_utc(1_793_728_800),
         "03-Nov-2026 18:00:00 UTC"
     );
-    assert_eq!(mail::format_log_date_utc(0), "01-Jan-1970 00:00:00 UTC");
-    assert_eq!(
-        mail::format_log_date_utc(951_782_400),
-        "29-Feb-2000 00:00:00 UTC"
-    );
+    assert_eq!(format_log_date_utc(0), "01-Jan-1970 00:00:00 UTC");
+    assert_eq!(format_log_date_utc(951_782_400), "29-Feb-2000 00:00:00 UTC");
     // Failing sendmail.
     let bad = MailSettings {
         sendmail_path: b"exit 3".to_vec(),
@@ -228,14 +226,36 @@ fn cr_lf_modes_and_log() {
     );
 }
 
-struct Capture(Vec<Vec<u8>>);
-impl LogTarget for Capture {
-    fn sapi_log_message(&mut self, m: &[u8]) -> bool {
-        self.0.push(m.to_vec());
-        true
+/// A runtime context that is also the SAPI logger.
+#[derive(Default)]
+struct Capture {
+    sapi: Vec<(Vec<u8>, i32)>,
+    diagnostics: Vec<String>,
+    mode: i64,
+}
+
+impl php_runtime::RuntimeContext for Capture {
+    fn diagnostic(
+        &mut self,
+        _: php_runtime::ErrorLevel,
+        message: &str,
+    ) -> php_runtime::RtResult<()> {
+        self.diagnostics.push(message.to_owned());
+        Ok(())
     }
-    fn format_date(&mut self, _: i64) -> String {
+}
+
+impl php_log::LogHost for Capture {
+    fn log_date(&mut self) -> String {
         "03-Nov-2026 18:00:00 UTC".into()
+    }
+
+    fn error_log_mode(&mut self) -> i64 {
+        self.mode
+    }
+
+    fn sapi_log_message(&mut self, m: &[u8], severity: i32) {
+        self.sapi.push((m.to_vec(), severity));
     }
 }
 
@@ -257,7 +277,7 @@ fn log_failure_aborts_the_mail() {
         lineno: 3,
         uid: 0,
     };
-    let date = |ts: i64| mail::format_log_date_utc(ts);
+    let date = |ts: i64| format_log_date_utc(ts);
     let mut logged = Vec::new();
     let mut log_file =
         |_: &mut CollectingContext, filename: &[u8], line: &[u8]| -> php_runtime::RtResult<()> {
@@ -294,59 +314,46 @@ fn log_failure_aborts_the_mail() {
 
 #[test]
 fn error_log_types() {
-    let mut ctx = CollectingContext::new();
-    let mut cap = Capture(Vec::new());
+    let mut cap = Capture::default();
     let ms = MailSettings::default();
     let script = ScriptInfo::default();
-    let none = ErrorLogSettings::default();
-    // type 0 without error_log INI: SAPI logger.
-    assert!(
-        mail::error_log(b"hello", 0, None, None, &none, &ms, &script, &mut cap, &mut ctx).unwrap()
+    let none: Option<&[u8]> = None;
+    // type 0 without error_log INI: SAPI logger, LOG_NOTICE.
+    assert!(mail::error_log(b"hello", 0, None, None, none, &ms, &script, &mut cap).unwrap());
+    // type 4: SAPI logger with severity -1, cut at a NUL.
+    assert!(mail::error_log(b"four\0x", 4, None, None, none, &ms, &script, &mut cap).unwrap());
+    assert_eq!(
+        cap.sapi,
+        [
+            (b"hello".to_vec(), libc::LOG_NOTICE),
+            (b"four".to_vec(), -1)
+        ]
     );
-    // type 4: SAPI logger.
-    assert!(
-        mail::error_log(b"four", 4, None, None, &none, &ms, &script, &mut cap, &mut ctx).unwrap()
-    );
-    assert_eq!(cap.0, [b"hello".to_vec(), b"four".to_vec()]);
     // type 0 with error_log file: "[date] message\n".
     let f = tmpfile("errlog");
     let _ = std::fs::remove_file(&f);
-    let s = ErrorLogSettings {
-        error_log: Some(f.to_str().unwrap().as_bytes().to_vec()),
-        error_log_mode: 0o600,
-    };
-    assert!(mail::error_log(b"msg", 0, None, None, &s, &ms, &script, &mut cap, &mut ctx).unwrap());
+    let path = f.to_str().unwrap().as_bytes().to_vec();
+    let s = Some(path.as_slice());
+    cap.mode = 0o600;
+    assert!(mail::error_log(b"msg", 0, None, None, s, &ms, &script, &mut cap).unwrap());
     assert_eq!(
         std::fs::read_to_string(&f).unwrap(),
         "[03-Nov-2026 18:00:00 UTC] msg\n"
     );
     // type 3: append raw.
     let p = f.to_str().unwrap().as_bytes().to_vec();
-    assert!(mail::error_log(
-        b"raw",
-        3,
-        Some(&p),
-        None,
-        &none,
-        &ms,
-        &script,
-        &mut cap,
-        &mut ctx
-    )
-    .unwrap());
+    assert!(mail::error_log(b"raw", 3, Some(&p), None, none, &ms, &script, &mut cap).unwrap());
     assert_eq!(
         std::fs::read_to_string(&f).unwrap(),
         "[03-Nov-2026 18:00:00 UTC] msg\nraw"
     );
     let _ = std::fs::remove_file(&f);
     // type 2 is gone; type 1 needs a destination.
-    let e =
-        mail::error_log(b"x", 2, None, None, &none, &ms, &script, &mut cap, &mut ctx).unwrap_err();
+    let e = mail::error_log(b"x", 2, None, None, none, &ms, &script, &mut cap).unwrap_err();
     assert_eq!(
         e.message(),
         Some("TCP/IP option is not available for error logging")
     );
-    assert!(
-        !mail::error_log(b"x", 1, None, None, &none, &ms, &script, &mut cap, &mut ctx).unwrap()
-    );
+    assert!(!mail::error_log(b"x", 1, None, None, none, &ms, &script, &mut cap).unwrap());
+    assert_eq!(cap.diagnostics, Vec::<String>::new());
 }

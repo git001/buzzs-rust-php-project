@@ -6,20 +6,12 @@
 use crate::ctx::RtExt;
 use php_runtime::{Value, ZStr};
 use php_stdmisc::dns::{self, SystemResolver};
-use php_stdmisc::net::{self, SyslogFilter, SyslogState};
+use php_stdmisc::net;
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
-use std::cell::RefCell;
 
 /// `DNS_ANY`, the default `$type` of `dns_get_record()`.
 const DNS_ANY: i64 = 0x1000_0000;
-/// `LOG_USER`, the default `syslog.facility`.
-const LOG_USER: i64 = 8;
-
-thread_local! {
-    static SYSLOG: RefCell<SyslogState> = RefCell::new(SyslogState::default());
-}
-
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn inet_ntop(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(net::inet_ntop(a.str(0).as_bytes()))
@@ -127,57 +119,33 @@ fn dns_get_record(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn openlog(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let prefix = a.str(0);
-    SYSLOG
-        .with(|s| {
-            s.borrow_mut()
-                .openlog(prefix.as_bytes(), a.int(1), a.int(2))
-        })
+    net::openlog(prefix.as_bytes(), a.int(1), a.int(2))
         .vm(vm)
         .map(Value::Bool)
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn closelog(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(SYSLOG.with(|s| s.borrow_mut().closelog())))
-}
-
-/// The `syslog.facility` INI value as a number (`LOG_USER` by default).
-fn ini_facility(vm: &Vm) -> i64 {
-    let raw = vm.ini_string("syslog.facility").unwrap_or_default();
-    net::SYSLOG_CONSTANTS
-        .iter()
-        .find(|(n, _)| n.as_bytes().eq_ignore_ascii_case(&raw))
-        .map_or(LOG_USER, |(_, v)| *v)
-}
-
-/// The `syslog.filter` INI value.
-fn ini_filter(vm: &Vm) -> SyslogFilter {
-    match vm.ini_string("syslog.filter").as_deref() {
-        Some(b"all") => SyslogFilter::All,
-        Some(b"ascii") => SyslogFilter::Ascii,
-        Some(b"raw") => SyslogFilter::Raw,
-        _ => SyslogFilter::NoCtrl,
-    }
+    Ok(Value::Bool(net::closelog()))
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn syslog(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let msg = a.str(1);
-    let ident = vm
-        .ini_string("syslog.ident")
-        .unwrap_or_else(|| b"php".to_vec());
-    let facility = ini_facility(vm);
-    let filter = ini_filter(vm);
-    let ok = SYSLOG.with(|s| {
-        s.borrow_mut()
-            .syslog(a.int(0), msg.as_bytes(), filter, &ident, facility)
-    });
-    Ok(Value::Bool(ok))
+    let settings = vm.syslog_settings();
+    Ok(Value::Bool(net::syslog(
+        a.int(0),
+        msg.as_bytes(),
+        &settings,
+    )))
 }
 
 /// Registers the functions and constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    for (name, v) in dns::CONSTANTS.iter().chain(net::SYSLOG_CONSTANTS) {
+    for (name, v) in dns::CONSTANTS
+        .iter()
+        .chain(php_log::syslog::SYSLOG_CONSTANTS)
+    {
         m.constant(name, Value::Int(*v));
     }
     m.function_static("inet_ntop(string $ip): string|false", inet_ntop)
@@ -222,5 +190,5 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
         .function_static("openlog(string $prefix, int $flags, int $facility): true", openlog)
         .function_static("closelog(): true", closelog)
         .function_static("syslog(int $priority, string $message): true", syslog)
-        .on_request_shutdown(|_| SYSLOG.with(|s| s.borrow_mut().request_shutdown()));
+        .on_request_shutdown(|_| php_log::syslog::request_shutdown());
 }

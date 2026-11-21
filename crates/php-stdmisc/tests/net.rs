@@ -2,13 +2,14 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for the deterministic network functions (`inet_*`,
 //! `ip2long`/`long2ip`, protocol/service databases, localhost lookups),
-//! plus `syslog` filtering and `net_get_interfaces` shape.
+//! plus `openlog`/`syslog`/`closelog` and `net_get_interfaces` shape
+//! (the `syslog.filter` rules are tested in php-log).
 
 mod common;
 
 use common::{export, fields, fixture_lines, show, unhex};
 use php_runtime::{CollectingContext, Value};
-use php_stdmisc::net::{self, SyslogFilter};
+use php_stdmisc::net;
 
 #[test]
 fn network_functions_match_oracle() {
@@ -80,30 +81,12 @@ fn errors() {
 }
 
 #[test]
-fn syslog_filtering() {
-    // ext/standard/tests/network/syslog_new_line.phpt, syslog_null_byte.phpt
-    let lines = |m: &[u8], f| {
-        net::syslog_lines(m, f)
-            .into_iter()
-            .map(|l| show(&l))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        lines(b"Hello\nWorld", SyslogFilter::NoCtrl),
-        ["Hello", "World"]
-    );
-    assert_eq!(
-        lines(b"a\0b\x01\xc3\xa9", SyslogFilter::NoCtrl),
-        ["a\\x00b\\x01\u{e9}"]
-    );
-    assert_eq!(lines(b"a\x01\xc3", SyslogFilter::Ascii), ["a\\x01\\xc3"]);
-    assert_eq!(lines(b"a\x01\n", SyslogFilter::All), ["a\x01", ""]);
-    assert_eq!(lines(b"a\nb", SyslogFilter::Raw), ["a\nb"]);
-    let mut st = net::SyslogState::default();
-    assert!(st.syslog(7, b"phprust test", SyslogFilter::NoCtrl, b"php", 8));
-    assert!(st.openlog(b"phprust", 0, 8).unwrap());
-    assert!(st.closelog());
-    let e = st.openlog(b"a\0", 0, 8).unwrap_err();
+fn syslog_functions() {
+    let settings = php_log::SyslogSettings::default();
+    assert!(net::syslog(7, b"phprust test", &settings));
+    assert!(net::openlog(b"phprust", 0, 8).unwrap());
+    assert!(net::closelog());
+    let e = net::openlog(b"a\0", 0, 8).unwrap_err();
     assert_eq!(
         e.message(),
         Some("openlog(): Argument #1 ($prefix) must not contain any null bytes")

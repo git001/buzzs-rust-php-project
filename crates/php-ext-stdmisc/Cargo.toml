@@ -9,6 +9,7 @@ rust-version.workspace = true
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-stdmisc = { path = "../php-stdmisc" }
+php-log = { path = "../php-log" }
 php-support = { path = "../php-support" }
 php-lexer = { path = "../php-lexer" }
 php-filter = { path = "../php-filter" }

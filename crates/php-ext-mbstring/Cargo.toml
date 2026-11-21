@@ -12,6 +12,7 @@ php-mbstring = { path = "../php-mbstring" }
 php-parser = { path = "../php-parser" }
 php-pcre = { path = "../php-pcre" }
 php-stdmisc = { path = "../php-stdmisc" }
+php-ext-stdmisc = { path = "../php-ext-stdmisc" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-support = { path = "../php-support" }

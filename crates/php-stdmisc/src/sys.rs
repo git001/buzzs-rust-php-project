@@ -764,34 +764,6 @@ pub fn res_query(name: &[u8], rtype: i32) -> Result<Vec<u8>, i32> {
     Ok(buf)
 }
 
-// ------------------------------------------------------------- syslog
-
-/// `openlog(ident, option, facility)`; the identity string is kept alive.
-pub fn openlog(ident: &[u8], option: i32, facility: i32) {
-    static IDENT: std::sync::Mutex<Option<CString>> = std::sync::Mutex::new(None);
-    let c = cstring(ident);
-    let mut guard = IDENT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // SAFETY: the C string is stored in a static before and while syslog
-    // uses it; the previous one is replaced only after openlog switched.
-    unsafe { libc::openlog(c.as_ptr(), option, facility) };
-    *guard = Some(c);
-}
-
-/// `syslog(priority, "%s", message)` (cut at the first NUL).
-pub fn syslog(priority: i32, message: &[u8]) {
-    let m = cstring(message);
-    // SAFETY: "%s" with a valid C string argument.
-    unsafe { libc::syslog(priority, c"%s".as_ptr(), m.as_ptr()) };
-}
-
-/// `closelog()`.
-pub fn closelog() {
-    // SAFETY: no preconditions.
-    unsafe { libc::closelog() };
-}
-
 // ------------------------------------------------------------- environment
 
 /// The raw `environ` entries, in order.

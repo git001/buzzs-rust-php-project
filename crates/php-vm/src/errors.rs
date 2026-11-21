@@ -432,11 +432,13 @@ impl Vm {
         let file_s = file.to_string_lossy();
         let trace = self.fatal_backtrace_suffix();
         if self.ini.get_bool("log_errors") {
-            let log = format!(
-                "PHP {lbl}:  {} in {file_s} on line {line}{trace}",
-                String::from_utf8_lossy(msg)
-            );
-            self.log_error(&log);
+            // php_error_cb: "PHP %s:  %s in %s on line %u%s%s".
+            let mut log = format!("PHP {lbl}:  ").into_bytes();
+            log.extend_from_slice(&php_log::escape_nul_for_log(msg));
+            log.extend_from_slice(b" in ");
+            log.extend_from_slice(file.as_bytes());
+            log.extend_from_slice(format!(" on line {line}{trace}").as_bytes());
+            self.log_err_with_severity(&log, php_log::severity_of_error_type(level));
         }
         let de = self
             .ini
@@ -510,37 +512,6 @@ impl Vm {
         out.extend_from_slice(format!(" in {file_s} on line {line}{trace}\n").as_bytes());
         out.extend_from_slice(&append);
         self.echo(&out);
-    }
-
-    /// Writes to the error log (stderr in the CLI, or the `error_log` file).
-    pub(crate) fn log_error(&mut self, msg: &str) {
-        let target = self
-            .ini
-            .get("error_log")
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
-        if !target.is_empty() && target != b"syslog" {
-            if let Ok(path) = std::str::from_utf8(&target) {
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                {
-                    let now = crate::builtins::log_time_string(self);
-                    let _ =
-                        std::io::Write::write_all(&mut f, format!("[{now}] {msg}\n").as_bytes());
-                    return;
-                }
-            }
-        }
-        // `sapi_module.log_message`: a SAPI may route the log itself.
-        if let Some(mut hook) = self.log_hook.take() {
-            hook(msg.as_bytes());
-            self.log_hook = Some(hook);
-            return;
-        }
-        self.flush_stdout();
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{msg}\n").as_bytes());
     }
 
     /// Reports a fatal error at the current location and returns the bailout.

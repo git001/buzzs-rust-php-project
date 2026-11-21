@@ -28,6 +28,7 @@ pub mod fmt;
 pub mod ini;
 mod numeric;
 pub mod output;
+pub mod time;
 
 pub use diag::{Diagnostic, ErrorLevel};
 pub use numeric::{atol, is_numeric_str, NumericValue};

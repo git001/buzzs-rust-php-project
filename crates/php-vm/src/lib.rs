@@ -41,6 +41,7 @@ pub mod include;
 pub mod interrupt;
 mod iter;
 mod lazy;
+mod log;
 pub mod object;
 mod observer;
 pub mod opcode;

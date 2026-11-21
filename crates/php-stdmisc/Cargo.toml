@@ -11,6 +11,7 @@ php-runtime = { path = "../php-runtime" }
 php-lexer = { path = "../php-lexer" }
 php-hash = { path = "../php-hash" }
 php-random = { path = "../php-random" }
+php-log = { path = "../php-log" }
 libc = "0.2"
 
 [lints]

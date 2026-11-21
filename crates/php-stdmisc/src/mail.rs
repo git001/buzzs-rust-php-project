@@ -3,12 +3,12 @@
 //! `mail()` (`ext/standard/mail.c`): additional-header building and
 //! validation (array form), `To`/`Subject` sanitising, `mail.log`,
 //! `mail.add_x_header`, `mail.cr_lf_mode`, and the `sendmail_path`
-//! invocation through `/bin/sh -c`; plus `error_log()` and
-//! `php_log_err()` (`ext/standard/basic_functions.c`, `main/main.c`).
+//! invocation through `/bin/sh -c`; plus `error_log()`
+//! (`ext/standard/basic_functions.c`), which logs through
+//! [`php_log::php_log_err_with_severity`].
 
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 
@@ -244,6 +244,8 @@ pub struct MailSettings {
     pub cr_lf_mode: Vec<u8>,
     /// `mail.mixed_lf_and_crlf`.
     pub mixed_lf_and_crlf: bool,
+    /// `syslog.*`, for `mail.log = syslog`.
+    pub syslog: php_log::SyslogSettings,
 }
 
 /// What `mail()` needs to know about the running script.
@@ -266,34 +268,6 @@ pub enum HeadersArg<'a> {
     Str(&'a [u8]),
     /// An array.
     Array(&'a ZArray),
-}
-
-/// The default `d-M-Y H:i:s e` formatter (UTC), used by `mail.log` and
-/// `error_log` files when the VM has no date extension hook.
-#[must_use]
-pub fn format_log_date_utc(ts: i64) -> String {
-    const MON: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let days = ts.div_euclid(86_400);
-    let secs = ts.rem_euclid(86_400);
-    // Howard Hinnant's civil_from_days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!(
-        "{d:02}-{}-{y} {:02}:{:02}:{:02} UTC",
-        MON[usize::try_from(m - 1).unwrap_or(0)],
-        secs / 3600,
-        (secs / 60) % 60,
-        secs % 60
-    )
 }
 
 /// `mail($to, $subject, $message, $additional_headers, $additional_params)`.
@@ -479,7 +453,7 @@ pub fn php_mail_ex<C: RuntimeContext + ?Sized>(
             logline = logline.replace(['\r', '\n'], " ");
         }
         if settings.log == b"syslog" {
-            sys::syslog(libc::LOG_NOTICE, logline.as_bytes());
+            php_log::syslog::php_syslog(libc::LOG_NOTICE, logline.as_bytes(), &settings.syslog);
         } else {
             let line = format!("[{}] {logline}\n", log_date(sys::now()));
             log_file(ctx, &settings.log, line.as_bytes())?;
@@ -615,95 +589,19 @@ pub fn php_mail_ex<C: RuntimeContext + ?Sized>(
 
 // ---------------------------------------------------------------- error_log
 
-/// Where log messages go besides files (`sapi_module.log_message`,
-/// syslog) and how dates are formatted.
-pub trait LogTarget {
-    /// `sapi_module.log_message` (the CLI writes `message\n` to stderr).
-    /// Returns `false` if the SAPI has no logger.
-    fn sapi_log_message(&mut self, message: &[u8]) -> bool;
-
-    /// `php_syslog(priority, "%s", message)`.
-    fn syslog(&mut self, priority: i32, message: &[u8]) {
-        sys::syslog(priority, message);
-    }
-
-    /// `php_format_date("d-M-Y H:i:s e", now)` in the default timezone.
-    fn format_date(&mut self, ts: i64) -> String {
-        format_log_date_utc(ts)
-    }
-}
-
-/// The CLI SAPI's logger: `message\n` on stderr.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CliLogTarget;
-
-impl LogTarget for CliLogTarget {
-    fn sapi_log_message(&mut self, message: &[u8]) -> bool {
-        let mut e = std::io::stderr().lock();
-        let _ = e.write_all(message.split(|&c| c == 0).next().unwrap_or_default());
-        let _ = e.write_all(b"\n");
-        true
-    }
-}
-
-/// The `error_log` / `error_log_mode` INI settings.
-#[derive(Debug, Clone, Default)]
-pub struct ErrorLogSettings {
-    /// `error_log` (file path, `syslog`, or `None`).
-    pub error_log: Option<Vec<u8>>,
-    /// `error_log_mode` (file creation mode, default 0644).
-    pub error_log_mode: i64,
-}
-
-/// `php_log_err_with_severity()`: writes `"[date] message\n"` to the
-/// `error_log` file, or to syslog, or falls back to the SAPI logger.
-pub fn php_log_err(
-    message: &[u8],
-    severity: i32,
-    settings: &ErrorLogSettings,
-    target: &mut dyn LogTarget,
-) {
-    let message = message.split(|&c| c == 0).next().unwrap_or_default();
-    if let Some(path) = &settings.error_log {
-        if path == b"syslog" {
-            target.syslog(severity, message);
-            return;
-        }
-        let mode = if (1..=0o777).contains(&settings.error_log_mode) {
-            u32::try_from(settings.error_log_mode).unwrap_or(0o644)
-        } else {
-            0o644
-        };
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .mode(mode)
-            .open(std::ffi::OsStr::from_bytes(path))
-        {
-            let mut line = format!("[{}] ", target.format_date(sys::now())).into_bytes();
-            line.extend_from_slice(message);
-            line.push(b'\n');
-            let _ = f.write_all(&line);
-            return;
-        }
-    }
-    target.sapi_log_message(message);
-}
-
 /// `error_log($message, $message_type, $destination, $additional_headers)`.
 /// Type 1 mails through [`php_mail`]; type 3 appends to `destination`
 /// (plain files; the VM handles stream wrappers itself if needed).
 #[allow(clippy::too_many_arguments)]
-pub fn error_log(
+pub fn error_log<C: RuntimeContext + php_log::LogHost>(
     message: &[u8],
     message_type: i64,
     destination: Option<&[u8]>,
     headers: Option<&[u8]>,
-    settings: &ErrorLogSettings,
+    error_log_setting: Option<&[u8]>,
     mail_settings: &MailSettings,
     script: &ScriptInfo,
-    target: &mut dyn LogTarget,
-    ctx: &mut (impl RuntimeContext + ?Sized),
+    ctx: &mut C,
 ) -> RtResult<bool> {
     if destination.is_some_and(|d| d.contains(&0)) {
         return Err(RuntimeError::ValueError(
@@ -715,7 +613,9 @@ pub fn error_log(
             let Some(to) = destination else {
                 return Ok(false);
             };
-            let date = |ts: i64| format_log_date_utc(ts);
+            // `mail.log` dates the line in the default timezone.
+            let now = ctx.log_date();
+            let date = move |_: i64| now.clone();
             php_mail(
                 to,
                 b"PHP error_log message",
@@ -752,9 +652,12 @@ pub fn error_log(
                 }
             }
         }
-        4 => Ok(target.sapi_log_message(message)),
+        4 => {
+            ctx.sapi_log_message(message.split(|&c| c == 0).next().unwrap_or_default(), -1);
+            Ok(true)
+        }
         _ => {
-            php_log_err(message, libc::LOG_NOTICE, settings, target);
+            php_log::php_log_err_with_severity(message, libc::LOG_NOTICE, error_log_setting, ctx);
             Ok(true)
         }
     }

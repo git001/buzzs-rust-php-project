@@ -675,6 +675,7 @@ dependencies = [
 name = "php-ext-mbstring"
 version = "0.1.0"
 dependencies = [
+ "php-ext-stdmisc",
  "php-ext-streams",
  "php-mbstring",
  "php-memlimit",
@@ -897,6 +898,7 @@ dependencies = [
  "php-ext-streams",
  "php-filter",
  "php-lexer",
+ "php-log",
  "php-runtime",
  "php-stdmisc",
  "php-streams",
@@ -1120,6 +1122,14 @@ name = "php-libxml"
 version = "0.1.0"
 
 [[package]]
+name = "php-log"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "php-support",
+]
+
+[[package]]
 name = "php-mbstring"
 version = "0.1.0"
 
@@ -1329,6 +1339,7 @@ dependencies = [
  "libc",
  "php-hash",
  "php-lexer",
+ "php-log",
  "php-random",
  "php-runtime",
 ]
@@ -1368,6 +1379,7 @@ version = "0.1.0"
 dependencies = [
  "php-hash",
  "php-lexer",
+ "php-log",
  "php-mbstring",
  "php-memlimit",
  "php-parser",
