@@ -10,64 +10,39 @@
 //! (whose port lives in [`php_sapi_input::rfc1867`]).
 
 use crate::util::E_WARNING;
-use php_cli_server::vars::{content_type_key, display_errors};
 use php_ext_streams::res;
 use php_runtime::{Value, ZArray, ZStr};
+use php_sapi_input::body::{self, RequestBody, SapiInput};
 use php_sapi_input::rfc1867::{self, RegValue, Target, UploadSettings};
-use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
+use php_sapi_input::vars::{content_type_key, input_settings, tmp_dirs};
+use php_stdmisc::query::{self, ParseKind, RegisterOptions};
 use php_streams::stream::Stream;
 use php_vm::ext::{Args, VmResult};
 use php_vm::Vm;
-use std::path::PathBuf;
+use std::cell::RefCell;
 
 /// The function name `php_error_docref()` prefixes warnings with.
 const FUNC: &str = "zend_test_handle_post_data";
-
-/// `SAPI_POST_BLOCK_SIZE` (`main/SAPI.h`).
-const SAPI_POST_BLOCK_SIZE: usize = 0x4000;
 
 /// `DEFAULT_POST_CONTENT_TYPE`.
 const FORM_URLENCODED: &[u8] = b"application/x-www-form-urlencoded";
 /// `MULTIPART_CONTENT_TYPE`.
 const MULTIPART: &[u8] = b"multipart/form-data";
 
-/// What `sapi_read_standard_form_data()` buffered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FormData {
-    /// `SG(request_info).request_body`.
-    pub body: Vec<u8>,
-    /// Reading stopped because `SG(read_post_bytes)` exceeded
-    /// `post_max_size` (the "Actual POST length" warning).
-    pub exceeded: bool,
+/// The stream as the request body: `zend_test_read_post` as
+/// `sapi_module.read_post`.
+struct StreamBody<'a> {
+    body: RequestBody,
+    stream: RefCell<&'a mut Stream>,
 }
 
-/// The read loop of `sapi_read_standard_form_data()`: reads
-/// `SAPI_POST_BLOCK_SIZE` blocks until a short read, or until more than
-/// `post_max_size` bytes were read (the block that crossed the limit is
-/// kept, as PHP keeps it in the request body).
-pub(crate) fn read_standard_form_data(
-    post_max_size: i64,
-    read: &mut dyn FnMut(&mut [u8]) -> usize,
-) -> FormData {
-    let mut body = Vec::new();
-    let mut block = vec![0u8; SAPI_POST_BLOCK_SIZE];
-    let mut read_bytes: i64 = 0;
-    loop {
-        let n = read(&mut block).min(SAPI_POST_BLOCK_SIZE);
-        body.extend_from_slice(&block[..n]);
-        read_bytes = read_bytes.saturating_add(i64::try_from(n).unwrap_or(i64::MAX));
-        if post_max_size > 0 && read_bytes > post_max_size {
-            return FormData {
-                body,
-                exceeded: true,
-            };
-        }
-        if n < SAPI_POST_BLOCK_SIZE {
-            return FormData {
-                body,
-                exceeded: false,
-            };
-        }
+impl SapiInput for StreamBody<'_> {
+    fn body(&self) -> &RequestBody {
+        &self.body
+    }
+
+    fn read_post(&self, buf: &mut [u8]) -> usize {
+        read_full(&mut self.stream.borrow_mut(), buf)
     }
 }
 
@@ -80,34 +55,7 @@ fn warn(vm: &mut Vm, message: &str, docref: bool) -> VmResult<()> {
     }
 }
 
-fn input_settings(vm: &Vm) -> InputSettings {
-    let sep = vm.ini_string("arg_separator.input").unwrap_or_default();
-    InputSettings {
-        arg_separator_input: if sep.is_empty() { b"&".to_vec() } else { sep },
-        max_input_vars: vm.ini_long("max_input_vars"),
-        max_input_nesting_level: vm.ini_long("max_input_nesting_level"),
-        display_errors: display_errors(vm),
-    }
-}
-
-/// `php_get_temporary_directory()` candidates, in order.
-fn tmp_dirs(vm: &Vm) -> Vec<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let mut dirs = Vec::new();
-    for name in ["upload_tmp_dir", "sys_temp_dir"] {
-        let v = vm.ini_string(name).unwrap_or_default();
-        if !v.is_empty() {
-            dirs.push(PathBuf::from(std::ffi::OsStr::from_bytes(&v)));
-        }
-    }
-    if let Some(t) = std::env::var_os("TMPDIR").filter(|t| !t.is_empty()) {
-        dirs.push(PathBuf::from(t));
-    }
-    dirs.push(PathBuf::from("/tmp"));
-    dirs
-}
-
-fn upload_settings(vm: &Vm) -> UploadSettings {
+fn upload_settings(vm: &mut Vm) -> UploadSettings {
     UploadSettings {
         max_file_uploads: vm.ini_long("max_file_uploads"),
         max_multipart_body_parts: vm.ini_long("max_multipart_body_parts"),
@@ -191,13 +139,18 @@ fn handle(
         );
     }
     let data = res::with_stream(vm, cell, |s| {
-        let mut read = |buf: &mut [u8]| read_full(s, buf);
-        read_standard_form_data(post_max_size, &mut read)
+        let input = StreamBody {
+            body: RequestBody::new(),
+            stream: RefCell::new(s),
+        };
+        let exceeded = body::buffer_rest(&input, post_max_size);
+        let buffered = body::request_body(&input).map(|b| b.to_vec());
+        (buffered.unwrap_or_default(), exceeded)
     })?;
-    let Some(data) = data else {
+    let Some((data, exceeded)) = data else {
         return Ok(());
     };
-    if data.exceeded {
+    if exceeded {
         warn(
             vm,
             &format!(
@@ -209,7 +162,7 @@ fn handle(
     if key == FORM_URLENCODED {
         // php_std_post_handler over the buffered body.
         let settings = input_settings(vm);
-        query::treat_data(ParseKind::Post, &data.body, post, &settings, FUNC, None, vm)
+        query::treat_data(ParseKind::Post, &data, post, &settings, FUNC, None, vm)
             .map_err(|e| vm.throw_runtime_error(e))?;
     }
     Ok(())
@@ -250,46 +203,4 @@ pub(crate) fn handle_post_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     publish(vm, b"_POST", post);
     publish(vm, b"_FILES", files);
     result.map(|()| Value::Null)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn reader(data: &[u8]) -> impl FnMut(&mut [u8]) -> usize + '_ {
-        let mut pos = 0;
-        move |buf: &mut [u8]| {
-            let n = buf.len().min(data.len() - pos);
-            buf[..n].copy_from_slice(&data[pos..pos + n]);
-            pos += n;
-            n
-        }
-    }
-
-    #[test]
-    fn standard_form_data_reads_whole_short_body() {
-        let mut read = reader(b"a=hello");
-        let got = read_standard_form_data(100 * 1024, &mut read);
-        assert_eq!(got.body, b"a=hello");
-        assert!(!got.exceeded);
-    }
-
-    #[test]
-    fn standard_form_data_stops_after_the_block_crossing_post_max_size() {
-        let data = vec![b'a'; 1024 * 1024];
-        let mut read = reader(&data);
-        let got = read_standard_form_data(100 * 1024, &mut read);
-        assert!(got.exceeded);
-        // Seven 16 KiB blocks: the first total above 100 KiB.
-        assert_eq!(got.body.len(), 7 * SAPI_POST_BLOCK_SIZE);
-    }
-
-    #[test]
-    fn standard_form_data_without_limit_reads_everything() {
-        let data = vec![b'x'; 3 * SAPI_POST_BLOCK_SIZE + 5];
-        let mut read = reader(&data);
-        let got = read_standard_form_data(0, &mut read);
-        assert!(!got.exceeded);
-        assert_eq!(got.body.len(), data.len());
-    }
 }

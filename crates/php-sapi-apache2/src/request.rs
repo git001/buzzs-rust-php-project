@@ -20,6 +20,7 @@ use crate::backend::{Backend, IntField, StrField, Table, TableOp};
 use crate::config::ProcessConfig;
 use crate::headers::{HeaderFacts, HeaderOp, SapiHeaders};
 use php_runtime::{Value, ZStr};
+use php_sapi_input::body::{RequestBody, SapiInput};
 use php_support::output::{status as output_status, OutputHost};
 use php_vm::{Throw, Vm, VmOptions, VmResult};
 use std::cell::{Cell, RefCell};
@@ -28,9 +29,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-
-/// `SAPI_POST_BLOCK_SIZE`.
-pub const POST_BLOCK_SIZE: usize = 0x4000;
 
 /// `PHP_CONNECTION_ABORTED`.
 pub const CONNECTION_ABORTED: i64 = 1;
@@ -174,18 +172,6 @@ pub fn thread_cpu_ns() -> i64 {
         .saturating_add(ts.tv_nsec)
 }
 
-/// `SG(request_info).request_body`: the buffer `php://input` reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Body {
-    /// Not created yet: `php://input` reads what the server still has (the
-    /// multipart parser reads the server directly and leaves no buffer;
-    /// what it consumed is gone).
-    Unread,
-    /// Read by `sapi_read_standard_form_data()` (at startup or for
-    /// `request_parse_body()`) or by `php://input`.
-    Buffered(Vec<u8>),
-}
-
 /// State of one request shared by the VM thread's components.
 pub struct RequestCtx {
     /// The web server side.
@@ -211,21 +197,50 @@ pub struct RequestCtx {
     /// assigns `PG(connection_status) = PHP_CONNECTION_ABORTED`, dropping
     /// the `PHP_CONNECTION_TIMEOUT` bit of earlier timeouts.
     timeouts_at_abort: Cell<u64>,
-    /// The request body.
-    pub body: RefCell<Body>,
+    /// The request body read so far (`SG(request_info).request_body`,
+    /// `SG(read_post_bytes)`).
+    pub body: RequestBody,
     /// Whether `ap_setup_client_block` ran (and whether a body follows).
     body_ready: Cell<Option<bool>>,
-    /// Bytes of the body read so far (`SG(read_post_bytes)`).
-    pub read_post_bytes: Cell<i64>,
-    /// Temporary files of uploads a later multipart parse
-    /// (`request_parse_body()`) dropped from `SG(rfc1867_uploaded_files)`:
-    /// no longer uploaded files, deleted at request end (php-src leaks
-    /// them).
-    pub orphaned_uploads: RefCell<Vec<PathBuf>>,
     /// `max_execution_time` timer.
     pub timer: Arc<Timer>,
     /// `header_register_callback()` callable (`SG(send_header_fcc)`).
     pub header_callback: RefCell<Option<Value>>,
+}
+
+impl SapiInput for RequestCtx {
+    fn body(&self) -> &RequestBody {
+        &self.body
+    }
+
+    /// `sapi_module.read_post()`: fills `buf` as far as possible; returns
+    /// the number of bytes read (0 at the end).
+    fn read_post(&self, buf: &mut [u8]) -> usize {
+        if self.aborted.get() || self.backend.int_field(IntField::Aborted) != 0 {
+            self.note_abort();
+            return 0;
+        }
+        if !self.body_available() {
+            return 0;
+        }
+        let mut total = 0;
+        while total < buf.len() {
+            if self.backend.int_field(IntField::Aborted) != 0 {
+                self.note_abort();
+                break;
+            }
+            let n = self.backend.body_read(&mut buf[total..]);
+            let Ok(n) = usize::try_from(n) else {
+                self.note_abort();
+                break;
+            };
+            if n == 0 {
+                break;
+            }
+            total += n;
+        }
+        total
+    }
 }
 
 impl std::fmt::Debug for RequestCtx {
@@ -285,10 +300,8 @@ impl RequestCtx {
             aborted: Cell::new(is_aborted),
             abort_handled: Cell::new(false),
             timeouts_at_abort: Cell::new(0),
-            body: RefCell::new(Body::Unread),
+            body: RequestBody::new(),
             body_ready: Cell::new(None),
-            read_post_bytes: Cell::new(0),
-            orphaned_uploads: RefCell::new(Vec::new()),
             timer,
             header_callback: RefCell::new(None),
         }
@@ -435,65 +448,6 @@ impl RequestCtx {
         ok
     }
 
-    /// `sapi_module.read_post()`: fills `buf` as far as possible; returns
-    /// the number of bytes read (0 at the end).
-    pub fn read_post(&self, buf: &mut [u8]) -> usize {
-        if self.aborted.get() || self.backend.int_field(IntField::Aborted) != 0 {
-            self.note_abort();
-            return 0;
-        }
-        if !self.body_available() {
-            return 0;
-        }
-        let mut total = 0;
-        while total < buf.len() {
-            if self.backend.int_field(IntField::Aborted) != 0 {
-                self.note_abort();
-                break;
-            }
-            let n = self.backend.body_read(&mut buf[total..]);
-            let Ok(n) = usize::try_from(n) else {
-                self.note_abort();
-                break;
-            };
-            if n == 0 {
-                break;
-            }
-            total += n;
-        }
-        self.read_post_bytes
-            .set(self.read_post_bytes.get() + i64::try_from(total).unwrap_or(0));
-        total
-    }
-
-    /// Reads the rest of the body.
-    pub fn read_rest(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut buf = vec![0u8; POST_BLOCK_SIZE];
-        loop {
-            let n = self.read_post(&mut buf);
-            out.extend_from_slice(&buf[..n]);
-            if n < buf.len() {
-                break;
-            }
-        }
-        out
-    }
-
-    /// The body for `php://input`: the request body buffer, created on
-    /// first use from what the server still has (`php_stream_input_read()`).
-    pub fn input(&self) -> Vec<u8> {
-        let current = self.body.borrow().clone();
-        match current {
-            Body::Buffered(b) => b,
-            Body::Unread => {
-                let b = self.read_rest();
-                *self.body.borrow_mut() = Body::Buffered(b.clone());
-                b
-            }
-        }
-    }
-
     /// Re-reads the INI values cached by the SAPI (default content type,
     /// timer limit is handled by the callers).
     pub fn refresh_facts(&self, vm: &Vm) {
@@ -636,16 +590,6 @@ pub fn is_fatal_level(level: i64) -> bool {
     matches!(level, 1 | 4 | 64 | 256 | 4096)
 }
 
-/// `PG(display_errors)` as a boolean.
-pub fn display_errors(vm: &Vm) -> bool {
-    let v = vm.ini_string("display_errors").unwrap_or_default();
-    let v = v.to_ascii_lowercase();
-    match v.as_slice() {
-        b"on" | b"yes" | b"true" | b"stdout" | b"stderr" => true,
-        _ => crate::headers::strtol(&v) != 0,
-    }
-}
-
 /// The 500 status of `php_error_cb` for a fatal error with
 /// `display_errors` off, applied when the request's last error is fatal.
 pub fn apply_fatal_status(vm: &Vm) {
@@ -653,7 +597,7 @@ pub fn apply_fatal_status(vm: &Vm) {
         .last_error
         .as_ref()
         .is_some_and(|e| is_fatal_level(e.level));
-    if !fatal || display_errors(vm) {
+    if !fatal || php_sapi_input::vars::display_errors(vm) {
         return;
     }
     with_ctx(|ctx| {
@@ -825,15 +769,7 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
             let line = format!("X-Powered-By: PHP/{}", php_vm::PHP_VERSION);
             let _ = ctx.header_op(HeaderOp::Replace(line.as_bytes(), 0));
         }
-        crate::vars::populate(
-            vm,
-            &ctx,
-            &crate::vars::Auth {
-                user,
-                password,
-                digest,
-            },
-        );
+        php_sapi_input::vars::populate(vm, &*ctx);
         install_input_hook();
         vm.shutdown_functions
             .insert(0, (Value::from(crate::functions::FATAL_CHECK), Vec::new()));
@@ -905,7 +841,7 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
     apply_fatal_status(vm);
     php_header(vm);
     php_sapi_input::rfc1867::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    php_sapi_input::rfc1867::cleanup(&ctx.orphaned_uploads.take());
+    php_sapi_input::rfc1867::cleanup(&ctx.body.take_orphaned_uploads());
 }
 
 /// Makes `php://input` read the request body through the SAPI (the
@@ -921,7 +857,9 @@ fn install_input_hook() {
         executed_filename: Some(Box::new(|| {
             with_vm(|vm| vm.current_location().0.as_bytes().to_vec())
         })),
-        request_body: Some(Box::new(|| with_ctx(|c| c.input()).unwrap_or_default())),
+        request_body: Some(Box::new(|| {
+            with_ctx(php_sapi_input::body::input).unwrap_or_default()
+        })),
     });
     php_streams::state::update_settings(|s| s.sapi_is_cli = false);
 }
@@ -1078,9 +1016,9 @@ mod tests {
         let m = MockBackend::default();
         m.body_in.borrow_mut().extend_from_slice(b"abc");
         let ctx = RequestCtx::new(Box::new(m), Arc::new(Timer::default()));
-        assert_eq!(ctx.input(), b"abc");
-        assert_eq!(ctx.input(), b"abc");
-        assert_eq!(ctx.read_post_bytes.get(), 3);
+        assert_eq!(php_sapi_input::body::input(&ctx), b"abc");
+        assert_eq!(php_sapi_input::body::input(&ctx), b"abc");
+        assert_eq!(ctx.body.read_post_bytes(), 3);
     }
 
     #[test]

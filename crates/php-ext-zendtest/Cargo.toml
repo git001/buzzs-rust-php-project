@@ -15,7 +15,6 @@ php-memlimit = { path = "../php-memlimit" }
 php-streams = { path = "../php-streams" }
 php-ext-streams = { path = "../php-ext-streams" }
 php-stdmisc = { path = "../php-stdmisc" }
-php-cli-server = { path = "../php-cli-server" }
 php-sapi-input = { path = "../php-sapi-input" }
 php-ext-uri = { path = "../php-ext-uri" }
 libc = "0.2"

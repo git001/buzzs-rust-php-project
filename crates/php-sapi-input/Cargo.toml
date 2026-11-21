@@ -8,9 +8,13 @@ rust-version.workspace = true
 
 [dependencies]
 php-vm = { path = "../php-vm" }
+php-runtime = { path = "../php-runtime" }
+php-stdmisc = { path = "../php-stdmisc" }
 php-sapi = { path = "../php-sapi" }
 php-support = { path = "../php-support" }
 php-memlimit = { path = "../php-memlimit" }
+php-streams = { path = "../php-streams" }
+php-ext-streams = { path = "../php-ext-streams" }
 libc = "0.2"
 memchr = "2.8"
 

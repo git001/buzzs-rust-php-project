@@ -1007,7 +1007,6 @@ name = "php-ext-zendtest"
 version = "0.1.0"
 dependencies = [
  "libc",
- "php-cli-server",
  "php-ext-streams",
  "php-ext-uri",
  "php-memlimit",
@@ -1272,8 +1271,12 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "memchr",
+ "php-ext-streams",
  "php-memlimit",
+ "php-runtime",
  "php-sapi",
+ "php-stdmisc",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
