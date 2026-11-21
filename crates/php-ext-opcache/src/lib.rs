@@ -13,7 +13,7 @@ use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::compiler::CompiledUnit;
 use php_vm::ext::{Args, Extension, InfoItem, ModuleBuilder, NativeFn, Throw, VmResult};
-use php_vm::include::CompileOutcome;
+use php_vm::include::{CacheAnswer, CompileOutcome};
 use php_vm::Vm;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -1306,16 +1306,43 @@ fn lookup(
 fn opcache_precompiled_hook(
     vm: &mut Vm,
     filename: &ZStr,
-) -> VmResult<Option<Rc<php_vm::compiler::CompiledUnit>>> {
+) -> VmResult<CacheAnswer<Rc<php_vm::compiler::CompiledUnit>>> {
     sync_preload_stats();
     let Some(Probed::Cacheable(p)) = probe(vm, filename) else {
-        return Ok(None);
+        return Ok(CacheAnswer::Miss);
     };
-    let unit = lookup(vm, &p, filename)?;
-    if unit.is_none() {
-        LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some(filename.clone()));
+    if !p.file_cache_only && access_refused(vm, &p.real_str) {
+        return Ok(CacheAnswer::Refused);
     }
-    Ok(unit)
+    if let Some(unit) = lookup(vm, &p, filename)? {
+        return Ok(CacheAnswer::Hit(unit));
+    }
+    LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some(filename.clone()));
+    Ok(CacheAnswer::Miss)
+}
+
+/// `opcache.validate_permission`: whether the include of a script in the
+/// in-memory cache is refused because its file is no longer readable
+/// (`check_persistent_script_access`), checked before the lookup counts a
+/// hit or a miss. Only an include asks: the compile hook gets source the
+/// VM could read.
+fn access_refused(vm: &Vm, key: &str) -> bool {
+    vm.ini_bool("opcache.validate_permission")
+        && GLOBAL_CACHE.with(|c| c.borrow().is_cached(key))
+        && !script_readable(key.as_bytes())
+}
+
+/// `access(R_OK)` on a cached script's file; for a script inside a phar,
+/// on the archive (the path up to `.phar`).
+fn script_readable(path: &[u8]) -> bool {
+    let file = match path.strip_prefix(b"phar://") {
+        Some(rest) if path.len() >= b"phar://.phar".len() => rest
+            .windows(b".phar/".len())
+            .position(|w| w == b".phar/")
+            .map_or(rest, |i| &rest[..i + b".phar".len()]),
+        _ => path,
+    };
+    php_streams::sys::access(file, php_streams::sys::R_OK).is_ok()
 }
 
 /// The compile hook overriding `compile_source` for files.
@@ -1471,13 +1498,16 @@ fn load_cached_unit(
 /// looks the script up by its key before opening the file, so with
 /// `opcache.validate_timestamps=0` a cached script runs even after its file
 /// was deleted (until `opcache_invalidate()`).
-fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>> {
+fn opcache_cached_include(
+    vm: &mut Vm,
+    name: &[u8],
+) -> VmResult<CacheAnswer<(ZStr, Rc<CompiledUnit>)>> {
     use std::os::unix::ffi::OsStrExt;
     if !vm.opcache_enabled()
         || vm.ini_bool("opcache.file_cache_only")
         || vm.ini_bool("opcache.validate_timestamps")
     {
-        return Ok(None);
+        return Ok(CacheAnswer::Miss);
     }
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
     let full = if path.is_absolute() {
@@ -1485,7 +1515,7 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
     } else {
         match std::env::current_dir() {
             Ok(cwd) => cwd.join(path),
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(CacheAnswer::Miss),
         }
     };
     // The file is gone: resolve its directory.
@@ -1496,6 +1526,9 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
         _ => full,
     };
     let key = key.to_string_lossy().into_owned();
+    if access_refused(vm, &key) {
+        return Ok(CacheAnswer::Refused);
+    }
     let now_sec = now_sec();
     let hit = GLOBAL_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
@@ -1508,14 +1541,14 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
         }
     });
     let Some(unit) = hit else {
-        return Ok(None);
+        return Ok(CacheAnswer::Miss);
     };
     unit.clear_runtime_caches();
     let filename = ZStr::from(key.as_bytes());
     if vm.ini_bool("opcache.record_warnings") {
         vm.emit_compile_warnings(&unit, &filename)?;
     }
-    Ok(Some((filename, unit)))
+    Ok(CacheAnswer::Hit((filename, unit)))
 }
 
 /// `validate_api_restriction`: with `opcache.restrict_api` set, only a

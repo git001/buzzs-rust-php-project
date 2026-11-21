@@ -22,18 +22,31 @@ pub enum CompileOutcome {
 /// A hook called when compiling file source (`zend_compile_file` override point).
 pub type CompileHookFn = fn(&mut Vm, Rc<[u8]>, &ZStr, bool) -> VmResult<CompileOutcome>;
 
+/// A script cache's answer for an include (`persistent_compile_file`).
+#[derive(Debug)]
+pub enum CacheAnswer<T> {
+    /// Served from the cache.
+    Hit(T),
+    /// Not cached: the VM opens, reads and compiles the file.
+    Miss,
+    /// Cached, but the include is refused (`opcache.validate_permission`:
+    /// the file is no longer readable). The VM reports it as a file that
+    /// cannot be opened, without a reason (`ZMSG_FAILED_INCLUDE_FOPEN`).
+    Refused,
+}
+
 /// A hook that serves an `include` whose file cannot be opened from a
 /// script cache (opcache finds a script by its key before opening the
 /// file, so with `opcache.validate_timestamps=0` a deleted file still
-/// runs). Returns the cached unit and its path.
-pub type CachedIncludeHookFn = fn(&mut Vm, &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>>;
+/// runs). A hit is the cached unit and its path.
+pub type CachedIncludeHookFn =
+    fn(&mut Vm, &[u8]) -> VmResult<CacheAnswer<(ZStr, Rc<CompiledUnit>)>>;
 
 /// A hook asked for a cached unit of an included file before the file is
 /// read (by its opened path): a script cache serves the include without
 /// reading the source, as opcache loads a script before
-/// `zend_stream_fixup` reads it. `None` falls back to reading and
-/// compiling.
-pub type PrecompiledHookFn = fn(&mut Vm, &ZStr) -> VmResult<Option<Rc<CompiledUnit>>>;
+/// `zend_stream_fixup` reads it.
+pub type PrecompiledHookFn = fn(&mut Vm, &ZStr) -> VmResult<CacheAnswer<Rc<CompiledUnit>>>;
 
 /// `tsrm_realpath()` as the stream layer implements it, with
 /// `CWDG(realpath_cache)`: the real path of an existing file, `None` when
@@ -929,9 +942,15 @@ impl Vm {
             }
             if !self.source_filter_may_rewrite(&s) {
                 if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
-                    if let Some(unit) = hook(self, &s)? {
-                        let path = unit.main.code.filename.clone();
-                        return self.include_cached(kind, kind_name, &unit, path, dst);
+                    match hook(self, &s)? {
+                        CacheAnswer::Hit(unit) => {
+                            let path = unit.main.code.filename.clone();
+                            return self.include_cached(kind, kind_name, &unit, path, dst);
+                        }
+                        CacheAnswer::Refused => {
+                            return self.include_failed(kind, kind_name, &s, dst)
+                        }
+                        CacheAnswer::Miss => {}
                     }
                     asked = Some(name);
                 }
@@ -941,8 +960,14 @@ impl Vm {
         let Some(path) = resolved else {
             if !name.is_empty() {
                 if let Some(hook) = CACHED_INCLUDE_HOOK.with(std::cell::Cell::get) {
-                    if let Some((path, unit)) = hook(self, name)? {
-                        return self.include_cached(kind, kind_name, &unit, path, dst);
+                    match hook(self, name)? {
+                        CacheAnswer::Hit((path, unit)) => {
+                            return self.include_cached(kind, kind_name, &unit, path, dst);
+                        }
+                        CacheAnswer::Refused => {
+                            return self.include_failed(kind, kind_name, &s, dst)
+                        }
+                        CacheAnswer::Miss => {}
                     }
                 }
             }
@@ -970,13 +995,17 @@ impl Vm {
         // not asked twice for the same path.
         if asked != Some(real_z.as_bytes()) && !self.source_filter_may_rewrite(&real_z) {
             if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
-                if let Some(unit) = hook(self, &real_z)? {
-                    if self.included_set.insert(real_z.clone()) {
-                        self.included.push(real_z);
+                match hook(self, &real_z)? {
+                    CacheAnswer::Hit(unit) => {
+                        if self.included_set.insert(real_z.clone()) {
+                            self.included.push(real_z);
+                        }
+                        self.declare_hoisted(&unit)?;
+                        self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
+                        return Ok(true);
                     }
-                    self.declare_hoisted(&unit)?;
-                    self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
-                    return Ok(true);
+                    CacheAnswer::Refused => return self.include_failed(kind, kind_name, &s, dst),
+                    CacheAnswer::Miss => {}
                 }
             }
         }
