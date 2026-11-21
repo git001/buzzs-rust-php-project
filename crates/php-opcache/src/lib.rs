@@ -10,7 +10,7 @@
 pub mod blacklist;
 pub mod file_cache;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// The sizes of opcache's script hash table (`zend_accelerator_hash.c`):
 /// `opcache.max_accelerated_files` is rounded up to the next of them.
@@ -109,13 +109,16 @@ pub enum CacheLookup<'a, T> {
 pub struct ScriptCache<T> {
     /// Cached scripts keyed by full canonical path. Changed only through
     /// the methods, which keep [`ScriptCache::used_memory`] in step.
-    pub scripts: HashMap<String, ScriptEntry<T>>,
+    /// Hashed with `FxHash`: every include looks a path up here, and
+    /// `SipHash` took 15 % of a loop of includes; the keys are file names,
+    /// not request data (php-src hashes them unseeded too).
+    pub scripts: FxHashMap<String, ScriptEntry<T>>,
     /// The other keys a script is found under (`accel_make_persistent_key`:
     /// the name it was included by, with the working directory and
     /// `include_path` for a relative one), each naming the full path of
     /// its script: the indirect entries of `ZCSG(hash)`. A key outlives
     /// its script until a reset, as an entry of `ZCSG(hash)` does.
-    keys: HashMap<String, String>,
+    keys: FxHashMap<String, String>,
     /// The number of entries (scripts and keys) the cache holds
     /// (`max_cached_keys`).
     pub max_cached_keys: usize,
@@ -574,8 +577,8 @@ impl<T> ScriptCache<T> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         Self {
-            scripts: HashMap::new(),
-            keys: HashMap::new(),
+            scripts: FxHashMap::default(),
+            keys: FxHashMap::default(),
             start_time: now,
             last_restart_time: 0,
             hits: 0,
