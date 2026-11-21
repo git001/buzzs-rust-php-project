@@ -412,6 +412,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
 
     let mut cl = CommandLine::default();
     let mut source: Option<Vec<u8>> = None;
+    let mut script_argv: Vec<Vec<u8>> = Vec::new();
     if !cgi && !skip_getopt {
         cl = parse_command_line(argv);
         if cl.interactive {
@@ -429,14 +430,20 @@ fn run(argv: &[Vec<u8>]) -> i32 {
             }
             _ => {}
         }
-        let mut optind = cl.optind;
+        let optind = cl.optind.min(argv.len());
         if let Some(f) = &cl.script_file {
+            // `SG(request_info).argv`: the script, then the arguments.
             info.path_translated = Some(f.clone());
+            script_argv = std::iter::once(f.clone())
+                .chain(argv[optind..].iter().cloned())
+                .collect();
         } else if argv.len() > optind {
+            // The script and the arguments after it.
             info.path_translated = Some(argv[optind].clone());
-            optind += 1;
+            script_argv = argv[optind..].to_vec();
         }
-        // The remaining arguments form the query string.
+        // The remaining arguments form the query string; without `-f` the
+        // script is one of them (php_optind is not moved past it).
         if info.query_string.is_none() && argv.len() > optind {
             let sep = cfg
                 .get("arg_separator.input")
@@ -525,6 +532,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         no_chdir: cl.no_chdir,
         php_self,
         source,
+        argv: script_argv,
         ..CgiInfo::default()
     };
     let ctx = Rc::new(RequestCtx::new_cgi(request, cgi_info));

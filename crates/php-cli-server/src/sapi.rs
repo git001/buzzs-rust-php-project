@@ -109,6 +109,9 @@ pub struct CgiInfo {
     pub php_self: Vec<u8>,
     /// Code to run instead of reading `path_translated` (`-i`, `-m`).
     pub source: Option<Vec<u8>>,
+    /// `SG(request_info).argv`: the script and its arguments when they
+    /// are given on the command line (empty otherwise).
+    pub argv: Vec<Vec<u8>>,
     /// `cgi.rfc2616_headers`.
     pub rfc2616_headers: Cell<bool>,
     /// `cgi.nph`.
@@ -906,6 +909,7 @@ fn run_request_inner(
         auth_password: auth.1.clone(),
         auth_digest: auth.2.clone(),
         proto_num: req.protocol_version,
+        argv: ctx.cgi.as_ref().map(|c| c.argv.clone()).unwrap_or_default(),
         ..php_sapi::RequestInfo::default()
     };
     let ob = vm.ini.get_long("output_buffering");

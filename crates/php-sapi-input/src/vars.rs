@@ -73,9 +73,22 @@ fn startup_warning(vm: &mut Vm, message: &str, docref: bool) {
 }
 
 fn set_global(vm: &mut Vm, name: &str, arr: ZArray) {
+    set_global_value(vm, name, Value::Array(arr));
+}
+
+fn set_global_value(vm: &mut Vm, name: &str, value: Value) {
     let mut g = vm.globals.borrow_mut();
     let i = g.find_or_add(name.as_bytes()) as usize;
-    g.slots[i] = Some(Value::Array(arr));
+    g.slots[i] = Some(value);
+}
+
+/// `argv` and `argc` as `php_build_argv()` registers them.
+fn argv_values(args: Vec<Vec<u8>>) -> (Value, Value) {
+    let count = Value::Int(i64::try_from(args.len()).unwrap_or(i64::MAX));
+    let list = Value::Array(ZArray::from_values(
+        args.into_iter().map(|a| Value::Str(ZStr::from(a))),
+    ));
+    (list, count)
 }
 
 /// `php_register_variable_safe()` into `track` during request startup.
@@ -552,6 +565,16 @@ pub fn populate<S: SapiVariables + ?Sized>(vm: &mut Vm, s: &S) {
         }
     }
 
+    // php_hash_environment() → php_build_argv(NULL, NULL): with a command
+    // line (`SG(request_info).argc`, CGI with a script argument) the
+    // globals $argv and $argc.
+    let script_args =
+        (!vm.request_info.argv.is_empty()).then(|| argv_values(vm.request_info.argv.clone()));
+    if let Some((argv, argc)) = &script_args {
+        set_global_value(vm, "argv", argv.clone());
+        set_global_value(vm, "argc", argc.clone());
+    }
+
     // $_GET
     let get = parse_get(vm, &settings, has(b'G'));
 
@@ -617,21 +640,23 @@ pub fn populate<S: SapiVariables + ?Sized>(vm: &mut Vm, s: &S) {
         t.insert("REQUEST_TIME_FLOAT", Value::Float(now));
         #[allow(clippy::cast_possible_truncation)]
         t.insert("REQUEST_TIME", Value::Int(now as i64));
-        if vm.ini_bool("register_argc_argv") {
+        // php_auto_globals_create_server(): the command line's $argv and
+        // $argc, else (deprecated) the query string split on '+'.
+        let args = if let Some(args) = script_args {
+            Some(args)
+        } else if vm.ini_bool("register_argc_argv") {
             let _ = vm.php_deprecated(
                 "Deriving $_SERVER['argv'] from the query string is deprecated. Configure register_argc_argv=0 to turn this message off",
             );
             let q = vm.request_info.query_string.clone().unwrap_or_default();
-            let args = build_argv(c_str(&q));
-            let count = i64::try_from(args.len()).unwrap_or(0);
+            Some(argv_values(build_argv(c_str(&q))))
+        } else {
+            None
+        };
+        if let Some((argv, argc)) = args {
             let t = server.make_mut();
-            t.insert(
-                "argv",
-                Value::Array(ZArray::from_values(
-                    args.into_iter().map(|a| Value::Str(ZStr::from(a))),
-                )),
-            );
-            t.insert("argc", Value::Int(count));
+            t.insert("argv", argv);
+            t.insert("argc", argc);
         }
     }
 
@@ -862,8 +887,8 @@ mod tests {
     /// where neither works.
     #[test]
     fn temporary_files_for_the_body_buffer() {
-        let tmp = std::env::temp_dir();
-        let mut vm = vm_with(&[("upload_tmp_dir", &tmp.to_string_lossy())]);
+        let tmp = php_streams::temp::temp_dir();
+        let mut vm = vm_with(&[("upload_tmp_dir", &String::from_utf8_lossy(&tmp))]);
         assert!(body_spill_possible(&mut vm, Phase::Startup).unwrap());
         let mut vm = vm_with(&[("upload_tmp_dir", "/not-supposed-to-exist")]);
         assert!(body_spill_possible(&mut vm, Phase::Startup).unwrap());
