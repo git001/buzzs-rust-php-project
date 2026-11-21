@@ -1365,6 +1365,22 @@ impl Vm {
         }
     }
 
+    /// Replaces the handler of the native function `name`, keeping its
+    /// signature, as an extension overrides `internal_function.handler` at
+    /// startup (phar's interceptors, opcache's `enable_file_override`).
+    /// Returns the handler it replaced; `None`, replacing nothing, when
+    /// `name` is not a native function.
+    pub fn replace_native_handler(&mut self, name: &str, handler: NativeFn) -> Option<NativeFn> {
+        let current = self.native_function(name)?;
+        let mut replaced = (*current).clone();
+        let orig = std::mem::replace(&mut replaced.handler, handler);
+        self.functions.insert(
+            ZStr::from(name.to_ascii_lowercase()),
+            Func::Builtin(Rc::new(replaced)),
+        );
+        Some(orig)
+    }
+
     /// The currently registered function `name`, if native.
     pub fn native_function(&self, name: &str) -> Option<Rc<Builtin>> {
         match self.functions.get(name.to_ascii_lowercase().as_bytes()) {

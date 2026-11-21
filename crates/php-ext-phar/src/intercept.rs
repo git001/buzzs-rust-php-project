@@ -9,14 +9,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use php_ext_streams::bridge;
 use php_phar::intercept::{self as ic, InterceptStat, StatKind};
-use php_runtime::{Value, ZStr};
+use php_runtime::Value;
 use php_streams::stat::StatBuf;
 use php_vm::ext::{Args, ModuleBuilder, NativeFn, VmResult};
-use php_vm::func::Func;
 use php_vm::Vm;
 
 use crate::util::{bytes, executed};
@@ -32,16 +30,11 @@ fn orig(name: &'static str, vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 }
 
-/// Replaces the handler of `name`, keeping its signature.
+/// Replaces the handler of `name`, keeping the original for [`orig`].
 fn wrap(vm: &mut Vm, name: &'static str, handler: NativeFn) {
-    let Some(b) = vm.native_function(name) else {
-        return;
-    };
-    ORIG.with(|o| o.borrow_mut().insert(name, b.handler));
-    let mut nb = (*b).clone();
-    nb.handler = handler;
-    vm.functions
-        .insert(ZStr::from(name), Func::Builtin(Rc::new(nb)));
+    if let Some(original) = vm.replace_native_handler(name, handler) {
+        ORIG.with(|o| o.borrow_mut().insert(name, original));
+    }
 }
 
 /// The first argument as a path, when it is a string.
