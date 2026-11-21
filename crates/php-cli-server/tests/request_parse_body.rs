@@ -82,6 +82,17 @@ fn start(name: &str, script: &str, ini: &[&str]) -> ServerProc {
 /// Sends `method /test.php` with the body and returns the response body,
 /// the document root replaced by `%ROOT%`.
 fn send(srv: &ServerProc, method: &str, content_type: Option<&str>, body: &[u8]) -> String {
+    send_to(srv, method, "/test.php", content_type, body)
+}
+
+/// [`send`] to `target` (a path with an optional query string).
+fn send_to(
+    srv: &ServerProc,
+    method: &str,
+    target: &str,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut s = loop {
         match TcpStream::connect(("127.0.0.1", srv.port)) {
@@ -94,8 +105,7 @@ fn send(srv: &ServerProc, method: &str, content_type: Option<&str>, body: &[u8])
         }
     };
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-    let mut req =
-        format!("{method} /test.php HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    let mut req = format!("{method} {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
     if let Some(ct) = content_type {
         req.push_str(&format!("Content-Type: {ct}\r\n"));
     }
@@ -1779,4 +1789,41 @@ file one data
         expect: r#"rpb: [{"field1":"value one"},[]]
 "#,
     });
+}
+
+/// `php_auto_globals_create_post()`: a startup warning displayed without
+/// output buffering sends the headers, and then the POST handler does not
+/// run (`$_POST` stays empty); the body is still `php://input`. With
+/// output buffering the headers are not sent yet.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn post_after_headers_sent_at_startup() {
+    let script = "<?php var_dump(count($_GET), $_POST, file_get_contents('php://input'));";
+    let warning = "\nWarning: PHP Request Startup: Input variables exceeded 2. To increase \
+the limit change max_input_vars in php.ini. in Unknown on line 0\n";
+    for (ob, post) in [
+        ("0", "array(0) {\n}\n"),
+        ("4096", "array(1) {\n  [\"x\"]=>\n  string(1) \"1\"\n}\n"),
+    ] {
+        let output_buffering = format!("output_buffering={ob}");
+        let ini = [
+            "max_input_vars=2",
+            "display_errors=1",
+            "html_errors=0",
+            output_buffering.as_str(),
+        ];
+        let srv = start(&format!("post_after_headers_sent_{ob}"), script, &ini);
+        let out = send_to(
+            &srv,
+            "POST",
+            "/test.php?a=1&b=2&c=3",
+            Some("application/x-www-form-urlencoded"),
+            b"x=1",
+        );
+        assert_eq!(
+            out,
+            format!("{warning}int(2)\n{post}string(3) \"x=1\"\n"),
+            "ob={ob}"
+        );
+    }
 }

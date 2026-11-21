@@ -539,7 +539,11 @@ pub fn populate<S: SapiVariables + ?Sized>(vm: &mut Vm, s: &S) {
     let mut files = ZArray::new();
     // `$_COOKIE` parsed early for the upload observer.
     let mut early_cookie: Option<ZArray> = None;
-    if let (Some((ct, key)), true) = (&post_body, has(b'P')) {
+    // php_auto_globals_create_post(): not once the headers were sent, e.g.
+    // by a startup warning displayed without output buffering ($_POST and
+    // $_FILES stay empty; the body read above is still php://input).
+    let handle_post = has(b'P') && !vm.headers_sent;
+    if let (Some((ct, key)), true) = (&post_body, handle_post) {
         match key.as_slice() {
             b"application/x-www-form-urlencoded" => {
                 let _ = handle_urlencoded(vm, s, &limits, Phase::Startup, &mut post);
