@@ -1390,7 +1390,34 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
     Ok(Some((filename, unit)))
 }
 
+/// `validate_api_restriction`: with `opcache.restrict_api` set, only a
+/// script whose path (`SG(request_info).path_translated`) starts with it
+/// may use `opcache_get_status()`, `opcache_get_configuration()`,
+/// `opcache_reset()`, `opcache_invalidate()` and the
+/// `opcache_is_script_cached*()` functions; any other caller gets a
+/// warning and `false`.
+fn api_restricted(vm: &mut Vm) -> VmResult<bool> {
+    let prefix = vm.ini_string("opcache.restrict_api").unwrap_or_default();
+    if prefix.is_empty()
+        || vm
+            .request_info
+            .path_translated
+            .as_ref()
+            .is_some_and(|p| p.starts_with(&prefix))
+    {
+        return Ok(false);
+    }
+    vm.raise(
+        2,
+        "Zend OPcache API is restricted by \"restrict_api\" configuration directive",
+    )?;
+    Ok(true)
+}
+
 fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    if api_restricted(vm)? {
+        return Ok(Value::Bool(false));
+    }
     let enabled = is_opcache_enabled(vm);
     if !enabled || vm.ini_bool("opcache.file_cache_only") {
         return Ok(Value::Bool(false));
@@ -1405,6 +1432,9 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if api_restricted(vm)? {
+        return Ok(Value::Bool(false));
+    }
     sync_preload_stats();
     let include_scripts = if a.has(0) { a.bool(0) } else { true };
     let enabled = is_opcache_enabled(vm);
@@ -1838,6 +1868,9 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if api_restricted(vm)? {
+        return Ok(Value::Bool(false));
+    }
     let filename_z = a.str(0);
     let force = if a.has(1) { a.bool(1) } else { false };
     let enabled = is_opcache_enabled(vm);
@@ -1883,6 +1916,9 @@ fn opcache_jit_blacklist(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    if api_restricted(vm)? {
+        return Ok(Value::Bool(false));
+    }
     let mut config = ZArray::new();
 
     let mut dirs = ZArray::new();
@@ -2145,6 +2181,9 @@ fn opcache_get_configuration(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if api_restricted(vm)? {
+        return Ok(Value::Bool(false));
+    }
     sync_preload_stats();
     let filename_z = a.str(0);
     let enabled = is_opcache_enabled(vm);
@@ -2164,6 +2203,9 @@ fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    if api_restricted(vm)? {
+        return Ok(Value::Bool(false));
+    }
     let filename_z = a.str(0);
     let enabled = vm.ini_bool("opcache.enable")
         && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
