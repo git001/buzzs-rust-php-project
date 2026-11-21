@@ -20,6 +20,7 @@ php-memlimit = { path = "../php-memlimit" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
 php-sapi = { path = "../php-sapi" }
+php-log = { path = "../php-log" }
 php-streams = { path = "../php-streams" }
 php-ext-stdmisc = { path = "../php-ext-stdmisc" }
 php-ext-stdstr = { path = "../php-ext-stdstr" }

@@ -288,7 +288,7 @@ impl Vm {
             magic_call_name: None,
             startup_diagnostics: Vec::new(),
             module_diagnostics: Vec::new(),
-            log_hook: None,
+            sapi_module: std::rc::Rc::new(php_sapi::StderrLog),
             main_return: Value::Null,
             native_stack_base: 0,
             native_stack_size: 8 << 20,

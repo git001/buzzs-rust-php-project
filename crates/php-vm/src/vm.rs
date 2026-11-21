@@ -2307,9 +2307,10 @@ pub struct Vm {
     /// directives (`zend_register_ini_entries` in `MINIT`, e.g. an invalid
     /// quantity given with `-d`); the SAPI reports them once at startup.
     pub module_diagnostics: Vec<php_support::Diagnostic>,
-    /// SAPI log sink for `log_errors` (`sapi_module.log_message`);
-    /// `None` writes to stderr / the `error_log` file.
-    pub log_hook: Option<Box<dyn FnMut(&[u8])>>,
+    /// The running SAPI's callbacks (`sapi_module`): its logger is where
+    /// the error log goes while `error_log` is unset. Stderr by default,
+    /// as in the CLI; a SAPI sets its own with [`Vm::set_sapi_module`].
+    pub(crate) sapi_module: std::rc::Rc<dyn php_sapi::SapiModule>,
     /// The value the main script `return`ed (a router's `false`).
     pub main_return: Value,
     /// Native stack address at the first execution (stack-limit checks).

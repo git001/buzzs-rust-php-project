@@ -7,6 +7,10 @@
 //! the VM keeps it, and extensions read it instead of asking a particular
 //! SAPI.
 
+mod module;
+
+pub use module::{SapiModule, StderrLog};
+
 /// `sapi_request_info`: the request as the SAPI describes it. Strings are
 /// raw bytes; `None` is php-src's `NULL`. Fields a SAPI does not know stay
 /// at their default, as php-src leaves them zeroed.

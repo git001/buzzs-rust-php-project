@@ -1,4 +1,4 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// buzzs-rust-php-project - Copyright (c) 2026 Aleks <al-git001@none.at>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The engine's side of PHP's error log (`main/main.c`): the settings in
 //! effect, the log date in the request's timezone and the SAPI logger.
@@ -43,6 +43,11 @@ impl Vm {
         php_log::date::format_log_date_utc(ts)
     }
 
+    /// Installs the running SAPI's callbacks (`sapi_module`).
+    pub fn set_sapi_module(&mut self, module: std::rc::Rc<dyn php_sapi::SapiModule>) {
+        self.sapi_module = module;
+    }
+
     /// `php_log_err_with_severity(message, severity)`.
     #[cold]
     pub fn log_err_with_severity(&mut self, message: &[u8], severity: i32) {
@@ -64,18 +69,11 @@ impl php_log::LogHost for Vm {
         Vm::syslog_settings(self)
     }
 
-    /// `sapi_module.log_message`: the SAPI's hook, else `message` and a
-    /// newline on stderr (the CLI's logger).
-    fn sapi_log_message(&mut self, message: &[u8], _severity: i32) {
-        if let Some(mut hook) = self.log_hook.take() {
-            hook(message);
-            self.log_hook = Some(hook);
-            return;
-        }
+    /// `sapi_module.log_message`. The VM's own output buffer is flushed
+    /// first, so that the log line follows the output written before it.
+    fn sapi_log_message(&mut self, message: &[u8], severity: i32) {
         self.flush_stdout();
-        let mut line = Vec::with_capacity(message.len() + 1);
-        line.extend_from_slice(message);
-        line.push(b'\n');
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), &line);
+        let module = self.sapi_module.clone();
+        module.log_message(message, severity);
     }
 }

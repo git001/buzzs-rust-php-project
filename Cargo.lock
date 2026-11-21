@@ -413,6 +413,7 @@ dependencies = [
  "php-ext-zendtest",
  "php-ext-zip",
  "php-ext-zlib",
+ "php-log",
  "php-memlimit",
  "php-parser",
  "php-runtime",
