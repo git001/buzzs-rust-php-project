@@ -37,7 +37,7 @@ pub(crate) fn request_startup(_vm: &mut Vm) {
 /// `zend_test_handle_post_data()` parsed (`SG(rfc1867_uploaded_files)`).
 pub(crate) fn request_shutdown(vm: &mut Vm) {
     let old = STATE.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    php_cli_server::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
+    php_sapi_input::rfc1867::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
     drop(old);
 }
 

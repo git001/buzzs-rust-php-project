@@ -922,8 +922,8 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx, r: Result<(), Throw>) {
 /// `destroy_uploaded_files_hash()`: deletes the uploads that were not
 /// moved, and those an earlier hash held.
 fn cleanup_uploads(vm: &mut Vm, ctx: &RequestCtx) {
-    crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
+    php_sapi_input::rfc1867::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
+    php_sapi_input::rfc1867::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// A VM created ahead of its request (module startup is the expensive

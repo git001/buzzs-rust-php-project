@@ -7,13 +7,13 @@
 //! Ref: `ext/zend_test/test.c`, `main/SAPI.c` (`sapi_read_standard_form_data`),
 //! `main/php_content_types.c` (the post entries and the default reader),
 //! `main/php_variables.c` (`php_std_post_handler`) and `main/rfc1867.c`
-//! (whose port lives in [`php_cli_server::multipart`]).
+//! (whose port lives in [`php_sapi_input::rfc1867`]).
 
 use crate::util::E_WARNING;
-use php_cli_server::multipart::{self, RegValue, Target, UploadSettings};
 use php_cli_server::vars::{content_type_key, display_errors};
 use php_ext_streams::res;
 use php_runtime::{Value, ZArray, ZStr};
+use php_sapi_input::rfc1867::{self, RegValue, Target, UploadSettings};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
 use php_streams::stream::Stream;
 use php_vm::ext::{Args, VmResult};
@@ -116,6 +116,7 @@ fn upload_settings(vm: &Vm) -> UploadSettings {
         upload_max_filesize: vm.ini_long("upload_max_filesize"),
         file_uploads: vm.ini_bool("file_uploads"),
         tmp_dirs: tmp_dirs(vm),
+        read_post_bytes: 0,
     }
 }
 
@@ -146,7 +147,7 @@ fn handle(
         let upload = upload_settings(vm);
         let outcome = res::with_stream(vm, cell, |s| {
             let mut read = |buf: &mut [u8]| read_full(s, buf);
-            multipart::parse(content_type, content_length, &upload, &mut read)
+            rfc1867::parse(content_type, content_length, &upload, &mut read)
         })?;
         let Some(outcome) = outcome else {
             return Ok(());
@@ -235,7 +236,7 @@ pub(crate) fn handle_post_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let content_length = a.int(2);
     let cell = res::stream_of_resource(vm, a, &r)?;
     // Tear down what a previous call set up, as the request shutdown would.
-    multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
+    rfc1867::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
     let mut post = ZArray::new();
     let mut files = ZArray::new();
     let result = handle(

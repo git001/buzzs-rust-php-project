@@ -7,11 +7,11 @@
 //! of `request_parse_body()` ([`parse_body`]), which runs the same POST
 //! readers and handlers into fresh arrays.
 
-use crate::multipart::{self, RegValue, Target, UploadSettings};
 use crate::parser::Method;
 use crate::request::Request;
 use crate::sapi::RequestCtx;
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_sapi_input::rfc1867::{self, RegValue, Target, UploadSettings};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
 use php_vm::ext::{ParseBodyOptions, Rfc1867Event};
 use php_vm::{Throw, Vm, VmResult};
@@ -388,7 +388,7 @@ const SAPI_POST_BLOCK_SIZE: usize = 0x4000;
 fn temp_file_possible(dir: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let dir = PathBuf::from(std::ffi::OsStr::from_bytes(dir));
-    match multipart::open_temporary(std::slice::from_ref(&dir)) {
+    match rfc1867::open_temporary(std::slice::from_ref(&dir)) {
         Some((file, path)) => {
             drop(file);
             let _ = std::fs::remove_file(path);
@@ -485,6 +485,8 @@ fn handle_multipart(
         upload_max_filesize: limits.upload_max_filesize,
         file_uploads: vm.ini_bool("file_uploads"),
         tmp_dirs: tmp_dirs(vm),
+        // SG(read_post_bytes): what reads before this parse took.
+        read_post_bytes: i64::try_from(ctx.post_read_offset.get()).unwrap_or(i64::MAX),
     };
     let callback = vm.rfc1867_callback;
     // mbstring's multibyte callbacks (`mbstring.encoding_translation`).
@@ -493,7 +495,7 @@ fn handle_multipart(
     // the new SG(rfc1867_uploaded_files).
     let mut started = false;
     let mut read = |buf: &mut [u8]| ctx.read_post(buf);
-    let outcome = multipart::parse_with_events(
+    let outcome = rfc1867::parse_with_events(
         content_type,
         content_length(ctx),
         &upload,

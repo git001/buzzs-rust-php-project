@@ -1,0 +1,16 @@
+[package]
+name = "php-sapi-input"
+description = "The request input every SAPI shares: main/rfc1867.c (multipart/form-data and uploads) and the SAPI side of main/php_variables.c"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-vm = { path = "../php-vm" }
+php-support = { path = "../php-support" }
+php-memlimit = { path = "../php-memlimit" }
+libc = "0.2"
+
+[lints]
+workspace = true

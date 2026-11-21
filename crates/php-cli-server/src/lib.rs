@@ -22,7 +22,6 @@ pub mod cookie;
 pub mod headers;
 pub mod log;
 pub mod mime;
-pub mod multipart;
 pub mod parser;
 pub mod request;
 pub mod router;

@@ -56,6 +56,11 @@ pub struct UploadSettings {
     /// Directories to try for temporary files, in order (`upload_tmp_dir`,
     /// then the system temporary directory).
     pub tmp_dirs: Vec<PathBuf>,
+    /// `SG(read_post_bytes)` when the parse starts: what earlier reads of
+    /// the body took (a parse at request startup before the one of
+    /// `request_parse_body()`, or `php://input`). The parse counts on from
+    /// there, against `post_max_size` and in what the observer is told.
+    pub read_post_bytes: i64,
 }
 
 impl Default for UploadSettings {
@@ -68,6 +73,7 @@ impl Default for UploadSettings {
             upload_max_filesize: 2 * 1024 * 1024,
             file_uploads: true,
             tmp_dirs: vec![std::env::temp_dir()],
+            read_post_bytes: 0,
         }
     }
 }
@@ -120,7 +126,8 @@ pub struct Outcome {
     pub warnings: Vec<Warning>,
     /// Temporary files of successful uploads (`SG(rfc1867_uploaded_files)`).
     pub uploaded: Vec<PathBuf>,
-    /// Body bytes consumed (`SG(read_post_bytes)`).
+    /// `SG(read_post_bytes)` once the parse is over: the body bytes read
+    /// before it ([`UploadSettings::read_post_bytes`]) plus those it read.
     pub read_bytes: i64,
 }
 
@@ -551,7 +558,7 @@ pub fn normalize_protected_variable(var: &[u8]) -> Vec<u8> {
 }
 
 /// Creates `<dir>/phpXXXXXX` (`php_open_temporary_fd_ex()`).
-pub(crate) fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
+pub fn open_temporary(dirs: &[PathBuf]) -> Option<(std::fs::File, PathBuf)> {
     use std::os::unix::io::FromRawFd;
     for dir in dirs {
         let Ok(dir) = std::fs::canonicalize(dir) else {
@@ -717,7 +724,9 @@ pub fn parse_with_events(
         boundary: full,
         boundary_next: next,
         read,
-        read_bytes: 0,
+        // `fill_buffer()` and `fileupload_done` test SG(read_post_bytes),
+        // which counts the whole request.
+        read_bytes: settings.read_post_bytes,
         post_max_size,
     };
     let mut anonymous_index = 0u32;
@@ -828,7 +837,7 @@ pub fn parse_with_events(
                     }
                 }
                 if normalize_protected_variable(&param).eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
-                    max_file_size = crate::headers::strtol(c_str(&value));
+                    max_file_size = php_support::atol(c_str(&value));
                 }
                 continue;
             }
@@ -1453,5 +1462,75 @@ mod tests {
         assert!(o.registrations.is_empty());
         assert_eq!(log.len(), 2);
         assert_eq!(log[1], "end");
+    }
+
+    #[test]
+    fn a_later_parse_counts_on_from_earlier_reads() {
+        // request_parse_body() after a startup parse: SG(read_post_bytes)
+        // already exceeds post_max_size, so fill_buffer() reads nothing and
+        // fileupload_done warns (sapi_error(), no docref).
+        let mut s = tmp_settings();
+        s.post_max_size = 100;
+        s.read_post_bytes = 150;
+        let mut reads = 0;
+        let mut read = |_: &mut [u8]| {
+            reads += 1;
+            0_usize
+        };
+        let mut seen = Vec::new();
+        let o = parse_with_events(
+            CT.as_bytes(),
+            0,
+            &s,
+            &mut read,
+            &mut |_, bytes| {
+                seen.push(bytes);
+                true
+            },
+            None,
+        );
+        assert_eq!(reads, 0);
+        assert_eq!(o.read_bytes, 150);
+        assert_eq!(seen, [150, 150], "start and end");
+        assert_eq!(
+            o.warnings,
+            [Warning {
+                message: "Actual POST length does not match Content-Length, and exceeds 100 bytes"
+                    .to_string(),
+                docref: false,
+            }]
+        );
+
+        // Below the limit the body is parsed, and the observer sees the
+        // bytes of the whole request.
+        let mut s = tmp_settings();
+        s.read_post_bytes = 40;
+        let mut pos = 0;
+        let mut read = |buf: &mut [u8]| {
+            let n = buf.len().min(PROGRESS_BODY.len() - pos);
+            buf[..n].copy_from_slice(&PROGRESS_BODY[pos..pos + n]);
+            pos += n;
+            n
+        };
+        let mut last = 0;
+        let o = parse_with_events(
+            CT.as_bytes(),
+            i64::try_from(PROGRESS_BODY.len()).unwrap(),
+            &s,
+            &mut read,
+            &mut |_, bytes| {
+                last = bytes;
+                true
+            },
+            None,
+        );
+        assert!(o.warnings.is_empty(), "{:?}", o.warnings);
+        assert_eq!(
+            o.read_bytes,
+            40 + i64::try_from(PROGRESS_BODY.len()).unwrap()
+        );
+        assert_eq!(last, o.read_bytes);
+        assert_eq!(o.uploaded.len(), 1);
+        cleanup(&o.uploaded);
     }
 }

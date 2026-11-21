@@ -433,6 +433,7 @@ dependencies = [
  "php-memlimit",
  "php-runtime",
  "php-sapi",
+ "php-sapi-input",
  "php-stdmisc",
  "php-streams",
  "php-support",
@@ -1012,6 +1013,7 @@ dependencies = [
  "php-memlimit",
  "php-parser",
  "php-runtime",
+ "php-sapi-input",
  "php-stdmisc",
  "php-streams",
  "php-support",
@@ -1259,6 +1261,16 @@ dependencies = [
  "php-sapi",
  "php-stdmisc",
  "php-streams",
+ "php-support",
+ "php-vm",
+]
+
+[[package]]
+name = "php-sapi-input"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "php-memlimit",
  "php-support",
  "php-vm",
 ]
