@@ -1243,3 +1243,45 @@ echo "fn:$fn cls:$cls cst:$cst glb:$glb";
     assert_eq!(responses[0].body, "req1 ok");
     assert_eq!(responses[1].body, "fn:no cls:no cst:no glb:no");
 }
+
+/// The stream layer's request state ends with the request
+/// (`php_shutdown_stream_hashes()`, filestat's RSHUTDOWN): each request's
+/// `php://input` is its own body, not the one an earlier request on the
+/// worker read, and wrappers registered by a script are gone.
+#[test]
+fn persistent_vm_stream_state_is_per_request() {
+    let input = "<?php var_dump(file_get_contents('php://input'));";
+    let responses = run_sequence(vec![
+        (
+            "pvm_in1.php",
+            Req {
+                script: input,
+                method: "PUT",
+                body: b"first".to_vec(),
+                ..Req::default()
+            },
+        ),
+        (
+            "pvm_in2.php",
+            Req {
+                script: "<?php
+var_dump(file_get_contents('php://input'));
+var_dump(stream_wrapper_register('pvm', 'stdClass'));
+",
+                method: "PUT",
+                body: b"second".to_vec(),
+                ..Req::default()
+            },
+        ),
+        (
+            "pvm_in3.php",
+            Req {
+                script: "<?php var_dump(in_array('pvm', stream_get_wrappers()));",
+                ..Req::default()
+            },
+        ),
+    ]);
+    assert_eq!(responses[0].body, "string(5) \"first\"\n");
+    assert_eq!(responses[1].body, "string(6) \"second\"\nbool(true)\n");
+    assert_eq!(responses[2].body, "bool(false)\n");
+}

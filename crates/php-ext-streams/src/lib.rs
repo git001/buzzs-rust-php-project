@@ -80,6 +80,10 @@ fn shutdown(vm: &mut Vm) {
     userfilter::shutdown();
     res::shutdown(vm);
     http::shutdown();
+    // filestat's RSHUTDOWN and `php_shutdown_stream_hashes()`: the stat
+    // cache, `php://input` and the wrappers a script registered belong to
+    // the request, also when the VM serves the next one.
+    php_streams::state::reset_request();
 }
 
 impl Extension for Streams {
