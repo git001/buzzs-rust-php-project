@@ -531,7 +531,7 @@ impl Compiler<'_> {
             code: Rc::new(code),
             line_start: spec.line_start,
             line_end: spec.line_end,
-            doc_comment: spec.doc_comment.map(|d| ZStr::from(d.as_slice())),
+            doc_comment: self.doc_comment(spec.doc_comment),
             statics: RefCell::new(Vec::new()),
             uses: ctx_uses,
             class_name: self.current_class().map(|c| c.name.clone()),
@@ -1551,7 +1551,7 @@ impl Compiler<'_> {
             case_doc_comments,
             backing,
             attributes,
-            doc_comment: cd.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
+            doc_comment: self.doc_comment(cd.doc_comment.as_ref()),
             filename: self.filename.clone(),
             line_start: cd.span.line,
             line_end: cd.end_line,
@@ -1797,7 +1797,7 @@ impl Compiler<'_> {
                             default,
                             flags: fl,
                             ty: ty.clone(),
-                            doc_comment: p.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
+                            doc_comment: self.doc_comment(p.doc_comment.as_ref()),
                             attributes,
                             line: p.span.line,
                             hooks,
@@ -1902,7 +1902,7 @@ impl Compiler<'_> {
                             value,
                             flags: fl,
                             ty: ty.clone(),
-                            doc_comment: c.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())),
+                            doc_comment: self.doc_comment(c.doc_comment.as_ref()),
                             attributes: attrs.clone(),
                             line: c.span.line,
                             cases_before: u32::try_from(cases.len()).unwrap_or(u32::MAX),
@@ -2097,10 +2097,7 @@ impl Compiler<'_> {
                                 },
                                 flags: pfl,
                                 ty,
-                                doc_comment: p
-                                    .doc_comment
-                                    .as_ref()
-                                    .map(|d| ZStr::from(d.as_slice())),
+                                doc_comment: self.doc_comment(p.doc_comment.as_ref()),
                                 attributes: attrs,
                                 line: p.span.line,
                                 hooks,
@@ -2271,7 +2268,7 @@ impl Compiler<'_> {
                         false,
                     )?;
                     case_attrs.push(attrs);
-                    case_docs.push(ec.doc_comment.as_ref().map(|d| ZStr::from(d.as_slice())));
+                    case_docs.push(self.doc_comment(ec.doc_comment.as_ref()));
                     cases.push((ZStr::from(ec.name.name.as_slice()), v, m.span.line));
                 }
             }

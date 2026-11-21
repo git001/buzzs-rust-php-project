@@ -1236,8 +1236,13 @@ fn opcache_compile_hook(
     // Like `persistent_compile_file`, compile with
     // `ZEND_COMPILE_IGNORE_OTHER_FILES`, so the cached code does not
     // depend on the functions other files happened to declare first.
+    // `zend_persist` drops the doc comments under save_comments=0; the
+    // script runs as cached, so even this first run has none.
+    let strip = !vm.ini_bool("opcache.save_comments");
     let res = vm.with_ignore_other_files(|vm| {
-        vm.compile_source_default(src.clone(), filename, false, skip_shebang)
+        vm.with_doc_comments_stripped(strip, |vm| {
+            vm.compile_source_default(src.clone(), filename, false, skip_shebang)
+        })
     })?;
     if let CompileOutcome::Ok(ref unit) = res {
         // `zend_accel_script_optimize` -> `zend_optimize_script`.
@@ -1798,8 +1803,11 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
 
     let real_z = ZStr::from(realpath.as_os_str().as_bytes());
+    let strip = !vm.ini_bool("opcache.save_comments");
     let res = vm.with_ignore_other_files(|vm| {
-        vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)
+        vm.with_doc_comments_stripped(strip, |vm| {
+            vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)
+        })
     })?;
     match res {
         CompileOutcome::Ok(unit) => {

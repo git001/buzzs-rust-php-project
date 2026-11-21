@@ -60,6 +60,9 @@ thread_local! {
     /// does not depend on what happened to be declared before (opcache sets
     /// it for every script it caches; ZendAccelerator.c).
     static IGNORE_OTHER_FILES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while opcache compiles a script it caches under
+    /// `opcache.save_comments=0`: the doc comments are dropped.
+    static STRIP_DOC_COMMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
@@ -126,6 +129,20 @@ impl Vm {
         out
     }
 
+    /// Runs `f`, compiling files without their doc comments when `strip`
+    /// is set: opcache's persisting of a script under
+    /// `opcache.save_comments=0` (`zend_persist`).
+    pub fn with_doc_comments_stripped<R>(
+        &mut self,
+        strip: bool,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = STRIP_DOC_COMMENTS.with(|c| c.replace(strip));
+        let out = f(self);
+        STRIP_DOC_COMMENTS.with(|c| c.set(prev));
+        out
+    }
+
     /// A hash of every compiler input besides the source that changes the
     /// code a file compiles to: options from INI (`zend.assertions`, the
     /// optimization level), which builtins compile to dedicated opcodes,
@@ -144,6 +161,7 @@ impl Vm {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.ini.get_long("zend.assertions").hash(&mut h);
         self.optimization_level().hash(&mut h);
+        self.ini.get_bool("opcache.save_comments").hash(&mut h);
         self.ini.get_bool("short_open_tag").hash(&mut h);
         builtin(self, b"sprintf").hash(&mut h);
         builtin(self, b"array_map").hash(&mut h);
@@ -370,6 +388,7 @@ impl Vm {
             stack_limit: self.compile_stack_limit(),
             user_opcodes: self.user_opcodes(),
             optimization_level: self.optimization_level(),
+            strip_doc_comments: !is_eval && STRIP_DOC_COMMENTS.with(std::cell::Cell::get),
         };
         let anon_base = self.anon_counter;
         let halt_compiler_offset = program.halt_compiler_offset;

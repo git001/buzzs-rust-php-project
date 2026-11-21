@@ -300,6 +300,9 @@ pub struct CompileOptions {
     pub user_opcodes: Vec<&'static str>,
     /// `opcache.optimization_level` bits (`0` = disabled).
     pub optimization_level: u32,
+    /// Drop the doc comments, as `zend_persist` does for a script opcache
+    /// caches under `opcache.save_comments=0`.
+    pub strip_doc_comments: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -713,6 +716,15 @@ fn compile_program_inner(
 }
 
 impl<'f> Compiler<'f> {
+    /// A declaration's doc comment for the compiled code: none when the
+    /// script is compiled for opcache under `opcache.save_comments=0`.
+    pub(crate) fn doc_comment(&self, doc: Option<&Vec<u8>>) -> Option<ZStr> {
+        if self.opts.strip_doc_comments {
+            return None;
+        }
+        doc.map(|d| ZStr::from(d.as_slice()))
+    }
+
     /// The compiler state for a new file (`zend_compile_top_stmt` callers):
     /// the main op array is open and the parser's diagnostics are queued.
     fn start(

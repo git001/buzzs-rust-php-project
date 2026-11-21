@@ -872,6 +872,7 @@ impl Vm {
             stack_limit: None,
             user_opcodes: Vec::new(),
             optimization_level: 0,
+            strip_doc_comments: false,
         };
         let compiled = crate::compiler::compile(&program, Rc::from(src), opts);
         self.activate_compiled_auto_globals();
