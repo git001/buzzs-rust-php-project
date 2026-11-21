@@ -1084,6 +1084,28 @@ pub fn live_objects() -> Vec<Obj> {
     })
 }
 
+/// `zend_objects_store_free_object_storage()` at request shutdown: every
+/// object still alive is emptied as `free_obj` empties it (its properties,
+/// its traversed native state, the `WeakMap` entries keyed by it), from the
+/// last handle to the first. Objects kept alive only by a reference cycle
+/// (`$a->b = $b; $b->a = $a;`) are then freed: nothing else breaks such a
+/// cycle once the request is over, so its memory, and whatever native
+/// resource it holds, would outlive the request (php-src's request heap
+/// frees what is left; here nothing would).
+pub(crate) fn free_object_storage() {
+    let objects = live_objects();
+    let mut trash = Vec::new();
+    let mut states = Vec::new();
+    for o in objects.iter().rev() {
+        crate::gc::clear_object(data(o), &mut trash, &mut states);
+    }
+    // Released only now, with no object borrowed: freeing the contents
+    // frees the objects that only they held.
+    drop(trash);
+    drop(states);
+    drop(objects);
+}
+
 /// The number of handle slots in the store (`objects->top - 1`).
 pub fn store_len() -> usize {
     STORE.with(|s| s.borrow().objects.len())

@@ -2211,6 +2211,11 @@ pub struct Vm {
     pub serialize_precision: i64,
     /// Whether we are in shutdown.
     pub in_shutdown: bool,
+    /// php-src's `fast_shutdown`: the process exits after this request
+    /// ([`Vm::discard`] follows), so request shutdown leaves the global
+    /// symbol table and the objects to the process's end instead of
+    /// freeing them ([`Vm::set_fast_shutdown`]).
+    pub(crate) fast_shutdown: bool,
     /// Nesting depth of user error handler calls.
     pub in_error_handler: u32,
     /// Set just before reporting a message that `php_verror` already

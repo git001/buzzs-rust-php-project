@@ -581,3 +581,46 @@ fn umask_comes_back_at_request_end() {
     assert_eq!(after, "22\n", "the request's umask is gone");
     assert_eq!(other, format!("{:o}\n", php_streams::sys::current_umask()));
 }
+
+#[test]
+fn cycles_do_not_outlive_their_request() {
+    // `zend_objects_store_free_object_storage()` and the global symbol
+    // table's destruction at request shutdown: an object cycle holding a
+    // megabyte and an open file, and an array that holds a reference to
+    // itself, are freed when the request ends, so a VM serving request
+    // after request neither grows nor keeps descriptors open.
+    const CYCLES: &str = "<?php
+        $r = [];
+        $r[0] = &$r;
+        $r[1] = str_repeat('y', 1 << 20);
+        $a = new stdClass;
+        $b = new stdClass;
+        $a->b = $b;
+        $b->a = $a;
+        $a->f = fopen('/dev/null', 'r');
+        $a->s = str_repeat('x', 1 << 20);
+        echo 'ok';";
+    fn open_fds() -> usize {
+        std::fs::read_dir("/proc/self/fd").map_or(0, Iterator::count)
+    }
+    let (grown, fds_before, fds_after, out) = on_thread(|| {
+        let sink = Sink::default();
+        let mut vm = new_vm(&sink);
+        vm.run_script(CYCLES.as_bytes(), "/cycles.php");
+        vm.request_reset();
+        let fds_before = open_fds();
+        let first = php_memlimit::current().raw_usage();
+        for _ in 0..20 {
+            vm.run_script(CYCLES.as_bytes(), "/cycles.php");
+            vm.request_reset();
+        }
+        let grown = php_memlimit::current().raw_usage().saturating_sub(first);
+        (grown, fds_before, open_fds(), sink.take())
+    })
+    .join()
+    .expect("worker thread");
+    assert_eq!(out, "ok".repeat(21));
+    assert_eq!(fds_after, fds_before, "descriptors left open");
+    // Each request left 2 MiB behind before.
+    assert!(grown < 64 << 10, "{grown} bytes left behind by 20 requests");
+}

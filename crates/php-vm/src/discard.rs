@@ -196,6 +196,8 @@ mod tests {
     fn discard_releases_the_objects_the_user_tables_hold() {
         let sink = Sink::default();
         let mut vm = Vm::new(&VmOptions::default(), Box::new(sink.clone()));
+        // As the CLI before its last request: the process exits next.
+        vm.set_fast_shutdown(true);
         vm.run_script(
             b"<?php
 class A { public static $x; }

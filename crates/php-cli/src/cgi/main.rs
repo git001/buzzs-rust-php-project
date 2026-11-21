@@ -682,6 +682,8 @@ fn new_prepared_vm(cfg: &Config, ini: Vec<(String, String)>) -> PreparedVm {
     let slot = Rc::new(RefCell::new(None));
     let mut vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
     configure(&mut vm, cfg);
+    // php-cgi serves one request, then the process exits.
+    vm.set_fast_shutdown(true);
     PreparedVm { vm, slot }
 }
 
@@ -739,6 +741,7 @@ fn lint(cfg: &Config, path: Option<&[u8]>) -> Option<i32> {
         format!("Errors parsing {shown}\n")
     };
     vm.echo(verdict.as_bytes());
+    vm.set_fast_shutdown(true);
     let _ = vm.shutdown(Ok(()));
     let _ = std::io::stdout().flush();
     std::mem::forget(vm);

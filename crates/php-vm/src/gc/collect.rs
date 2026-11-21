@@ -453,8 +453,9 @@ impl Vm {
 
 /// `free_obj` for a garbage object: empties its properties and traversed
 /// native state into `trash`, and drops the `WeakMap` entries keyed by it
-/// (which may hold the object itself).
-fn clear_object(d: &ObjectData, trash: &mut Vec<Value>, states: &mut Vec<Box<dyn Any>>) {
+/// (which may hold the object itself). Also what request shutdown does to
+/// every object still alive ([`crate::object::free_object_storage`]).
+pub(crate) fn clear_object(d: &ObjectData, trash: &mut Vec<Value>, states: &mut Vec<Box<dyn Any>>) {
     if let Ok(mut slots) = d.slots.try_borrow_mut() {
         trash.extend(slots.iter_mut().filter_map(Option::take));
     }

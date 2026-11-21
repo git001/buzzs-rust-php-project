@@ -591,7 +591,9 @@ fn run_php_forked(
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
         }
         let code = match (c.stream.try_clone(), template.take()) {
-            (Ok(stream), Some(vm)) => {
+            (Ok(stream), Some(mut vm)) => {
+                // The child ends with `_exit` after this request.
+                vm.vm.set_fast_shutdown(true);
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
                 let request = std::mem::take(&mut c.reader.request);

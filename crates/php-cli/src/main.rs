@@ -734,9 +734,11 @@ fn new_vm(cfg: &Config) -> Vm {
     vm
 }
 
-fn new_request_vm(cfg: &Config) -> Result<Vm, i32> {
+fn new_request_vm(cfg: &Config, how: Release) -> Result<Vm, i32> {
     let mut vm = new_vm(cfg);
+    vm.set_fast_shutdown(how == Release::Discard);
     if let Err(error) = preload::install(&mut vm) {
+        vm.set_fast_shutdown(true);
         let status = vm.shutdown(Err(error)).max(1);
         release(vm, Release::Discard);
         return Err(status);
@@ -799,7 +801,7 @@ fn run_snippet(
     how: Release,
 ) -> i32 {
     let _ = with_handles;
-    let mut vm = match new_request_vm(cfg) {
+    let mut vm = match new_request_vm(cfg, how) {
         Ok(vm) => vm,
         Err(status) => return status,
     };
@@ -915,7 +917,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how
             r
         }
         Mode::Standard | Mode::CliDirect | Mode::ProcessStdin => {
-            let mut vm = match new_request_vm(cfg) {
+            let mut vm = match new_request_vm(cfg, how) {
                 Ok(vm) => vm,
                 Err(status) => return status,
             };
@@ -979,7 +981,7 @@ fn run_request(argv: &[Vec<u8>], optind: usize, req: &Request, cfg: &Config, how
         }
         Mode::ReflectionExtInfo => {
             if req.reflection_what == b"main" {
-                let mut vm = match new_request_vm(cfg) {
+                let mut vm = match new_request_vm(cfg, how) {
                     Ok(vm) => vm,
                     Err(status) => return status,
                 };
@@ -1005,7 +1007,7 @@ else { echo \"Extension '$n' not present.\\n\"; exit(1); }";
             0
         }
         Mode::ShowIniDiff => {
-            let mut vm = match new_request_vm(cfg) {
+            let mut vm = match new_request_vm(cfg, how) {
                 Ok(vm) => vm,
                 Err(status) => return status,
             };
@@ -1288,7 +1290,7 @@ fn process_stdin(vm: &mut Vm, req: &Request) -> i32 {
 /// `html_errors`, the fatal error backtrace), the CLI's verdict line
 /// through the output layer (`zend_printf`), then request shutdown.
 fn lint(cfg: &Config, src: &[u8], php_self: &[u8], how: Release) -> i32 {
-    let mut vm = match new_request_vm(cfg) {
+    let mut vm = match new_request_vm(cfg, how) {
         Ok(vm) => vm,
         Err(status) => return status,
     };

@@ -51,6 +51,7 @@
 
 mod builtins;
 mod collect;
+pub(crate) use collect::clear_object;
 mod dtor_fiber;
 mod graph;
 mod traverse;
@@ -1209,6 +1210,14 @@ impl Vm {
         let count = r?;
         with_state(|s| adjust_threshold(s, count));
         Ok(())
+    }
+
+    /// At request shutdown, after the objects were freed: collects the
+    /// cycles left that hold no object (`$a[0] = &$a;`), which php-src's
+    /// request heap frees with the rest of the request's memory. Runs over
+    /// the buffered roots only; no destructor is left to run.
+    pub(crate) fn gc_release_request_cycles(&mut self) {
+        let _ = self.gc_run(collect::Mode::Auto);
     }
 
     /// `gc_collect_cycles()`: an explicit collection. Returns the number of

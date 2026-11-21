@@ -251,6 +251,7 @@ impl Vm {
             precision: 14,
             serialize_precision: -1,
             in_shutdown: false,
+            fast_shutdown: false,
             in_error_handler: 0,
             error_msg_html_ready: false,
             reporting_oom: false,
@@ -431,6 +432,16 @@ impl Vm {
     }
 
     /// Request shutdown: shutdown functions, destructors, output flush.
+    /// php-src's `fast_shutdown`: set when the process exits after this
+    /// request and [`Vm::discard`] releases the VM. Request shutdown then
+    /// does not destroy the global symbol table nor free the objects left
+    /// (the process's end does), as php-src with its memory manager skips
+    /// them. Off by default: a VM that is dropped or serves another
+    /// request frees everything of the request, reference cycles included.
+    pub fn set_fast_shutdown(&mut self, on: bool) {
+        self.fast_shutdown = on;
+    }
+
     pub fn shutdown(&mut self, r: Result<(), Throw>) -> i32 {
         let fatal = matches!(r, Err(Throw::Fatal));
         // `oom_after_main_script`: a violation recorded by the last
@@ -492,6 +503,19 @@ impl Vm {
         // runs) even when the script produced no output.
         crate::builtins::headers::send_headers(self);
         self.flush_stdout();
+        // `zend_deactivate()` (step 10), `zend_shutdown_executor_values()`:
+        // unless the process exits next (`fast_shutdown`), the global
+        // symbol table is destroyed, then the objects still alive are
+        // freed, the ones only a reference cycle keeps alive included, and
+        // the cycles without an object are collected. A host running more
+        // requests (a server, a reused VM) is left with nothing of this
+        // request; php-src's request heap frees what php-src leaves.
+        if !self.fast_shutdown {
+            let globals = std::mem::take(&mut *self.globals.borrow_mut());
+            drop(globals);
+            object::free_object_storage();
+            self.gc_release_request_cycles();
+        }
         php_memlimit::request_end();
         self.exit_status
     }
