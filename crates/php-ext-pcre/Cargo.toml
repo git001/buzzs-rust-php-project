@@ -11,7 +11,6 @@ php-runtime = { path = "../php-runtime" }
 php-pcre = { path = "../php-pcre" }
 php-support = { path = "../php-support" }
 php-memlimit = { path = "../php-memlimit" }
-libc = "0.2"
 
 [lints]
 workspace = true

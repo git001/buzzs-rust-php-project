@@ -700,7 +700,6 @@ dependencies = [
 name = "php-ext-pcre"
 version = "0.1.0"
 dependencies = [
- "libc",
  "php-memlimit",
  "php-pcre",
  "php-runtime",
@@ -872,6 +871,7 @@ version = "0.1.0"
 dependencies = [
  "php-memlimit",
  "php-runtime",
+ "php-stdarr",
  "php-stdstr",
  "php-support",
  "php-vm",

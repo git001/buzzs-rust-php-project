@@ -126,17 +126,6 @@ pub fn mktime_from_now(fields: Tm) -> i64 {
     unsafe { libc::mktime(&raw mut tm) }
 }
 
-/// The process umask (`mask = umask(0); umask(mask)`).
-pub fn umask() -> u32 {
-    // SAFETY: umask has no preconditions; the second call restores the
-    // original mask immediately.
-    unsafe {
-        let m = libc::umask(0);
-        libc::umask(m);
-        m
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

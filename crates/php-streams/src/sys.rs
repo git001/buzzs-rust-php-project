@@ -145,11 +145,24 @@ pub fn umask(mask: u32) -> u32 {
     unsafe { libc::umask(mask as libc::mode_t) }
 }
 
-/// Reads the current umask without changing it.
+/// Reads the calling thread's umask without changing it: from the
+/// `Umask:` line of `/proc/thread-self/status` (Linux 4.7), so that no
+/// other thread sharing the umask ever sees a temporary value; where that
+/// is unavailable, by setting and restoring it.
 pub fn current_umask() -> u32 {
-    let old = umask(0o022);
-    umask(old);
-    old
+    let from_proc = std::fs::read("/proc/thread-self/status")
+        .ok()
+        .and_then(|s| {
+            let line = s
+                .split(|&b| b == b'\n')
+                .find_map(|l| l.strip_prefix(b"Umask:"))?;
+            u32::from_str_radix(std::str::from_utf8(line).ok()?.trim(), 8).ok()
+        });
+    from_proc.unwrap_or_else(|| {
+        let old = umask(0o022);
+        umask(old);
+        old
+    })
 }
 
 /// `isatty(fd)`.
@@ -684,6 +697,10 @@ mod tests {
     fn umask_roundtrip() {
         let m = current_umask();
         assert_eq!(current_umask(), m);
+        let before = umask(0o027);
+        assert_eq!(before, m);
+        assert_eq!(current_umask(), 0o027, "read from /proc");
+        umask(before);
     }
 
     #[test]

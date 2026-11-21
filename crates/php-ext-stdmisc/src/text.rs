@@ -472,15 +472,21 @@ fn setlocale(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         *l.borrow_mut() = st;
         r
     });
-    sync_decimal_point();
+    publish_locale();
     r.vm(vm)
 }
 
-/// Publishes the C library's current `LC_NUMERIC` decimal point to the
-/// printf engine (`LCONV_DECIMAL_POINT` in `ext/standard/formatted_print.c`
-/// and `main/snprintf.c`) after the process locale may have changed.
-fn sync_decimal_point() {
+/// Publishes the thread's locale facts after it may have changed: the
+/// `LC_NUMERIC` decimal point for the printf engine (`LCONV_DECIMAL_POINT`
+/// in `ext/standard/formatted_print.c` and `main/snprintf.c`) and
+/// `BG(ctype_string)` for PCRE's character tables.
+fn publish_locale() {
     php_support::fmt::locale::set_decimal_point(locale::decimal_point());
+    LOCALE.with(|l| {
+        php_support::fmt::locale::set_ctype_name(
+            l.borrow().ctype_string.as_ref().map(ZStr::as_bytes),
+        );
+    });
 }
 
 #[allow(clippy::unnecessary_wraps)] // native handler signature
@@ -523,8 +529,8 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     .function_static("nl_langinfo(int $item): string|false", nl_langinfo)
     .on_request_shutdown(|_| {
         LOCALE.with(|l| l.borrow_mut().request_shutdown());
-        sync_decimal_point();
+        publish_locale();
     });
     locale::reset_lc_ctype();
-    sync_decimal_point();
+    publish_locale();
 }

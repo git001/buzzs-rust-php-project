@@ -844,8 +844,10 @@ pub fn stream_filter_remove(stream: &mut Stream, id: crate::filter::FilterId) ->
 }
 
 /// `umask($mask)`: sets the mask (when given) and returns the old one.
+/// The mask the request found comes back at request end.
 pub fn umask(mask: Option<i64>) -> i64 {
     let old = sys::current_umask();
+    crate::state::note_request_umask(old);
     if let Some(m) = mask {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         sys::umask((m & 0o777) as u32);

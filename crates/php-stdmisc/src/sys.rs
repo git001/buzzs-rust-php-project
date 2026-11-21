@@ -339,15 +339,185 @@ pub fn nice(inc: i32) -> Result<(), i32> {
 
 // ------------------------------------------------------------- locale
 
-/// `setlocale(category, locale)` (`None` queries). Returns the resulting
-/// locale name, or `None` on failure.
+/// The categories of a composite `LC_ALL` name, in glibc's order (by
+/// category number, `LC_ALL` left out).
+const CATEGORIES: [(i32, &[u8]); 12] = [
+    (libc::LC_CTYPE, b"LC_CTYPE"),
+    (libc::LC_NUMERIC, b"LC_NUMERIC"),
+    (libc::LC_TIME, b"LC_TIME"),
+    (libc::LC_COLLATE, b"LC_COLLATE"),
+    (libc::LC_MONETARY, b"LC_MONETARY"),
+    (libc::LC_MESSAGES, b"LC_MESSAGES"),
+    (libc::LC_PAPER, b"LC_PAPER"),
+    (libc::LC_NAME, b"LC_NAME"),
+    (libc::LC_ADDRESS, b"LC_ADDRESS"),
+    (libc::LC_TELEPHONE, b"LC_TELEPHONE"),
+    (libc::LC_MEASUREMENT, b"LC_MEASUREMENT"),
+    (libc::LC_IDENTIFICATION, b"LC_IDENTIFICATION"),
+];
+
+/// glibc's `LC_GLOBAL_LOCALE`: `(locale_t) -1L`.
+fn global_locale() -> libc::locale_t {
+    ptr::without_provenance_mut(usize::MAX)
+}
+
+/// The calling thread's own locale object (`uselocale`), null while it
+/// uses the process's (global) locale. Freed when the thread ends.
+struct ThreadLocale(std::cell::Cell<libc::locale_t>);
+
+impl ThreadLocale {
+    /// Back to the global locale; frees the thread's own object.
+    fn reset(&self) {
+        let own = self.0.replace(ptr::null_mut());
+        if !own.is_null() {
+            // SAFETY: `own` is the live object this thread installed with
+            // `uselocale`; it is uninstalled before it is freed, and nothing
+            // else holds it.
+            unsafe {
+                libc::uselocale(global_locale());
+                libc::freelocale(own);
+            }
+        }
+    }
+}
+
+impl Drop for ThreadLocale {
+    fn drop(&mut self) {
+        self.reset();
+    }
+}
+
+thread_local! {
+    static THREAD_LOCALE: ThreadLocale = const { ThreadLocale(std::cell::Cell::new(ptr::null_mut())) };
+}
+
+/// The `LC_*_MASK` of a category for `newlocale`, `None` for an unknown
+/// category.
+fn category_mask(category: i32) -> Option<i32> {
+    if category == libc::LC_ALL {
+        return Some(libc::LC_ALL_MASK);
+    }
+    CATEGORIES
+        .iter()
+        .any(|&(c, _)| c == category)
+        .then(|| 1 << category)
+}
+
+/// glibc's `_NL_LOCALE_NAME(category)` item: the name of the category's
+/// locale in the calling thread's locale.
+fn locale_name(category: i32) -> Option<Vec<u8>> {
+    let item = (category << 16) | 0xffff;
+    // SAFETY: nl_langinfo accepts any item; the result points into the
+    // thread's locale data and is copied at once.
+    from_cstr(unsafe { libc::nl_langinfo(item) })
+}
+
+/// `setlocale(category, NULL)` for the calling thread: the category's
+/// locale name; for `LC_ALL` that name when every category agrees, or
+/// glibc's composite `LC_CTYPE=…;LC_NUMERIC=…;…` otherwise.
+fn query_locale(category: i32) -> Option<Vec<u8>> {
+    if category != libc::LC_ALL {
+        return locale_name(category);
+    }
+    let names: Vec<(&[u8], Vec<u8>)> = CATEGORIES
+        .iter()
+        .map(|&(c, label)| Some((label, locale_name(c)?)))
+        .collect::<Option<_>>()?;
+    if names.iter().all(|(_, n)| *n == names[0].1) {
+        return Some(names[0].1.clone());
+    }
+    let parts: Vec<Vec<u8>> = names
+        .iter()
+        .map(|(label, n)| [*label, b"=", n].concat())
+        .collect();
+    Some(parts.join(&b';'))
+}
+
+/// The `(mask, name)` steps that set `locale` for `category`: one, or for
+/// a composite `LC_ALL` name (`LC_CTYPE=…;…`, what a query returns) one
+/// per named category. `None` if a composite part names no category.
+fn locale_steps(category: i32, locale: &[u8]) -> Option<Vec<(i32, Vec<u8>)>> {
+    if category != libc::LC_ALL || !locale.contains(&b';') {
+        return Some(vec![(category_mask(category)?, locale.to_vec())]);
+    }
+    locale
+        .split(|&b| b == b';')
+        .map(|part| {
+            let eq = part.iter().position(|&b| b == b'=')?;
+            let (label, name) = (&part[..eq], &part[eq + 1..]);
+            let &(c, _) = CATEGORIES.iter().find(|(_, l)| *l == label)?;
+            Some((1 << c, name.to_vec()))
+        })
+        .collect()
+}
+
+/// `setlocale(category, locale)` (`None` queries) for the calling thread
+/// only: the thread switches to a locale object of its own
+/// (`newlocale`/`uselocale`), so that one request's `setlocale()` never
+/// reaches requests on other threads (each FPM process has its own
+/// locale, too). The C library's locale-dependent functions (`printf`,
+/// `strcoll`, `strftime`, `nl_langinfo`, `mblen`, …) follow it. Returns
+/// the resulting locale name, or `None` on failure (the locale stays as
+/// it was).
 #[must_use]
 pub fn setlocale(category: i32, locale: Option<&[u8]>) -> Option<Vec<u8>> {
-    let loc = locale.map(cstring);
-    // SAFETY: the locale argument is NULL or a valid C string; the result
-    // is copied before any other locale call can invalidate it.
-    let r = unsafe { libc::setlocale(category, loc.as_ref().map_or(ptr::null(), |c| c.as_ptr())) };
-    from_cstr(r)
+    let Some(locale) = locale else {
+        category_mask(category)?;
+        return query_locale(category);
+    };
+    let steps = locale_steps(category, locale)?;
+    THREAD_LOCALE.with(|own| {
+        let current = own.0.get();
+        let mut loc = if current.is_null() {
+            // SAFETY: duplicating the global locale has no preconditions.
+            unsafe { libc::duplocale(global_locale()) }
+        } else {
+            // SAFETY: as above; the thread's object stays installed until
+            // the new one replaces it.
+            unsafe { libc::duplocale(current) }
+        };
+        if loc.is_null() {
+            return None;
+        }
+        for (mask, name) in steps {
+            let name = cstring(&name);
+            // SAFETY: `loc` is a live object of ours; on success newlocale
+            // consumes it and returns the result, on failure it leaves it
+            // untouched and returns null.
+            let next = unsafe { libc::newlocale(mask, name.as_ptr(), loc) };
+            if next.is_null() {
+                // SAFETY: `loc` is ours and not installed.
+                unsafe { libc::freelocale(loc) };
+                return None;
+            }
+            loc = next;
+        }
+        // SAFETY: `loc` is a valid locale object; the previous own object
+        // is freed only after it is no longer installed.
+        unsafe {
+            libc::uselocale(loc);
+            if !current.is_null() {
+                libc::freelocale(current);
+            }
+        }
+        own.0.set(loc);
+        query_locale(category)
+    })
+}
+
+/// Returns the calling thread to the process's locale (request shutdown
+/// after a script's `setlocale()`: php-src restores "C" there).
+pub fn reset_thread_locale() {
+    THREAD_LOCALE.with(ThreadLocale::reset);
+}
+
+/// `setlocale(category, locale)` on the process's global locale, for
+/// process startup (`zend_reset_lc_ctype_locale()`), before request
+/// threads run. Returns whether it succeeded.
+pub fn set_process_locale(category: i32, locale: &[u8]) -> bool {
+    let loc = cstring(locale);
+    // SAFETY: valid C string; only called during startup.
+    !unsafe { libc::setlocale(category, loc.as_ptr()) }.is_null()
 }
 
 /// The numeric and monetary fields of `localeconv()`.
@@ -366,8 +536,15 @@ pub struct Lconv {
 /// `localeconv()` of the current locale.
 #[must_use]
 pub fn localeconv() -> Lconv {
+    // php-src's `locale_mutex` (`localeconv_r`, ext/standard/string.c):
+    // glibc fills one static structure for every thread.
+    static LOCALECONV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCALECONV
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: localeconv returns a pointer to a static structure valid
-    // until the next localeconv/setlocale call; it is copied immediately.
+    // until the next localeconv/setlocale call; it is copied immediately,
+    // under the lock.
     let l = unsafe { libc::localeconv() };
     if l.is_null() {
         return Lconv::default();

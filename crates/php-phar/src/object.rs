@@ -782,7 +782,7 @@ impl PharObject {
         let stat_mode = stream.and_then(|(_, m)| m);
         data.with_entry_mut(|e| match stat_mode {
             Some(m) => e.flags = m & ENT_PERM_MASK,
-            None => e.flags &= !crate::sys::umask(),
+            None => e.flags &= !php_streams::sys::current_umask(),
         });
         let phar = Rc::clone(&data.archive);
         if !Rc::ptr_eq(&phar, &ar) {
@@ -1596,7 +1596,7 @@ impl BuildState {
             e.offset_abs = 0;
             match mode {
                 Some(m) => e.flags = m & ENT_PERM_MASK,
-                None => e.flags &= !crate::sys::umask(),
+                None => e.flags &= !php_streams::sys::current_umask(),
             }
             e.uncompressed_filesize = len;
             e.compressed_filesize = len;

@@ -106,22 +106,22 @@ pub struct LocaleState {
     pub ctype_string: Option<ZStr>,
 }
 
-/// `zend_reset_lc_ctype_locale()`: `LC_CTYPE` = "C.UTF-8" (or "C"), which
-/// PHP does at startup so that multibyte-aware functions such as
-/// `escapeshellarg()` see UTF-8.
+/// `zend_reset_lc_ctype_locale()`: the process's `LC_CTYPE` = "C.UTF-8"
+/// (or "C"), which PHP does at startup so that multibyte-aware functions
+/// such as `escapeshellarg()` see UTF-8. Every thread starts from it.
 pub fn reset_lc_ctype() {
-    if sys::setlocale(libc::LC_CTYPE, Some(b"C.UTF-8")).is_none() {
-        let _ = sys::setlocale(libc::LC_CTYPE, Some(b"C"));
+    if !sys::set_process_locale(libc::LC_CTYPE, b"C.UTF-8") {
+        let _ = sys::set_process_locale(libc::LC_CTYPE, b"C");
     }
 }
 
 impl LocaleState {
-    /// Request shutdown (`basic_globals` RSHUTDOWN): restores "C" if the
-    /// script changed the locale.
+    /// Request shutdown (`basic_globals` RSHUTDOWN): restores "C" (and
+    /// the startup `LC_CTYPE`) if the script changed the locale: the
+    /// thread returns to the process's locale, which is that.
     pub fn request_shutdown(&mut self) {
         if self.locale_changed {
-            let _ = sys::setlocale(libc::LC_ALL, Some(b"C"));
-            reset_lc_ctype();
+            sys::reset_thread_locale();
             self.ctype_string = None;
             self.locale_changed = false;
         }

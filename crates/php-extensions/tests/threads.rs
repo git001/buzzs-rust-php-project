@@ -449,3 +449,90 @@ echo "@T@ $bad\n";
         assert_eq!(left, None, "the request end restores the environment");
     }
 }
+
+#[test]
+fn setlocale_changes_only_its_own_thread() {
+    // `setlocale()` per thread, as each FPM process has its own locale:
+    // requests that switch to a decimal-comma locale run alongside ones
+    // that stay in "C", and each formats with its own decimal point, and
+    // the next request on the same thread starts in "C" again.
+    const THREADS: usize = 6;
+    const REQUEST: &str = r#"<?php
+$own = '@LOCALE@';
+$bad = 0;
+for ($i = 0; $i < 300; $i++) {
+    if ($own !== 'C') {
+        $bad += setlocale(LC_ALL, $own) !== $own;
+    }
+    $dp = $own === 'C' ? '.' : ',';
+    $bad += sprintf('%.1f', 0.5) !== "0{$dp}5";
+    $bad += localeconv()['decimal_point'] !== $dp;
+    $bad += nl_langinfo(RADIXCHAR) !== $dp;
+    $bad += setlocale(LC_NUMERIC, 0) !== $own;
+}
+echo "$own $bad\n";
+"#;
+    const AFTER: &str = "<?php echo setlocale(LC_NUMERIC, 0), ' ', sprintf('%.1f', 0.5), \"\\n\";";
+    let start = Arc::new(Barrier::new(THREADS));
+    let workers: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let start = Arc::clone(&start);
+            let own = if t % 2 == 0 { "de_DE.UTF-8" } else { "C" };
+            on_thread(move || {
+                let sink = Sink::default();
+                let mut vm = new_vm(&sink);
+                start.wait();
+                vm.run_script(REQUEST.replace("@LOCALE@", own).as_bytes(), "/locale.php");
+                let out = sink.take();
+                vm.request_reset();
+                vm.run_script(AFTER.as_bytes(), "/after.php");
+                (own, out, sink.take())
+            })
+        })
+        .collect();
+    for w in workers {
+        let (own, out, after) = w.join().expect("worker thread");
+        assert_eq!(out, format!("{own} 0\n"));
+        assert_eq!(after, "C 0.5\n", "{own}: the next request starts in C");
+    }
+}
+
+#[test]
+fn umask_comes_back_at_request_end() {
+    // A request's umask() lasts until its end (`BG(umask)` restored in
+    // `PHP_RSHUTDOWN(basic)`) and, with each worker's own file-system
+    // context, never reaches a request on another thread.
+    const SET: &str = "<?php echo decoct(umask(0077)), ' ', decoct(umask()), \"\\n\";";
+    const READ: &str = "<?php echo decoct(umask()), \"\\n\";";
+    let set = Arc::new(Barrier::new(2));
+    let read = Arc::new(Barrier::new(2));
+    let a = {
+        let (set, read) = (Arc::clone(&set), Arc::clone(&read));
+        on_thread(move || {
+            let sink = Sink::default();
+            let mut vm = new_vm(&sink);
+            vm.run_script(b"<?php umask(0022);", "/init.php");
+            vm.request_reset();
+            vm.run_script(SET.as_bytes(), "/set.php");
+            let during = sink.take();
+            set.wait();
+            read.wait();
+            vm.request_reset();
+            vm.run_script(READ.as_bytes(), "/read.php");
+            (during, sink.take())
+        })
+    };
+    let b = on_thread(move || {
+        let sink = Sink::default();
+        let mut vm = new_vm(&sink);
+        set.wait();
+        vm.run_script(READ.as_bytes(), "/read.php");
+        read.wait();
+        sink.take()
+    });
+    let (during, after) = a.join().expect("thread A");
+    let other = b.join().expect("thread B");
+    assert_eq!(during, "22 77\n");
+    assert_eq!(after, "22\n", "the request's umask is gone");
+    assert_eq!(other, format!("{:o}\n", php_streams::sys::current_umask()));
+}

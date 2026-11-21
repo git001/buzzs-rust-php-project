@@ -112,6 +112,9 @@ struct Globals {
     user_stream_current_filename: Option<Vec<u8>>,
     in_user_include: bool,
     request_body: Option<Vec<u8>>,
+    /// The umask before the request's first `umask()` call (`BG(umask)`),
+    /// put back at request end.
+    request_umask: Option<u32>,
 }
 
 thread_local! {
@@ -241,16 +244,29 @@ pub fn set_in_user_include(v: bool) -> bool {
     GLOBALS.with(|g| std::mem::replace(&mut g.borrow_mut().in_user_include, v))
 }
 
-/// Resets per-request state (stat cache, request body, recursion guards,
-/// volatile wrapper/filter registrations).
-pub fn reset_request() {
+/// Records `old` as the umask to restore at request end, unless the
+/// request changed it before (`BG(umask)` in `PHP_FUNCTION(umask)`).
+pub fn note_request_umask(old: u32) {
     GLOBALS.with(|g| {
+        g.borrow_mut().request_umask.get_or_insert(old);
+    });
+}
+
+/// Resets per-request state (stat cache, request body, recursion guards,
+/// volatile wrapper/filter registrations) and puts back the umask the
+/// request found (`PHP_RSHUTDOWN(basic)`).
+pub fn reset_request() {
+    let umask = GLOBALS.with(|g| {
         let mut g = g.borrow_mut();
         g.stat_cache = StatCache::default();
         g.user_stream_current_filename = None;
         g.in_user_include = false;
         g.request_body = None;
+        g.request_umask.take()
     });
+    if let Some(mask) = umask {
+        crate::sys::umask(mask);
+    }
     crate::wrapper::reset_volatile();
 }
 

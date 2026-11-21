@@ -85,29 +85,14 @@ pub(crate) fn sync_config(vm: &Vm) -> MatchConfig {
     })
 }
 
-/// The `LC_CTYPE` locale when it is not the C locale (`BG(ctype_string)`).
-///
-/// `setlocale()` is implemented over the C library, so the process locale
-/// is the source of truth. PHP itself switches `LC_CTYPE` to `C.UTF-8` at
-/// startup without recording it, and the character tables of `C.UTF-8`
-/// equal those of `C` for single bytes; all three spellings of the C
-/// locale therefore mean "no locale-specific tables".
+/// The `LC_CTYPE` locale when it is not the C locale (`BG(ctype_string)`,
+/// which the `setlocale()` binding publishes for the calling thread).
+/// PCRE2 builds the tables from the thread's locale, which is that one.
+/// The spellings of the C locale (`setlocale(LC_CTYPE, "C.UTF-8")`
+/// included) mean "no locale-specific tables": the character tables of
+/// `C.UTF-8` equal those of `C` for single bytes.
 pub(crate) fn ctype_locale() -> Option<Vec<u8>> {
-    // SAFETY: `setlocale` with a NULL locale only queries the current
-    // setting. The returned pointer is either NULL or a valid C string that
-    // stays valid until the next `setlocale` call; we copy it immediately
-    // and the VM is single-threaded.
-    let ptr = unsafe { libc::setlocale(libc::LC_CTYPE, std::ptr::null()) };
-    if ptr.is_null() {
-        return None;
-    }
-    // SAFETY: non-NULL result of `setlocale` is a NUL-terminated string.
-    let name = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes();
-    if is_c_locale(name) {
-        None
-    } else {
-        Some(name.to_vec())
-    }
+    php_support::fmt::locale::ctype_name().filter(|name| !is_c_locale(name))
 }
 
 /// Whether `name` names the C locale.

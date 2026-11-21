@@ -63,10 +63,10 @@ fn strcspn(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn strcoll(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    // LC_COLLATE is "C" unless setlocale() changed it: glibc strcoll() is
-    // then strcmp(), whose result is the byte difference.
-    let r = compare::strcmp(a.zstr(0).as_bytes(), a.zstr(1).as_bytes());
-    Ok(Value::Int(r))
+    // The C library's strcoll() in the thread's LC_COLLATE (in "C" the
+    // byte difference, like strcmp()), up to the first NUL as in php-src.
+    let r = php_stdarr::compare::strcoll(a.zstr(0).as_bytes(), a.zstr(1).as_bytes());
+    Ok(Value::Int(i64::from(r)))
 }
 
 fn trim_impl(vm: &mut Vm, a: &Args, mode: TrimMode) -> VmResult<Value> {
