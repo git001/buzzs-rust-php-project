@@ -1270,6 +1270,7 @@ name = "php-sapi-input"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "memchr",
  "php-memlimit",
  "php-support",
  "php-vm",

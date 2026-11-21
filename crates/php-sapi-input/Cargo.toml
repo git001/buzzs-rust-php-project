@@ -11,6 +11,7 @@ php-vm = { path = "../php-vm" }
 php-support = { path = "../php-support" }
 php-memlimit = { path = "../php-memlimit" }
 libc = "0.2"
+memchr = "2.8"
 
 [lints]
 workspace = true

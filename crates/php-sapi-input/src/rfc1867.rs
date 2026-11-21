@@ -142,21 +142,20 @@ fn c_str(s: &[u8]) -> &[u8] {
 }
 
 /// `php_ap_memstr()`: first position of `needle`, allowing a match cut
-/// off by the end of the buffer when `partial`.
+/// off by the end of the buffer when `partial`. A whole match always comes
+/// before a cut-off one, which can only start in the last
+/// `needle.len() - 1` bytes, where the rest of the buffer is a prefix of
+/// `needle`.
 fn memstr(hay: &[u8], needle: &[u8], partial: bool) -> Option<usize> {
-    let first = *needle.first()?;
-    let mut i = 0;
-    while i < hay.len() {
-        let off = hay[i..].iter().position(|&c| c == first)?;
-        i += off;
-        let rem = hay.len() - i;
-        let n = needle.len().min(rem);
-        if hay[i..i + n] == needle[..n] && (partial || rem >= needle.len()) {
-            return Some(i);
-        }
-        i += 1;
+    if needle.is_empty() {
+        return None;
     }
-    None
+    let whole = memchr::memmem::find(hay, needle);
+    if whole.is_some() || !partial {
+        return whole;
+    }
+    let tail = hay.len().saturating_sub(needle.len() - 1);
+    (tail..hay.len()).find(|&i| needle.starts_with(&hay[i..]))
 }
 
 /// `ZEND_HAS_OOM()`: a `memory_limit` violation is pending. The parser
@@ -1269,6 +1268,14 @@ mod tests {
         assert_eq!(rest, b" filename=x");
         assert_eq!(memstr(b"abc\n--X", b"\n--XY", true), Some(3));
         assert_eq!(memstr(b"abc\n--X", b"\n--XY", false), None);
+        // A whole match wins over a cut-off one further on; the first byte
+        // of the needle repeating does not hide a match.
+        assert_eq!(memstr(b"\n--XY \n--X", b"\n--XY", true), Some(0));
+        assert_eq!(memstr(b"\n\n\n--XY", b"\n--XY", false), Some(2));
+        assert_eq!(memstr(b"ab\n", b"\n--XY", true), Some(2));
+        assert_eq!(memstr(b"\n-", b"\n--XY", false), None);
+        assert_eq!(memstr(b"", b"\n--XY", true), None);
+        assert_eq!(memstr(b"abc", b"", true), None);
     }
 
     /// A Shift_JIS-like translation: 0x81..=0x9F lead two-byte characters
