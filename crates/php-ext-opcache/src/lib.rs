@@ -12,7 +12,7 @@ pub use php_opcache::{JitBuffer, JitConfig, JitTraceInfo, JitTraceTracker};
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
 use php_vm::compiler::CompiledUnit;
-use php_vm::ext::{Args, Extension, InfoItem, ModuleBuilder, Throw, VmResult};
+use php_vm::ext::{Args, Extension, InfoItem, ModuleBuilder, NativeFn, Throw, VmResult};
 use php_vm::include::CompileOutcome;
 use php_vm::Vm;
 use std::cell::RefCell;
@@ -68,6 +68,7 @@ impl Extension for Opcache {
         // Register INI directives
         register_ini(module);
         check_jit_at_registration(module.vm());
+        override_file_functions(module.vm());
 
         // Includes of deleted files served from the cache (`validate_timestamps=0`).
         Vm::set_cached_include_hook(opcache_cached_include);
@@ -138,9 +139,7 @@ pub fn accel_log(verbosity: i64, error_log: &str, kind: AccelLog, message: &str)
     if kind as i64 > verbosity {
         return;
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let now = now_sec();
     let label = match kind {
         AccelLog::Fatal => "Fatal Error",
         AccelLog::Error => "Error",
@@ -287,6 +286,15 @@ fn check_startup_ini(vm: &mut Vm) {
         vm.ini.reset_to_default("opcache.max_wasted_percentage");
     }
     check_startup_shm(vm);
+    if vm.opcache_enabled()
+        && vm.ini_bool("opcache.enable_file_override")
+        && vm.ini_bool("opcache.file_cache_only")
+    {
+        accel_log_warning(
+            vm,
+            "file_override_enabled has no effect when file_cache_only is set",
+        );
+    }
     configure_cache(vm);
     JIT_ENABLED.with(|c| c.set(jit_enabled_at_startup(vm)));
 }
@@ -985,6 +993,93 @@ fn sync_preload_stats() {
     });
 }
 
+/// The current time in whole seconds since the epoch, 0 before it.
+fn now_sec() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// `filename_is_in_cache`: whether `filename` is in the in-memory cache
+/// and still valid, its timestamp checked as on an include. Off without
+/// the in-memory cache (`ZCG(accelerator_enabled)`: opcache off for this
+/// SAPI, or file-cache-only mode).
+fn filename_is_in_cache(vm: &Vm, filename: &ZStr) -> bool {
+    if !vm.opcache_enabled() || vm.ini_bool("opcache.file_cache_only") {
+        return false;
+    }
+    let realpath = script_key_path(filename);
+    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
+    let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
+    GLOBAL_CACHE.with(|c| {
+        c.borrow_mut().is_valid(
+            &realpath.to_string_lossy(),
+            || script_stat(&realpath).map(|st| st.mtime),
+            validate_timestamps,
+            revalidate_freq,
+            now_sec(),
+        )
+    })
+}
+
+/// The functions `opcache.enable_file_override` answers from the cache,
+/// in the order of [`ORIG_FILE_FUNCS`].
+const FILE_OVERRIDES: [(&str, NativeFn); 3] = [
+    ("file_exists", accel_file_exists),
+    ("is_file", accel_is_file),
+    ("is_readable", accel_is_readable),
+];
+
+thread_local! {
+    /// The handlers [`override_file_functions`] replaced (`orig_file_exists`,
+    /// `orig_is_file`, `orig_is_readable`).
+    static ORIG_FILE_FUNCS: std::cell::Cell<[Option<NativeFn>; 3]> =
+        const { std::cell::Cell::new([None; 3]) };
+}
+
+/// `zend_accel_override_file_functions`: under
+/// `opcache.enable_file_override`, `file_exists()`, `is_file()` and
+/// `is_readable()` report a cached script as present without asking the
+/// file system. The directive is `PHP_INI_SYSTEM`, so it is known here;
+/// whether opcache is on for the SAPI is checked on each call
+/// ([`filename_is_in_cache`]), which gives the result php-src gets by not
+/// installing the overrides.
+fn override_file_functions(vm: &mut Vm) {
+    if !vm.ini_bool("opcache.enable_file_override") {
+        return;
+    }
+    let mut originals = [None; 3];
+    for (slot, (name, handler)) in originals.iter_mut().zip(FILE_OVERRIDES) {
+        *slot = vm.replace_native_handler(name, handler);
+    }
+    ORIG_FILE_FUNCS.with(|o| o.set(originals));
+}
+
+/// `accel_file_in_cache`, then the replaced handler number `index`.
+fn file_override(index: usize, vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    let cached = a.values.len() == 1
+        && matches!(a.at(0), Value::Str(s) if !s.is_empty() && filename_is_in_cache(vm, &s));
+    if cached {
+        return Ok(Value::Bool(true));
+    }
+    match ORIG_FILE_FUNCS.with(std::cell::Cell::get)[index] {
+        Some(original) => original(vm, a),
+        None => Ok(Value::Bool(false)),
+    }
+}
+
+fn accel_file_exists(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    file_override(0, vm, a)
+}
+
+fn accel_is_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    file_override(1, vm, a)
+}
+
+fn accel_is_readable(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+    file_override(2, vm, a)
+}
+
 /// How `persistent_compile_file` handles a script opcache is enabled for.
 enum Probed {
     /// Compiled without the cache and counted as a blacklist miss.
@@ -1087,11 +1182,7 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probed> {
     if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
         return Some(Probed::Blacklisted);
     }
-    let now_sec = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_secs()).ok())
-        .unwrap_or(0);
+    let now_sec = now_sec();
     Some(Probed::Cacheable(Probe {
         real_str: realpath.to_string_lossy().into_owned(),
         realpath,
@@ -1405,9 +1496,7 @@ fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc
         _ => full,
     };
     let key = key.to_string_lossy().into_owned();
-    let now_sec = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let now_sec = now_sec();
     let hit = GLOBAL_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
         if !cache.is_cached(&key) {
@@ -2181,21 +2270,7 @@ fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
     sync_preload_stats();
-    let filename_z = a.str(0);
-    let enabled = vm.opcache_enabled();
-    if !enabled || vm.ini_bool("opcache.file_cache_only") {
-        return Ok(Value::Bool(false));
-    }
-
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename_z.as_bytes()));
-    let realpath = match std::fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(_) => return Ok(Value::Bool(false)),
-    };
-    let real_str = realpath.to_string_lossy().into_owned();
-    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&real_str));
-    Ok(Value::Bool(cached))
+    Ok(Value::Bool(filename_is_in_cache(vm, &a.str(0))))
 }
 
 fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

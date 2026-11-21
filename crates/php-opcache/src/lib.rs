@@ -80,6 +80,19 @@ pub struct ScriptEntry<T> {
     pub unit: T,
 }
 
+impl<T> ScriptEntry<T> {
+    /// Whether the script's timestamp is to be checked now
+    /// (`validate_timestamp_and_record`): with `validate_timestamps`, on
+    /// every lookup if `revalidate_freq` is 0, else once `revalidate_freq`
+    /// seconds have passed since the last check. A preloaded script
+    /// (timestamp 0) is never checked.
+    fn revalidation_due(&self, validate_timestamps: bool, revalidate_freq: i64, now: i64) -> bool {
+        validate_timestamps
+            && self.timestamp != 0
+            && (revalidate_freq == 0 || now > self.last_revalidate.saturating_add(revalidate_freq))
+    }
+}
+
 /// The result of looking up a script in the cache.
 #[derive(Debug)]
 pub enum CacheLookup<'a, T> {
@@ -694,10 +707,7 @@ impl<T> ScriptCache<T> {
             self.misses += 1;
             return CacheLookup::Miss;
         };
-        let due = validate_timestamps
-            && entry.timestamp != 0
-            && (revalidate_freq == 0
-                || now > entry.last_revalidate.saturating_add(revalidate_freq));
+        let due = entry.revalidation_due(validate_timestamps, revalidate_freq, now);
         if due && current_mtime() != Some(entry.timestamp) {
             self.remove(path);
             self.misses += 1;
@@ -795,6 +805,31 @@ impl<T> ScriptCache<T> {
     /// Returns whether the script is currently in cache.
     pub fn is_cached(&self, path: &str) -> bool {
         self.scripts.contains_key(path)
+    }
+
+    /// Whether `path` is cached and still valid, as `filename_is_in_cache`
+    /// checks it with `validate_timestamp_and_record`: the timestamp is
+    /// checked when due, as in [`ScriptCache::get`], and the check is
+    /// recorded when it passes. Unlike a lookup, it counts no hit or miss
+    /// and evicts nothing.
+    pub fn is_valid(
+        &mut self,
+        path: &str,
+        current_mtime: impl FnOnce() -> Option<i64>,
+        validate_timestamps: bool,
+        revalidate_freq: i64,
+        now: i64,
+    ) -> bool {
+        let Some(entry) = self.scripts.get_mut(path) else {
+            return false;
+        };
+        if entry.revalidation_due(validate_timestamps, revalidate_freq, now) {
+            if current_mtime() != Some(entry.timestamp) {
+                return false;
+            }
+            entry.last_revalidate = now;
+        }
+        true
     }
 
     /// Returns the number of cached scripts.
