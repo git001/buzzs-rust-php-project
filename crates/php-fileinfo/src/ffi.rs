@@ -44,8 +44,17 @@ unsafe extern "C" {
     pub fn magic_setparam(ms: magic_t, param: c_int, value: *const c_void) -> c_int;
 }
 
+/// Opaque C `FILE`.
+#[repr(C)]
+pub struct CFile {
+    _private: [u8; 0],
+}
+
 unsafe extern "C" {
-    pub fn dup(fd: c_int) -> c_int;
-    pub fn dup2(oldfd: c_int, newfd: c_int) -> c_int;
-    pub fn close(fd: c_int) -> c_int;
+    /// The C library's `stderr` stream, which libmagic writes its
+    /// warnings to.
+    pub static mut stderr: *mut CFile;
+    pub fn open_memstream(ptr: *mut *mut c_char, size: *mut usize) -> *mut CFile;
+    pub fn fclose(stream: *mut CFile) -> c_int;
+    pub fn free(ptr: *mut c_void);
 }

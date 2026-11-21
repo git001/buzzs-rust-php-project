@@ -4,79 +4,66 @@
 //!
 //! PHP's bundled libmagic routes `file_magwarn()` (magic-file parse
 //! warnings such as ``offset `a' invalid``) through `php_error_docref()`.
-//! The system library prints them to `stderr` instead, as
-//! `"<file>, <line>: Warning: <message>\n"`.  To surface them as PHP
-//! warnings we temporarily point file descriptor 2 at an anonymous
-//! temporary file while the library runs, then parse what it wrote.
+//! The system library prints them with `fprintf(stderr, …)` instead, as
+//! `"<file>, <line>: Warning: <message>\n"`. To surface them as PHP
+//! warnings, the C library's `stderr` stream points at an in-memory
+//! stream (`open_memstream`) while the library runs; then what it wrote
+//! is parsed.
 //!
-//! The redirection is process-wide: anything another thread writes to fd 2
-//! during the (short) window is captured too.  A global lock serialises
-//! captures so they never nest.
+//! Only C `stdio` writes to `stderr` are captured: file descriptor 2 stays
+//! as it is, so Rust's `stderr`, the SAPI logs and other threads writing
+//! to it are not affected. A global lock serialises captures.
 
 #![allow(unsafe_code)]
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::os::fd::AsRawFd;
+use std::ffi::c_char;
+use std::ptr;
 use std::sync::Mutex;
 
 use crate::ffi;
 
 static LOCK: Mutex<()> = Mutex::new(());
 
-/// Runs `f` with `stderr` redirected and returns its result together with
-/// everything written to fd 2 meanwhile.  When the redirection cannot be
-/// set up, `f` still runs and the captured output is empty.
+/// Runs `f` with the C `stderr` stream captured and returns its result
+/// together with everything written to it meanwhile. When no memory
+/// stream can be opened, `f` still runs and the captured output is empty.
 pub(crate) fn with_captured_stderr<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
     let guard = LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(mut sink) = temp_file() else {
+    let mut buf: *mut c_char = ptr::null_mut();
+    let mut len: usize = 0;
+    // SAFETY: both out-pointers reference live locals; they are only read
+    // after `fclose` below, which finalises them.
+    let mem = unsafe { ffi::open_memstream(&raw mut buf, &raw mut len) };
+    if mem.is_null() {
         return (f(), Vec::new());
+    }
+    // SAFETY: `stderr` is the C library's stream pointer; it is replaced
+    // only under `LOCK` and restored before the memory stream is closed.
+    let saved = unsafe {
+        let saved = ffi::stderr;
+        ffi::stderr = mem;
+        saved
     };
-    // SAFETY: `dup` only duplicates descriptor 2; a negative result is
-    // handled below.
-    let saved = unsafe { ffi::dup(2) };
-    if saved < 0 {
-        return (f(), Vec::new());
-    }
-    // SAFETY: `sink` is an open file we own for the whole capture; fd 2 is
-    // restored from `saved` before `sink` is dropped.
-    let redirected = unsafe { ffi::dup2(sink.as_raw_fd(), 2) } >= 0;
     let result = f();
-    if redirected {
-        // SAFETY: `saved` is the duplicate of the original fd 2 made above.
-        unsafe { ffi::dup2(saved, 2) };
+    // SAFETY: as above; `mem` is open and closed exactly once, which
+    // flushes it and sets `buf`/`len`.
+    unsafe {
+        ffi::stderr = saved;
+        ffi::fclose(mem);
     }
-    // SAFETY: `saved` was returned by `dup` and is closed exactly once.
-    unsafe { ffi::close(saved) };
     drop(guard);
     let mut out = Vec::new();
-    if redirected && sink.seek(SeekFrom::Start(0)).is_ok() {
-        let _ = sink.read_to_end(&mut out);
-    }
-    (result, out)
-}
-
-/// An already-unlinked read/write temporary file.
-fn temp_file() -> Option<File> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir();
-    for _ in 0..16 {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!(".php-fileinfo-{}-{n}", std::process::id()));
-        if let Ok(file) = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            let _ = std::fs::remove_file(&path);
-            return Some(file);
+    if !buf.is_null() {
+        // SAFETY: `open_memstream` made `buf` a malloc'ed buffer of `len`
+        // bytes; it is copied, then freed once.
+        unsafe {
+            out.extend_from_slice(std::slice::from_raw_parts(buf.cast::<u8>(), len));
+            ffi::free(buf.cast());
         }
     }
-    None
+    (result, out)
 }
 
 /// Turns captured libmagic diagnostics into PHP warning texts: each line's
@@ -106,12 +93,17 @@ mod tests {
         assert_eq!(msgs, ["offset `string' invalid", "plain", "other"]);
     }
 
+    unsafe extern "C" {
+        fn fputs(s: *const c_char, stream: *mut ffi::CFile) -> std::ffi::c_int;
+    }
+
     #[test]
-    fn captures_writes_to_fd2() {
+    fn captures_c_stderr_but_not_fd2() {
         let ((), out) = with_captured_stderr(|| {
-            use std::io::Write;
-            let mut f = std::io::stderr();
-            let _ = f.write_all(b"captured!\n");
+            // SAFETY: a NUL-terminated literal and the (captured) stream.
+            unsafe { fputs(c"captured!\n".as_ptr(), ffi::stderr) };
+            // Rust writes to fd 2 directly: not captured.
+            eprintln!("fd 2 is not captured");
         });
         assert_eq!(out, b"captured!\n");
     }
