@@ -28,11 +28,9 @@ fn global_allocator_lifecycle() {
         php_memlimit::CHUNK_SIZE
     );
 
-    // The request thread owns the accounting; every block comes from
-    // mimalloc, the `zend_mm`-style heap stays unused.
+    // The request thread owns the accounting.
     assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
     let small: Vec<Box<[u8; 40]>> = (0..1000).map(|_| Box::new([7u8; 40])).collect();
-    assert_eq!(php_memlimit::GLOBAL.heap_chunks(), 0);
     assert!(small.iter().all(|b| b.iter().all(|&x| x == 7)));
     drop(black_box(small));
     assert_eq!(
@@ -101,13 +99,12 @@ fn global_allocator_lifecycle() {
     assert!(php_memlimit::GLOBAL.is_bound_to_current_thread());
     drop(black_box(small));
 
-    // gc_mem_caches() has no heap to collect: mimalloc gives empty pages
+    // gc_mem_caches() has nothing to collect: mimalloc gives empty pages
     // back itself (php-src without its allocator returns 0 as well).
     let boxes: Vec<Box<[u8; 3072]>> = (0..1024).map(|_| Box::new([2u8; 3072])).collect();
     assert!(boxes.iter().all(|b| b[3071] == 2));
     drop(black_box(boxes));
     assert_eq!(php_memlimit::gc_mem_caches(), 0);
-    assert_eq!(php_memlimit::GLOBAL.heap_chunks(), 0);
     php_memlimit::unbind_current_thread();
     assert!(!php_memlimit::GLOBAL.is_bound_to_current_thread());
 }

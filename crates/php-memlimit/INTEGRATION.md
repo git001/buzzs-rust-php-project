@@ -22,51 +22,39 @@ handler if installed, otherwise Rust prints
 
 ## Where the memory comes from
 
-The request thread's small blocks (up to 3072 bytes, alignment up to 16)
-come from a port of zend_mm's small-block heap (`src/heap.rs`): 30 size
-bins whose runs are carved out of 2 MiB chunks, unlocked free lists, a
-load and a store per allocation or free. Larger blocks, and every block of
-another thread, come from mimalloc. The accounting is identical either way
-(requested bytes, as before); the heap's chunks are not counted.
+Every block comes from mimalloc (a heap per thread, built for many small
+blocks; frees from any thread). `zend_mm` is not ported: php-src built
+without the Zend allocator behaves the same way (`gc_mem_caches()`
+returns 0, the cycle GC is unaffected).
 
-The request thread is the *owner*: `request_start` binds the calling
-thread and `request_end` unbinds a thread that `request_start` bound.
-Ownership is exclusive and never taken from a live owner: a thread that
-calls `request_start` while another thread still owns the heap (one that
-has not reached `request_end`) runs its request on mimalloc, correctly but
-more slowly. Heap blocks freed by any other thread (or by a former owner
-after it gave the heap up) go to per-bin lock-free remote lists the next
-owner reuses.
+Each thread counts on one `CountingAlloc`: by default the process-wide
+`GLOBAL`; a worker thread of a threaded server takes its own with
+`php_memlimit::attach_thread()` before its first request (php-src ZTS: a
+heap per thread), so its usage, peak and `memory_limit` are its own. The
+installed `ThreadAlloc` forwards each call to the calling thread's
+instance (`php_memlimit::current()`); the instance goes back to a pool
+when the thread ends. Process-wide settings (hard-limit handler, pending
+hook, heap observer, tracked mode) are set on `GLOBAL` before the threads
+attach. A block freed through another thread's instance than the one that
+counted it lowers that instance's count, clamped at 0.
+
+Within an instance the request thread is the *owner*: it counts with plain
+loads and stores, every other thread with locked read-modify-writes.
+`request_start` binds the calling thread and `request_end` unbinds a
+thread that `request_start` bound. Ownership is exclusive and never taken
+from a live owner: a thread that calls `request_start` while another
+thread still owns the instance counts on the shared path, correctly but
+more slowly.
 
 A SAPI that runs its requests on one thread binds that thread itself,
-before module startup, so that startup allocations use the heap too:
-`php_memlimit::bind_to_current_thread()` (php-cli: in `do_php_cli`, after
-the built-in server check). A thread bound this way keeps the heap across
-`request_end`, so the teardown that follows (the `Vm`'s drop or discard,
-TLS destructors at exit) frees on the owner path instead of the remote
-lists; it gives the heap up with `php_memlimit::unbind_current_thread()`
-if another thread is to take it. Multi-threaded SAPIs (`php -S` request
-threads, mod_php) leave the binding to `request_start`/`request_end`.
-
-Freed small blocks stay on their bins until the heap is *collected*
-(`zend_mm_gc`): runs whose every block is free give their pages back to
-their chunk, and chunks left without a used page (except the first) go
-back to mimalloc. php-src resets its whole heap at every request end
-(`zend_mm_shutdown`), which Rust's object lifetimes do not allow; the
-closest equivalent here is:
-
-- `request_end` collects before giving the heap up, on a thread that
-  `request_start` bound (php -S, mod_php). php-cli (bound explicitly, one
-  request per process) does not collect.
-- `php_memlimit::collect_heap()` collects on demand. A long-running SAPI
-  that drops its `Vm` after `request_end` can call it after the drop, so
-  the blocks the teardown freed are collected right away rather than at
-  the next request's end. It takes the heap for the duration when nobody
-  owns it and does nothing while another thread does.
-- `gc_mem_caches()` (below) collects and reports the bytes.
-
-Collecting never changes `memory_get_usage()`, the peak or the limits:
-they count live bytes.
+before module startup, so that startup allocations count on the owner path
+too: `php_memlimit::bind_to_current_thread()` (php-cli: in `do_php_cli`,
+after the built-in server check). A thread bound this way keeps the
+ownership across `request_end`, so the teardown that follows (the `Vm`'s
+drop or discard, TLS destructors at exit) stays on the owner path; it
+gives it up with `php_memlimit::unbind_current_thread()` if another thread
+is to take it. Multi-threaded SAPIs (`php -S` request threads, mod_php)
+leave the binding to `request_start`/`request_end`.
 
 ## 1. php-cli: install the allocator (once)
 
@@ -201,7 +189,7 @@ let out = input.repeat(mult);
 | `memory_get_usage(bool $real_usage = false)` | `php_memlimit::memory_get_usage(real)` |
 | `memory_get_peak_usage(bool $real_usage = false)` | `php_memlimit::memory_get_peak_usage(real)` |
 | `memory_reset_peak_usage()` | `php_memlimit::reset_peak()` |
-| `gc_mem_caches()` | `php_memlimit::gc_mem_caches()` (`zend_mm_gc`: the bytes of the heap's empty runs given back; reported to the heap observer) |
+| `gc_mem_caches()` | `php_memlimit::gc_mem_caches()` (0, as without the Zend allocator; reported to the heap observer) |
 
 `real_usage` is the usage rounded up to 2 MiB chunks (minimum one chunk), so
 a fresh script reports `memory_get_usage(true) === 2097152`, like PHP.
@@ -240,11 +228,9 @@ count.
 - Bytes are Rust `Layout` sizes; Zend rounds to bin sizes and adds chunk
   overhead, and our values are differently sized than zvals, so absolute
   numbers differ from PHP. Tests compare deltas or use `%d`.
-- `memory_get_usage(true)` is chunk-rounded usage, not mapped memory (the
-  heap keeps free small blocks on their bins and its chunks until it is
-  collected, see "Where the memory comes from"). For the same reason
-  `gc_mem_caches()` returns what the heap gave back, which is not
-  php-src's figure.
+- `memory_get_usage(true)` is chunk-rounded usage, not mapped memory
+  (mimalloc keeps and returns pages on its own, see "Where the memory
+  comes from").
 - `tried to allocate` is the Rust allocation (or reserved) size, not Zend's
   chunk/huge-block size.
 - On clamping to `max_memory_limit` we apply the max as the limit (PHP

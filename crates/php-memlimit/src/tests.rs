@@ -720,136 +720,10 @@ fn observing_keeps_the_limit_semantics() {
     assert_eq!(a.stats().current, 0);
 }
 
-// ---- the request thread's heap ------------------------------------------
-
-use crate::heap::{is_heap_block, small_size_to_bin, BIN_ELEMENTS, BIN_SIZE};
+// ---- the owner thread -----------------------------------------------------
 
 #[test]
-fn owner_small_blocks_come_from_the_heap() {
-    let a = CountingAlloc::new(System);
-    let before = alloc(&a, 24);
-    assert!(!is_heap_block(before.p), "unbound: the inner allocator");
-    assert!(a.bind_to_current_thread());
-    assert!(a.is_bound_to_current_thread());
-    let b = alloc(&a, 24);
-    assert!(is_heap_block(b.p));
-    assert_eq!(a.heap_chunks(), 1);
-    let addr = b.p.addr();
-    drop(b);
-    let c = alloc(&a, 20);
-    assert_eq!(c.p.addr(), addr, "same bin, reused LIFO like zend_mm");
-    let large = alloc(&a, MAX_SMALL_SIZE + 1);
-    assert!(!is_heap_block(large.p), "large blocks: the inner allocator");
-    // SAFETY: non-zero size.
-    let wide = unsafe { a.alloc(Layout::from_size_align(64, 64).expect("layout")) };
-    assert!(!is_heap_block(wide), "over-aligned: the inner allocator");
-    // SAFETY: allocated just above with this layout.
-    unsafe { a.dealloc(wide, Layout::from_size_align(64, 64).expect("layout")) };
-    assert_eq!(a.stats().current, 24 + 20 + MAX_SMALL_SIZE + 1);
-    // A block allocated before binding goes back to the inner allocator.
-    drop(before);
-    assert_eq!(a.stats().current, 20 + MAX_SMALL_SIZE + 1);
-}
-
-#[test]
-fn every_bin_hands_out_disjoint_aligned_blocks() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    for (bin, &size) in BIN_SIZE.iter().enumerate() {
-        let size = usize::from(size);
-        let align = if size % 16 == 0 { 16 } else { 8 };
-        let layout = Layout::from_size_align(size, align).expect("layout");
-        // Three runs' worth.
-        let n = 2 * usize::from(BIN_ELEMENTS[bin]) + 1;
-        let blocks: Vec<*mut u8> = (0..n)
-            .map(|i| {
-                // SAFETY: non-zero size.
-                let p = unsafe { a.alloc(layout) };
-                assert!(!p.is_null() && is_heap_block(p), "bin {bin}");
-                assert_eq!(p.addr() % align, 0, "bin {bin}");
-                let tag = u8::try_from(i % 256).expect("tag");
-                // SAFETY: `p` holds `size` bytes.
-                unsafe { ptr::write_bytes(p, tag, size) };
-                p
-            })
-            .collect();
-        for (i, &p) in blocks.iter().enumerate() {
-            let tag = u8::try_from(i % 256).expect("tag");
-            // SAFETY: `p` is live and was filled above.
-            let bytes = unsafe { std::slice::from_raw_parts(p, size) };
-            assert!(bytes.iter().all(|&b| b == tag), "bin {bin}: overlap");
-        }
-        for p in blocks {
-            // SAFETY: allocated above with `layout`, freed once.
-            unsafe { a.dealloc(p, layout) };
-        }
-    }
-    assert_eq!(a.stats().current, 0);
-    assert_eq!(a.heap_chunks(), 1, "195 pages fit one chunk");
-}
-
-#[test]
-fn realloc_keeps_contents_across_bins_and_allocators() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let mut b = alloc(&a, 10);
-    // SAFETY: `b.p` holds 10 bytes.
-    unsafe {
-        for i in 0..10u8 {
-            b.p.add(usize::from(i)).write(i + 1);
-        }
-    }
-    let check = |b: &Block<'_>| {
-        // SAFETY: every size below is at least 10 bytes.
-        let bytes = unsafe { std::slice::from_raw_parts(b.p, 10) };
-        assert_eq!(bytes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    };
-    let first = b.p;
-    grow(&mut b, 16);
-    assert_eq!(b.p, first, "same bin: in place");
-    grow(&mut b, 100);
-    assert_ne!(b.p, first, "moved to the 112-byte bin");
-    assert!(is_heap_block(b.p));
-    check(&b);
-    grow(&mut b, 5000);
-    assert!(!is_heap_block(b.p), "large: moved to the inner allocator");
-    check(&b);
-    grow(&mut b, 30);
-    assert!(!is_heap_block(b.p), "an inner block stays there");
-    check(&b);
-    assert_eq!(a.stats().current, 30);
-    assert_eq!(a.stats().reallocs, 4);
-    // The block left in the 16-byte bin is handed out again.
-    let again = alloc(&a, 12);
-    assert_eq!(again.p, first);
-}
-
-#[test]
-fn zeroed_heap_blocks_are_zero_after_reuse() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let layout = Layout::from_size_align(64, 8).expect("layout");
-    // SAFETY: non-zero size; the block is filled, then freed once.
-    let p = unsafe {
-        let p = a.alloc(layout);
-        ptr::write_bytes(p, 0xab, 64);
-        a.dealloc(p, layout);
-        p
-    };
-    // SAFETY: non-zero size.
-    let q = unsafe { a.alloc_zeroed(layout) };
-    assert_eq!(q, p, "the freed block is reused");
-    // SAFETY: `q` holds 64 bytes.
-    assert!(unsafe { std::slice::from_raw_parts(q, 64) }
-        .iter()
-        .all(|&b| b == 0));
-    // SAFETY: allocated above with `layout`.
-    unsafe { a.dealloc(q, layout) };
-    assert_eq!(a.stats().current, 0);
-}
-
-#[test]
-fn heap_ownership_is_exclusive_until_released() {
+fn ownership_is_exclusive_until_released() {
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
     assert!(a.bind_to_current_thread(), "rebinding the owner is a no-op");
@@ -857,21 +731,18 @@ fn heap_ownership_is_exclusive_until_released() {
         s.spawn(|| {
             assert!(!a.bind_to_current_thread(), "owned by another thread");
             assert!(!a.is_bound_to_current_thread());
-            assert!(!is_heap_block(alloc(&a, 24).p));
+            drop(alloc(&a, 24));
         });
     });
     let mine = alloc(&a, 24);
-    assert!(is_heap_block(mine.p));
     a.unbind_current_thread();
     assert!(!a.is_bound_to_current_thread());
-    // Freed after unbinding: onto the remote list.
+    // Freed after unbinding: on the shared counter.
     drop(mine);
     std::thread::scope(|s| {
         s.spawn(|| {
             assert!(a.bind_to_current_thread(), "free again");
-            let b = alloc(&a, 24);
-            assert!(is_heap_block(b.p));
-            drop(b);
+            drop(alloc(&a, 24));
             a.unbind_current_thread();
         });
     });
@@ -887,20 +758,15 @@ fn heap_ownership_is_exclusive_until_released() {
 fn explicit_binding_survives_request_end() {
     // php-cli binds before the request: the teardown that follows
     // `request_end` (TLS destructors, the Vm's drop) stays on the owner
-    // path instead of pushing every block onto the remote lists.
+    // path.
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
     a.request_start(Some(8 * M)).expect("limit");
     assert!(a.is_bound_to_current_thread());
     let b = alloc(&a, 24);
-    assert!(is_heap_block(b.p));
     a.request_end();
     assert!(a.is_bound_to_current_thread(), "bound explicitly: kept");
     let c = alloc(&a, 24);
-    assert!(
-        is_heap_block(c.p),
-        "teardown allocations still use the heap"
-    );
     drop(b);
     drop(c);
     a.unbind_current_thread();
@@ -912,7 +778,7 @@ fn explicit_binding_survives_request_end() {
     a.request_start(None).expect("unlimited");
     a.request_end();
     assert!(!a.is_bound_to_current_thread());
-    // Binding explicitly during a request pins the heap too.
+    // Binding explicitly during a request pins the ownership too.
     a.request_start(None).expect("unlimited");
     assert!(a.bind_to_current_thread());
     a.request_end();
@@ -923,7 +789,7 @@ fn explicit_binding_survives_request_end() {
     assert!(a.bind_to_current_thread());
     std::thread::scope(|s| {
         s.spawn(|| {
-            assert!(a.request_start(None).is_ok(), "runs on the inner allocator");
+            assert!(a.request_start(None).is_ok(), "counts on the shared path");
             assert!(!a.is_bound_to_current_thread());
             a.request_end();
         });
@@ -934,11 +800,11 @@ fn explicit_binding_survives_request_end() {
 }
 
 #[test]
-fn unbinding_while_observed_frees_the_heap() {
+fn unbinding_while_observed_releases_the_ownership() {
     // Observing parks the owner's ownership (`observe(true)` takes it, so
     // the observed thread's frees are reported on the non-owner path) and
     // gives it back when observing stops. A request-bound thread whose
-    // request ends in between must not get the heap back.
+    // request ends in between must not get it back.
     let a = CountingAlloc::new(System);
     assert!(a.set_observer(record_event));
     a.request_start(None).expect("unlimited");
@@ -950,7 +816,7 @@ fn unbinding_while_observed_frees_the_heap() {
     a.observe(false);
     assert!(
         !a.is_bound_to_current_thread(),
-        "the give-back was cancelled: the heap is free for the next request"
+        "the give-back was cancelled: free for the next request"
     );
     std::thread::scope(|s| {
         s.spawn(|| {
@@ -958,7 +824,8 @@ fn unbinding_while_observed_frees_the_heap() {
             a.unbind_current_thread();
         });
     });
-    // An explicitly bound thread keeps the heap across an observed request.
+    // An explicitly bound thread keeps the ownership across an observed
+    // request.
     assert!(a.bind_to_current_thread());
     a.request_start(None).expect("unlimited");
     a.observe(true);
@@ -974,192 +841,28 @@ fn unbinding_while_observed_frees_the_heap() {
 }
 
 #[test]
-fn remote_frees_come_back_to_the_owner() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let layout = Layout::from_size_align(48, 8).expect("layout");
-    // SAFETY: non-zero size.
-    let handed: Vec<usize> = (0..100)
-        .map(|_| unsafe { a.alloc(layout) }.expose_provenance())
-        .collect();
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            for &addr in &handed {
-                // SAFETY: allocated above with `layout`, freed once, here.
-                unsafe { a.dealloc(ptr::with_exposed_provenance_mut(addr), layout) };
-            }
-        });
-    });
-    assert_eq!(a.stats().current, 0);
-    // Two 85-element runs were carved; 70 blocks are still on the owner's
-    // list, then the 100 remote ones are taken over before any new run.
-    // SAFETY: non-zero size.
-    let again: Vec<*mut u8> = (0..170).map(|_| unsafe { a.alloc(layout) }).collect();
-    let got: std::collections::HashSet<usize> = again.iter().map(|p| p.addr()).collect();
-    assert!(handed.iter().all(|addr| got.contains(addr)));
-    for p in again {
-        // SAFETY: allocated above with `layout`, freed once.
-        unsafe { a.dealloc(p, layout) };
-    }
-    assert_eq!(a.heap_chunks(), 1);
-}
-
-#[test]
-fn heap_survives_cross_thread_churn() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let sizes = [8usize, 24, 56, 100, 256, 640, 3000, 5000];
-    std::thread::scope(|s| {
-        let mut workers = Vec::new();
-        for _ in 0..3 {
-            let (tx, rx) = std::sync::mpsc::channel::<Vec<(usize, usize, u8)>>();
-            workers.push(tx);
-            let a = &a;
-            s.spawn(move || {
-                for batch in rx {
-                    for (addr, size, tag) in batch {
-                        let p = ptr::with_exposed_provenance_mut::<u8>(addr);
-                        // SAFETY: the owner filled `size` bytes with `tag`
-                        // and handed the block over.
-                        let bytes = unsafe { std::slice::from_raw_parts(p, size) };
-                        assert!(bytes.iter().all(|&b| b == tag), "corrupted");
-                        let layout = Layout::from_size_align(size, 8).expect("layout");
-                        // SAFETY: allocated by the owner with `layout`.
-                        unsafe { a.dealloc(p, layout) };
-                    }
-                }
-            });
-        }
-        for round in 0..500usize {
-            let mut batch = Vec::new();
-            for (i, &size) in sizes.iter().enumerate() {
-                let tag = u8::try_from((round + i) % 256).expect("tag");
-                let layout = Layout::from_size_align(size, 8).expect("layout");
-                // SAFETY: non-zero size; filled below.
-                let p = unsafe { a.alloc(layout) };
-                assert!(!p.is_null());
-                // SAFETY: `p` holds `size` bytes.
-                unsafe { ptr::write_bytes(p, tag, size) };
-                if (round + i) % 2 == 0 {
-                    batch.push((p.expose_provenance(), size, tag));
-                } else {
-                    // SAFETY: `p` is live, filled above, freed once.
-                    unsafe {
-                        assert!(std::slice::from_raw_parts(p, size)
-                            .iter()
-                            .all(|&b| b == tag));
-                        a.dealloc(p, layout);
-                    }
-                }
-            }
-            workers[round % 3].send(batch).expect("worker");
-        }
-    });
-    assert_eq!(a.raw_usage(), 0);
-}
-
-#[test]
-fn another_thread_reallocates_and_frees_the_owners_heap_block() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let layout = Layout::from_size_align(24, 8).expect("layout");
-    // SAFETY: non-zero size; filled below.
-    let p = unsafe { a.alloc(layout) };
-    assert!(is_heap_block(p));
-    // SAFETY: `p` holds 24 bytes.
-    unsafe { ptr::write_bytes(p, 0x5a, 24) };
-    let addr = p.expose_provenance();
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let p = ptr::with_exposed_provenance_mut::<u8>(addr);
-            // Same bin: resized in place, still the heap's block.
-            // SAFETY: allocated by the owner with `layout`; 20 > 0.
-            let q = unsafe { a.realloc(p, layout, 20) };
-            assert_eq!(q, p);
-            let shrunk = Layout::from_size_align(20, 8).expect("layout");
-            // Another bin: this thread does not own the heap, so the block
-            // moves to the inner allocator and the old one is freed
-            // remotely.
-            // SAFETY: `q` is live with `shrunk`; 100 > 0.
-            let r = unsafe { a.realloc(q, shrunk, 100) };
-            assert!(!r.is_null() && !is_heap_block(r));
-            // SAFETY: `r` holds 100 bytes, the first 20 copied from `q`.
-            let kept = unsafe { std::slice::from_raw_parts(r, 20) };
-            assert!(kept.iter().all(|&b| b == 0x5a), "contents moved");
-            // SAFETY: allocated just above with this layout.
-            unsafe { a.dealloc(r, Layout::from_size_align(100, 8).expect("layout")) };
-        });
-    });
-    assert_eq!(a.stats().current, 0);
-    // The owner's list still holds the rest of the run (169 blocks); the
-    // 170th request finds the list dry and takes the remote free over.
-    let per_run = usize::from(BIN_ELEMENTS[small_size_to_bin(24)]);
-    // SAFETY: non-zero size.
-    let got: Vec<*mut u8> = (0..per_run).map(|_| unsafe { a.alloc(layout) }).collect();
-    assert_eq!(
-        got[per_run - 1].addr(),
-        addr,
-        "remote free reused before a new run"
-    );
-    for p in got {
-        // SAFETY: allocated above with `layout`, freed once.
-        unsafe { a.dealloc(p, layout) };
-    }
-    assert_eq!(a.stats().current, 0);
-}
-
-#[test]
-fn shrinking_realloc_moves_to_the_smaller_bin() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let mut b = alloc(&a, 100);
-    let big = b.p;
-    // SAFETY: `b.p` holds 100 bytes.
-    unsafe {
-        for i in 0..100u8 {
-            b.p.add(usize::from(i)).write(i);
-        }
-    }
-    grow(&mut b, 10);
-    assert_ne!(b.p, big, "a 112-byte block is not kept for 10 bytes");
-    assert!(is_heap_block(b.p));
-    // SAFETY: `b.p` holds 10 bytes, copied from the old block.
-    let bytes = unsafe { std::slice::from_raw_parts(b.p, 10) };
-    assert_eq!(bytes, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    assert_eq!(a.stats().current, 10);
-    // The 112-byte block is free again: its bin hands it out next.
-    let again = alloc(&a, 112);
-    assert_eq!(again.p, big);
-    assert_eq!(a.stats().current, 122);
-}
-
-#[test]
 fn owner_fast_path_accounts_like_the_general_one() {
-    // Small heap blocks of the owner take the call-free fast path; its
-    // figures must be the ones the general path produces.
+    // Blocks of the owner up to `MAX_LARGE_SIZE` take the call-free fast
+    // path; its figures must be the ones the general path produces.
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
     let x = alloc(&a, 24);
     let y = alloc(&a, 1000);
-    assert!(is_heap_block(x.p) && is_heap_block(y.p));
     let s = a.stats();
     assert_eq!((s.current, s.peak, s.allocs, s.frees), (1024, 1024, 2, 0));
-    let y_addr = y.p.addr();
     drop(y);
     let s = a.stats();
     assert_eq!((s.current, s.peak, s.frees), (24, 1024, 1));
     let z = alloc(&a, 500);
     assert_eq!(a.stats().peak, 1024, "below the peak: unchanged");
     let w = alloc(&a, 1000);
-    assert_eq!(w.p.addr(), y_addr, "the freed block is reused");
     assert_eq!(a.stats().current, 1524);
     assert_eq!(a.stats().peak, 1524, "a new high-water mark");
-    // A large block (the inner allocator, through the general path) joins
-    // the same counters.
-    let big = alloc(&a, MAX_SMALL_SIZE + 1);
-    assert!(!is_heap_block(big.p));
-    assert_eq!(a.stats().current, 1524 + MAX_SMALL_SIZE + 1);
-    assert_eq!(a.stats().peak, 1524 + MAX_SMALL_SIZE + 1);
+    // A huge block (through the general path) joins the same counters.
+    let huge = crate::limit::MAX_LARGE_SIZE + 1;
+    let big = alloc(&a, huge);
+    assert_eq!(a.stats().current, 1524 + huge);
+    assert_eq!(a.stats().peak, 1524 + huge);
     drop(big);
     drop(w);
     drop(z);
@@ -1171,9 +874,9 @@ fn owner_fast_path_accounts_like_the_general_one() {
 
 #[test]
 fn fast_path_defers_to_the_limit_check() {
-    // A small heap block that would cross the soft threshold leaves the
-    // fast path for the general one, which records the violation and
-    // grants the block all the same.
+    // A block that would cross the soft threshold leaves the fast path for
+    // the general one, which records the violation and grants the block
+    // all the same.
     let a = CountingAlloc::new(System);
     a.request_start(Some(4 * M)).expect("limit");
     assert!(a.is_bound_to_current_thread());
@@ -1183,7 +886,6 @@ fn fast_path_defers_to_the_limit_check() {
     while a.usage() + 3000 <= 4 * M {
         fill.push(alloc(&a, 3000));
     }
-    assert!(fill.iter().all(|b| is_heap_block(b.p)));
     assert_eq!(a.check(), None);
     let room = 4 * M - a.usage();
     assert!(room < 3000);
@@ -1191,7 +893,7 @@ fn fast_path_defers_to_the_limit_check() {
     assert_eq!(a.usage(), 4 * M);
     assert_eq!(a.check(), None, "exactly at the limit is fine");
     let over = alloc(&a, 8);
-    assert!(!over.p.is_null() && is_heap_block(over.p), "granted");
+    assert!(!over.p.is_null(), "granted");
     assert_eq!(
         a.check(),
         Some(OverLimit {
@@ -1210,31 +912,25 @@ fn fast_path_defers_to_the_limit_check() {
 }
 
 #[test]
-fn observing_takes_the_owner_off_the_heap_and_gives_it_back() {
+fn observing_takes_the_ownership_and_gives_it_back() {
     let a = CountingAlloc::new(System);
     assert!(a.bind_to_current_thread());
     assert!(a.set_observer(record_event));
     let before = alloc(&a, 24);
-    assert!(is_heap_block(before.p));
     a.observe(true);
     assert!(
         !a.is_bound_to_current_thread(),
-        "the observed thread gives the heap up"
+        "the observed thread gives the ownership up"
     );
     let during = alloc(&a, 24);
-    assert!(
-        !is_heap_block(during.p),
-        "observed allocations: the inner allocator"
-    );
     let during_addr = during.p.addr();
     drop(during);
     let before_addr = before.p.addr();
-    // A heap block freed while observed: remote list, and reported.
+    // A block of the owner freed while observed: reported.
     drop(before);
     a.observe(false);
     assert!(a.is_bound_to_current_thread(), "ownership comes back");
     let after = alloc(&a, 24);
-    assert!(is_heap_block(after.p));
     assert_eq!(
         take_events(),
         vec![
@@ -1247,43 +943,6 @@ fn observing_takes_the_owner_off_the_heap_and_gives_it_back() {
         ]
     );
     drop(after);
-    assert_eq!(a.stats().current, 0);
-}
-
-#[test]
-fn sixteen_aligned_requests_of_odd_sizes_are_served_aligned() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let mut live = Vec::new();
-    for size in [1usize, 17, 33, 100, 1000, 3057, 3072] {
-        let layout = Layout::from_size_align(size, 16).expect("layout");
-        // SAFETY: non-zero size.
-        let p = unsafe { a.alloc(layout) };
-        assert!(!p.is_null() && is_heap_block(p), "{size}");
-        assert_eq!(p.addr() % 16, 0, "{size}");
-        // SAFETY: `p` holds `size` bytes.
-        unsafe { ptr::write_bytes(p, 0xee, size) };
-        live.push((p, layout));
-    }
-    // 3073 bytes at 16 is past the last bin; 8 bytes at 32 is over-aligned.
-    for layout in [
-        Layout::from_size_align(3073, 16).expect("layout"),
-        Layout::from_size_align(8, 32).expect("layout"),
-    ] {
-        // SAFETY: non-zero size.
-        let p = unsafe { a.alloc(layout) };
-        assert!(!p.is_null() && !is_heap_block(p), "{layout:?}");
-        assert_eq!(p.addr() % layout.align(), 0);
-        // SAFETY: allocated just above with `layout`.
-        unsafe { a.dealloc(p, layout) };
-    }
-    for (p, layout) in live {
-        // SAFETY: `p` holds `layout.size()` bytes filled above.
-        let bytes = unsafe { std::slice::from_raw_parts(p, layout.size()) };
-        assert!(bytes.iter().all(|&b| b == 0xee), "{layout:?}: overlap");
-        // SAFETY: allocated above with `layout`, freed once.
-        unsafe { a.dealloc(p, layout) };
-    }
     assert_eq!(a.stats().current, 0);
 }
 
@@ -1320,151 +979,6 @@ fn pending_hook_runs_once_per_violation() {
     a.clear();
     drop(over);
     a.request_end();
-}
-
-// ---- heap collection (`zend_mm_gc`) ----------------------------------------
-
-use crate::heap::{BIN_PAGES, USABLE_PAGES};
-use crate::limit::PAGE_SIZE;
-
-/// The 3 KiB bin's geometry: `(blocks per run, pages per run, runs that
-/// fill the first chunk and start a second one)`.
-fn three_k_runs() -> (usize, usize, usize) {
-    let bin = small_size_to_bin(3072);
-    let pages = usize::from(BIN_PAGES[bin]);
-    (
-        usize::from(BIN_ELEMENTS[bin]),
-        pages,
-        USABLE_PAGES / pages + 1,
-    )
-}
-
-#[test]
-fn gc_mem_caches_gives_empty_runs_and_chunks_back() {
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let (per_run, pages, runs) = three_k_runs();
-    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&a, 3072)).collect();
-    assert!(blocks.iter().all(|b| is_heap_block(b.p)));
-    assert_eq!(a.heap_chunks(), 2);
-    let live = a.stats();
-    assert_eq!(a.gc_mem_caches(), 0, "every block is live");
-    assert_eq!(a.stats(), live, "collecting changes no figure");
-    drop(blocks);
-    let (usage, peak) = (a.usage(), a.peak());
-    assert_eq!(a.gc_mem_caches(), runs * pages * PAGE_SIZE);
-    assert_eq!(a.heap_chunks(), 1, "the second chunk went back");
-    assert_eq!((a.usage(), a.peak()), (usage, peak));
-    assert_eq!(a.gc_mem_caches(), 0, "nothing left to give back");
-    // The heap serves blocks again, from the first chunk's pages.
-    let again = alloc(&a, 3072);
-    assert!(is_heap_block(again.p));
-    drop(again);
-    assert_eq!(a.stats().current, 0);
-    a.unbind_current_thread();
-}
-
-#[test]
-fn request_end_collects_the_heap_of_a_request_bound_thread() {
-    // A php -S / mod_php request thread, bound by `request_start`, gives
-    // back the runs and chunks its request freed before it gives the heap
-    // up (php-src resets its whole heap at every request end).
-    let (per_run, _, runs) = three_k_runs();
-    let a = CountingAlloc::new(System);
-    a.request_start(None).expect("unlimited");
-    assert!(a.is_bound_to_current_thread());
-    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&a, 3072)).collect();
-    assert_eq!(a.heap_chunks(), 2);
-    drop(blocks);
-    a.request_end();
-    assert!(!a.is_bound_to_current_thread());
-    assert_eq!(a.heap_chunks(), 1, "collected before the heap was given up");
-    // php-cli, bound explicitly, leaves its heap as it is: the process ends
-    // with its request.
-    let b = CountingAlloc::new(System);
-    assert!(b.bind_to_current_thread());
-    b.request_start(None).expect("unlimited");
-    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&b, 3072)).collect();
-    drop(blocks);
-    b.request_end();
-    assert!(b.is_bound_to_current_thread());
-    assert_eq!(b.heap_chunks(), 2, "not collected");
-    b.unbind_current_thread();
-    assert_eq!((a.stats().current, b.stats().current), (0, 0));
-}
-
-#[test]
-fn collect_heap_takes_a_free_heap_for_the_collection() {
-    let (per_run, pages, runs) = three_k_runs();
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    let blocks: Vec<Block<'_>> = (0..runs * per_run).map(|_| alloc(&a, 3072)).collect();
-    a.unbind_current_thread();
-    // Freed after the heap was given up (a request's teardown after
-    // `request_end`): onto the remote lists.
-    drop(blocks);
-    assert_eq!(a.heap_chunks(), 2);
-    // While another thread owns the heap, collecting does nothing here.
-    // (Results are checked after the barriers, so that a failure cannot
-    // leave the other thread waiting.)
-    let owned = std::sync::Barrier::new(2);
-    let checked = std::sync::Barrier::new(2);
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let bound = a.bind_to_current_thread();
-            owned.wait();
-            checked.wait();
-            a.unbind_current_thread();
-            assert!(bound, "the heap was free");
-        });
-        owned.wait();
-        let collected = a.collect_heap();
-        checked.wait();
-        assert_eq!(collected, 0, "owned by another thread");
-    });
-    assert_eq!(a.heap_chunks(), 2);
-    // Nobody owns it now: it is taken for the collection, which takes the
-    // remote frees over too, and given up again.
-    assert_eq!(a.collect_heap(), runs * pages * PAGE_SIZE);
-    assert_eq!(a.heap_chunks(), 1);
-    assert!(!a.is_bound_to_current_thread());
-    assert!(a.bind_to_current_thread(), "free again");
-    a.unbind_current_thread();
-    assert_eq!(a.stats().current, 0);
-}
-
-#[test]
-fn gc_mem_caches_while_observed_collects_and_reports() {
-    // `zend_mm_custom_handlers_gc_01`: the observed heap's gc handler runs
-    // `zend_mm_gc` on the original heap and reports what it freed. The
-    // observed thread's ownership is parked, so the heap is taken for the
-    // collection and parked again.
-    let (per_run, pages, _) = three_k_runs();
-    let a = CountingAlloc::new(System);
-    assert!(a.bind_to_current_thread());
-    assert!(a.set_observer(record_event));
-    let _ = take_events();
-    let run: Vec<Block<'_>> = (0..per_run).map(|_| alloc(&a, 3072)).collect();
-    a.observe(true);
-    // Observed frees: the remote lists, and reported.
-    drop(run);
-    assert_eq!(a.gc_mem_caches(), pages * PAGE_SIZE);
-    assert!(!a.is_bound_to_current_thread(), "still parked");
-    a.observe(false);
-    assert!(a.is_bound_to_current_thread(), "ownership comes back");
-    let heard = take_events();
-    assert_eq!(heard.len(), per_run + 1, "{heard:?}");
-    assert!(heard[..per_run]
-        .iter()
-        .all(|e| matches!(e, HeapEvent::Free { .. })));
-    assert_eq!(
-        heard[per_run],
-        HeapEvent::Gc {
-            freed: pages * PAGE_SIZE
-        }
-    );
-    a.unbind_current_thread();
-    assert_eq!(a.stats().current, 0);
 }
 
 #[test]

@@ -28,18 +28,15 @@
 //!   [observing](observe_heap) is on (`ext/zend_test`'s custom ZendMM
 //!   handlers); while it is off the fast paths do no extra work.
 //!
-//! The memory itself comes from a port of `zend_mm`'s small-block heap for
-//! the request thread (the thread [bound](bind_to_current_thread) by
-//! [`request_start`]: size bins carved out of 2 MiB chunks, unlocked free
-//! lists, empty runs and chunks given back by [`gc_mem_caches`],
-//! [`collect_heap`] and the end of a request-bound thread's request) and
-//! from [`MiMalloc`] for larger blocks and other threads; see
+//! The memory itself comes from [`MiMalloc`] (mimalloc: a heap per
+//! thread, built for many small blocks); `zend_mm` is not ported, as in
+//! php-src built without the Zend allocator. Each thread of a threaded
+//! server counts on its own instance ([`attach_thread`]); see
 //! [`CountingAlloc`].
 //!
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
 
 mod counting;
-mod heap;
 mod limit;
 
 use std::alloc::{GlobalAlloc, Layout};
@@ -52,7 +49,6 @@ pub use counting::{
     fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
     Stats,
 };
-pub use heap::{MAX_SMALL_ALIGN, MAX_SMALL_SIZE};
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,
@@ -66,7 +62,7 @@ pub use limit::{
 /// It only sees allocations once installed with
 /// [`install_global_allocator!`]; until then usage reads as
 /// [`PHP_BASELINE`] and only [`try_reserve`] enforces the limit.
-pub static GLOBAL: CountingAlloc<MiMalloc> = CountingAlloc::without_heap(MiMalloc);
+pub static GLOBAL: CountingAlloc<MiMalloc> = CountingAlloc::new(MiMalloc);
 
 thread_local! {
     /// The calling thread's own allocator ([`attach_thread`]); `None`:
@@ -103,7 +99,7 @@ pub fn attach_thread() {
     }
     let pooled = POOL.lock().unwrap_or_else(PoisonError::into_inner).pop();
     let own: &'static CountingAlloc<MiMalloc> =
-        pooled.unwrap_or_else(|| Box::leak(Box::new(CountingAlloc::without_heap(MiMalloc))));
+        pooled.unwrap_or_else(|| Box::leak(Box::new(CountingAlloc::new(MiMalloc))));
     own.inherit(&GLOBAL);
     let _ = own.bind_to_current_thread();
     THREAD.with(|t| t.set(Some(own)));
@@ -133,9 +129,8 @@ pub struct ThreadAlloc;
 // SAFETY: every method forwards its arguments unchanged to one
 // `CountingAlloc`, whose `GlobalAlloc` impl upholds the contract. A block
 // may be freed or resized through another thread's allocator than the one
-// that served it: none of them has a heap (`without_heap`), so every block
-// is a block of the one `MiMalloc` they all wrap, which frees it whoever
-// asks.
+// that served it: every block is a block of the one `MiMalloc` they all
+// wrap, which frees it whoever asks.
 unsafe impl GlobalAlloc for ThreadAlloc {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -239,19 +234,9 @@ pub fn reset_peak() {
     current().reset_peak();
 }
 
-/// [`CountingAlloc::gc_mem_caches`] on [`current`] (`gc_mem_caches()`:
-/// `zend_mm_gc`, the bytes of the heap's empty runs given back).
+/// [`CountingAlloc::gc_mem_caches`] on [`current`] (`gc_mem_caches()`).
 pub fn gc_mem_caches() -> usize {
     current().gc_mem_caches()
-}
-
-/// [`CountingAlloc::collect_heap`] on [`current`]: `zend_mm_gc` without the
-/// observer report. [`request_end`] runs it for a thread that
-/// [`request_start`] bound; a long-running SAPI that tears its `Vm` down
-/// after `request_end` can call it again afterwards, so that the blocks the
-/// teardown freed are collected too.
-pub fn collect_heap() -> usize {
-    current().collect_heap()
 }
 
 /// [`CountingAlloc::set_observer`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
@@ -273,15 +258,16 @@ pub fn is_observing_heap() -> bool {
 /// [`request_start`] binds the request thread for the request; a SAPI
 /// that runs its requests on one thread (php-cli) calls this earlier, on
 /// that thread (e.g. before module startup), so that startup allocations
-/// use the heap too and the binding outlives [`request_end`] (the teardown
-/// stays on the owner path). `false` while another thread owns it.
+/// count on the owner path too and the binding outlives [`request_end`]
+/// (the teardown stays on the owner path). `false` while another thread
+/// owns it.
 pub fn bind_to_current_thread() -> bool {
     current().bind_to_current_thread()
 }
 
 /// [`CountingAlloc::unbind_current_thread`] on [`current`] ([`request_end`]
 /// does it for a thread that [`request_start`] bound; an explicitly bound
-/// thread calls it when it is done with the heap).
+/// thread calls it when it is done).
 pub fn unbind_current_thread() {
     current().unbind_current_thread();
 }

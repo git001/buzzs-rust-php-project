@@ -819,15 +819,13 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
     });
 }
 
-/// Cleanup guard executed at the end of each request on the worker thread,
-/// collecting freed heap memory back to mimalloc chunks while retaining thread
-/// ownership for subsequent requests.
+/// Cleanup guard executed at the end of each request on the worker thread:
+/// forgets the request's context.
 struct RequestScopeGuard;
 
 impl Drop for RequestScopeGuard {
     fn drop(&mut self) {
         CURRENT.with(|c| *c.borrow_mut() = None);
-        let _ = php_memlimit::collect_heap();
     }
 }
 
