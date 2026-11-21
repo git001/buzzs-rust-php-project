@@ -2186,6 +2186,8 @@ pub struct Vm {
     pub(crate) output_handler_threw: bool,
     /// The main script path.
     pub script_path: ZStr,
+    /// `SG(request_info)`: the request as the SAPI describes it.
+    pub request_info: php_sapi::RequestInfo,
     /// Command line arguments.
     pub argv: Vec<ZStr>,
     /// Class declarations already bound (by address).

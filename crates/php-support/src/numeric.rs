@@ -231,7 +231,8 @@ pub(crate) fn strtol(s: &[u8]) -> (i64, usize) {
 }
 
 /// `ZEND_ATOL()` — `strtol(s, NULL, 10)`.
-pub(crate) fn atol(s: &[u8]) -> i64 {
+#[must_use]
+pub fn atol(s: &[u8]) -> i64 {
     strtol(s).0
 }
 

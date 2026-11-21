@@ -11,6 +11,7 @@ php-parser = { path = "../php-parser" }
 php-mbstring = { path = "../php-mbstring" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
+php-sapi = { path = "../php-sapi" }
 php-random = { path = "../php-random" }
 php-stdarr = { path = "../php-stdarr" }
 php-stdstr = { path = "../php-stdstr" }

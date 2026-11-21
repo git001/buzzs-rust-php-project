@@ -1023,6 +1023,25 @@ fn run_request_inner(
 
     // php_cli_server_request_startup() + php_request_startup()
     let auth = crate::vars::auth_data(ctx.request.header(b"authorization"));
+    // php_cli_server_client_populate_request_info(), php_handle_auth_data()
+    // and sapi_activate() (cookie_data, headers_only).
+    let req = &ctx.request;
+    let method = req.method.as_str().as_bytes().to_vec();
+    vm.request_info = php_sapi::RequestInfo {
+        headers_only: php_sapi::RequestInfo::is_head(Some(&method)),
+        request_method: Some(method),
+        query_string: req.query_string.clone(),
+        cookie_data: req.header(b"cookie").map(<[u8]>::to_vec),
+        content_length: crate::vars::content_length(ctx),
+        path_translated: req.path_translated.clone(),
+        request_uri: req.request_uri.clone(),
+        content_type: req.header(b"content-type").map(<[u8]>::to_vec),
+        auth_user: auth.0.clone(),
+        auth_password: auth.1.clone(),
+        auth_digest: auth.2.clone(),
+        proto_num: req.protocol_version,
+        ..php_sapi::RequestInfo::default()
+    };
     let ob = vm.ini.get_long("output_buffering");
     let implicit_flush = vm.ini.get_bool("implicit_flush");
     php_support::output::request_startup(vm, None, ob, implicit_flush);

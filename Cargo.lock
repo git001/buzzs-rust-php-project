@@ -416,6 +416,8 @@ dependencies = [
  "php-memlimit",
  "php-parser",
  "php-runtime",
+ "php-sapi",
+ "php-streams",
  "php-support",
  "php-vm",
 ]
@@ -429,6 +431,7 @@ dependencies = [
  "php-lexer",
  "php-memlimit",
  "php-runtime",
+ "php-sapi",
  "php-stdmisc",
  "php-streams",
  "php-support",
@@ -1215,6 +1218,13 @@ name = "php-runtime"
 version = "0.1.0"
 
 [[package]]
+name = "php-sapi"
+version = "0.1.0"
+dependencies = [
+ "php-stdstr",
+]
+
+[[package]]
 name = "php-sapi-apache2"
 version = "0.1.0"
 dependencies = [
@@ -1235,6 +1245,7 @@ dependencies = [
  "php-ext-streams",
  "php-memlimit",
  "php-runtime",
+ "php-sapi",
  "php-stdmisc",
  "php-streams",
  "php-support",
@@ -1362,6 +1373,7 @@ dependencies = [
  "php-parser",
  "php-random",
  "php-runtime",
+ "php-sapi",
  "php-stdarr",
  "php-stdstr",
  "php-support",

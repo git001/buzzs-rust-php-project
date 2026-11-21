@@ -165,6 +165,7 @@ impl Vm {
         self.dim_ctx = crate::ext::DimensionCtx::Read;
         self.prop_ctx = crate::ext::PropCtx::Read;
         self.ini_stage = crate::ext::IniStage::Runtime;
+        self.request_info = php_sapi::RequestInfo::default();
         self.magic_call_name = None;
         self.main_return = Value::Null;
         self.call_bufs = crate::vm::CallBufs::prewarmed(&self.empty_code);

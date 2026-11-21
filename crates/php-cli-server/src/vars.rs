@@ -327,58 +327,10 @@ fn merge(dest: &mut HashTable, src: &ZArray) {
     }
 }
 
-/// `(user, password, digest)` of HTTP authentication.
-pub type AuthData = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
-
-/// `php_handle_auth_data()`.
-pub fn auth_data(auth: Option<&[u8]>) -> AuthData {
-    let Some(auth) = auth.filter(|a| !a.is_empty()) else {
-        return (None, None, None);
-    };
-    if auth.len() >= 6 && auth[..6].eq_ignore_ascii_case(b"Basic ") {
-        let decoded = base64_decode(&auth[6..]);
-        let decoded = decoded.split(|&c| c == 0).next().unwrap_or_default();
-        if let Some(colon) = decoded.iter().position(|&c| c == b':') {
-            return (
-                Some(decoded[..colon].to_vec()),
-                Some(decoded[colon + 1..].to_vec()),
-                None,
-            );
-        }
-    }
-    if auth.len() >= 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
-        return (None, None, Some(auth[7..].to_vec()));
-    }
-    (None, None, None)
-}
-
-/// Non-strict `php_base64_decode()`.
-fn base64_decode(s: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for &c in s {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => continue,
-        };
-        acc = (acc << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(u8::try_from((acc >> bits) & 0xff).unwrap_or(0));
-        }
-    }
-    out
-}
+pub use php_sapi::{handle_auth_data as auth_data, AuthData};
 
 /// `SG(request_info).content_length`: the length of the received body.
-fn content_length(ctx: &RequestCtx) -> i64 {
+pub(crate) fn content_length(ctx: &RequestCtx) -> i64 {
     i64::try_from(ctx.request.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX)
 }
 

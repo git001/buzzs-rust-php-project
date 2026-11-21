@@ -711,56 +711,34 @@ pub struct RunParams {
     pub highlight: bool,
 }
 
-/// `(user, password, digest)` of HTTP authentication.
-pub type AuthData = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+pub use php_sapi::{handle_auth_data as auth_data, AuthData};
 
-/// `php_handle_auth_data()`: `(user, password, digest)` from an
-/// `Authorization` header.
-pub fn auth_data(auth: Option<&[u8]>) -> AuthData {
-    let Some(auth) = auth.filter(|a| !a.is_empty()) else {
-        return (None, None, None);
-    };
-    if auth.len() >= 6 && auth[..6].eq_ignore_ascii_case(b"Basic ") {
-        let decoded = base64_decode(&auth[6..]);
-        let decoded = decoded.split(|&c| c == 0).next().unwrap_or_default();
-        if let Some(colon) = decoded.iter().position(|&c| c == b':') {
-            return (
-                Some(decoded[..colon].to_vec()),
-                Some(decoded[colon + 1..].to_vec()),
-                None,
-            );
-        }
+/// `SG(request_info)` as `php_apache_request_ctor()` and `sapi_activate()`
+/// fill it from the `request_rec`, with the authentication already worked
+/// out (`php_handle_auth_data()`, else `r->user`).
+fn request_info(
+    r: &dyn Backend,
+    user: Option<&[u8]>,
+    password: Option<&[u8]>,
+    digest: Option<&[u8]>,
+) -> php_sapi::RequestInfo {
+    let header = |name: &[u8]| r.table_get(Table::HeadersIn, name);
+    let method = r.str_field(StrField::Method);
+    php_sapi::RequestInfo {
+        headers_only: php_sapi::RequestInfo::is_head(method.as_deref()),
+        request_method: method,
+        query_string: r.str_field(StrField::Args),
+        cookie_data: header(b"Cookie"),
+        content_length: header(b"Content-Length").map_or(0, |v| php_support::atol(&v)),
+        path_translated: r.str_field(StrField::Filename),
+        request_uri: r.str_field(StrField::Uri),
+        content_type: header(b"Content-Type"),
+        auth_user: user.map(<[u8]>::to_vec),
+        auth_password: password.map(<[u8]>::to_vec),
+        auth_digest: digest.map(<[u8]>::to_vec),
+        proto_num: i32::try_from(r.int_field(IntField::ProtoNum)).unwrap_or(0),
+        ..php_sapi::RequestInfo::default()
     }
-    if auth.len() >= 7 && auth[..7].eq_ignore_ascii_case(b"Digest ") {
-        return (None, None, Some(auth[7..].to_vec()));
-    }
-    (None, None, None)
-}
-
-/// Non-strict `php_base64_decode()`: skips invalid characters, stops at
-/// padding.
-pub fn base64_decode(s: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for &c in s {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            _ => continue,
-        };
-        acc = (acc << 6) | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(u8::try_from((acc >> bits) & 0xff).unwrap_or(0));
-        }
-    }
-    out
 }
 
 /// Escapes `s` for a single-quoted PHP string literal.
@@ -827,6 +805,12 @@ pub fn run(backend: Box<dyn Backend>, params: &RunParams) {
             user = ctx.backend.str_field(StrField::User);
         }
         ctx.backend.set_user(user.as_deref());
+        vm.request_info = request_info(
+            &*ctx.backend,
+            user.as_deref(),
+            password.as_deref(),
+            digest.as_deref(),
+        );
         for h in ["Content-Length", "Last-Modified", "Expires", "ETag"] {
             ctx.backend
                 .table_op(Table::HeadersOut, TableOp::Unset, h.as_bytes(), b"");
@@ -948,30 +932,6 @@ mod tests {
     use crate::backend::MockBackend;
 
     const SEC: i64 = 1_000_000_000;
-
-    #[test]
-    fn auth_parsing() {
-        assert_eq!(
-            auth_data(Some(b"Basic dXNlcjpwYXNzOndvcmQ=")),
-            (Some(b"user".to_vec()), Some(b"pass:word".to_vec()), None)
-        );
-        assert_eq!(
-            auth_data(Some(b"basic dXNlcg==")),
-            (None, None, None),
-            "no colon: not basic auth"
-        );
-        assert_eq!(
-            auth_data(Some(b"Digest username=\"x\"")),
-            (None, None, Some(b"username=\"x\"".to_vec()))
-        );
-        assert_eq!(auth_data(None), (None, None, None));
-    }
-
-    #[test]
-    fn base64_is_lenient() {
-        assert_eq!(base64_decode(b"aGVs bG8="), b"hello");
-        assert_eq!(base64_decode(b"aGVsbG8"), b"hello");
-    }
 
     #[test]
     fn timer_unlimited_never_expires() {

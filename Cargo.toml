@@ -8,6 +8,7 @@ members = [
     "crates/php-cli",
     "crates/phpt-runner",
     "crates/php-support",
+    "crates/php-sapi",
     "crates/php-hash",
     "crates/php-random",
     "crates/php-date",

@@ -10,6 +10,7 @@ description = "The CLI built-in web server (php -S)"
 php-vm = { path = "../php-vm" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
+php-sapi = { path = "../php-sapi" }
 php-lexer = { path = "../php-lexer" }
 php-stdmisc = { path = "../php-stdmisc" }
 php-streams = { path = "../php-streams" }

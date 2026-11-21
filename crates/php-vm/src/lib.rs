@@ -243,6 +243,7 @@ impl Vm {
             pending_throw: None,
             output_handler_threw: false,
             script_path: ZStr::empty(),
+            request_info: php_sapi::RequestInfo::default(),
             argv: Vec::new(),
             bound_decls: HashMap::new(),
             units: Vec::new(),
