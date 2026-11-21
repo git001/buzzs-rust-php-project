@@ -674,6 +674,7 @@ dependencies = [
  "php-streams",
  "php-support",
  "php-vm",
+ "rustc-hash",
 ]
 
 [[package]]

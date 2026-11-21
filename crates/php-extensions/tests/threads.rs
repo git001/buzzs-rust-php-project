@@ -576,6 +576,122 @@ echo "$own $bad\n";
 }
 
 #[test]
+fn opcache_is_one_cache_for_the_process() {
+    // php-src keeps the cached scripts in shared memory, one cache for
+    // all workers: a script compiled by one serves the others, and
+    // opcache_invalidate() / opcache_reset() by one act for all. Here the
+    // file changes behind the cache (no timestamp checks), so only the
+    // shared cache gives a later thread the first version.
+    let (file, path) =
+        php_streams::temp::create_temporary(None, Some(b"threads-opcache-"), 0, &mut || {})
+            .expect("temporary file");
+    drop(file);
+    let name = String::from_utf8(path.clone()).expect("UTF-8 temp path");
+    let fs_path = std::path::PathBuf::from(&name);
+    let run = |src: &str| {
+        let src = format!("<?php {}", src.replace("@P@", &name));
+        on_thread(move || {
+            let sink = Sink::default();
+            let opts = VmOptions {
+                ini: vec![
+                    ("display_errors".into(), "1".into()),
+                    ("opcache.enable_cli".into(), "1".into()),
+                    ("opcache.validate_timestamps".into(), "0".into()),
+                    // The file was written just now.
+                    ("opcache.file_update_protection".into(), "0".into()),
+                ],
+            };
+            let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), php_extensions::ALL);
+            vm.run_script(src.as_bytes(), "/opcache.php");
+            sink.take()
+        })
+        .join()
+        .expect("VM thread")
+    };
+    let cached = "echo include '@P@', ' ', opcache_is_script_cached('@P@') ? 'cached' : 'not cached', \"\\n\";";
+    std::fs::write(&fs_path, "<?php return 'v1';").expect("write v1");
+    assert_eq!(run(cached), "v1 cached\n", "first thread compiles");
+    std::fs::write(&fs_path, "<?php return 'v2';").expect("write v2");
+    assert_eq!(
+        run(cached),
+        "v1 cached\n",
+        "another thread gets the cached script"
+    );
+    assert_eq!(
+        run("var_dump(opcache_invalidate('@P@', true));"),
+        "bool(true)\n"
+    );
+    assert_eq!(
+        run(cached),
+        "v2 cached\n",
+        "the invalidation holds for every thread"
+    );
+    assert_eq!(run("var_dump(opcache_reset());"), "bool(true)\n");
+    assert_eq!(
+        run("var_dump(opcache_is_script_cached('@P@'));"),
+        "bool(false)\n",
+        "the reset holds for every thread"
+    );
+    let _ = std::fs::remove_file(&fs_path);
+}
+
+#[test]
+fn opcache_keys_keep_the_working_directory_of_their_thread() {
+    // A relative include is found by a key with the working directory in
+    // it (`accel_make_persistent_key`). With one cache for the process,
+    // two threads in different directories that include the same
+    // relative name must each get their own file.
+    let tmp = php_streams::temp::temp_dir();
+    let dirs: Vec<String> = ["A", "B"]
+        .iter()
+        .map(|tag| {
+            let d = php_streams::temp::tempnam(&tmp, b"opcache-cwd").expect("tempnam");
+            let d = String::from_utf8(d).expect("UTF-8 temp path");
+            std::fs::remove_file(&d).expect("drop the temp file");
+            std::fs::create_dir(&d).expect("a directory in its place");
+            std::fs::write(format!("{d}/x.php"), format!("<?php return '{tag}';"))
+                .expect("write x.php");
+            d
+        })
+        .collect();
+    let both = Arc::new(Barrier::new(2));
+    let workers: Vec<_> = dirs
+        .iter()
+        .cloned()
+        .map(|dir| {
+            let both = Arc::clone(&both);
+            on_thread(move || {
+                let sink = Sink::default();
+                let opts = VmOptions {
+                    ini: vec![
+                        ("display_errors".into(), "1".into()),
+                        ("opcache.enable_cli".into(), "1".into()),
+                        ("opcache.file_update_protection".into(), "0".into()),
+                    ],
+                };
+                let mut vm =
+                    Vm::with_extensions(&opts, Box::new(sink.clone()), php_extensions::ALL);
+                let src = format!(
+                    "<?php chdir('{dir}'); $a = include 'x.php'; echo $a, ' ', include 'x.php', \"\\n\";"
+                );
+                both.wait();
+                vm.run_script(src.as_bytes(), "/opcache-cwd.php");
+                sink.take()
+            })
+        })
+        .collect();
+    let out: Vec<String> = workers
+        .into_iter()
+        .map(|w| w.join().expect("VM thread"))
+        .collect();
+    for d in &dirs {
+        let _ = std::fs::remove_file(format!("{d}/x.php"));
+        let _ = std::fs::remove_dir(d);
+    }
+    assert_eq!(out, ["A A\n", "B B\n"]);
+}
+
+#[test]
 fn every_thread_starts_with_the_process_lc_ctype() {
     // `zend_reset_lc_ctype_locale()` at process start (the standard
     // extension's `module_startup`): "C.UTF-8", so `escapeshellarg()`

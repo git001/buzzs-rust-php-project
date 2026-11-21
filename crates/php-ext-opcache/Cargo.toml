@@ -12,6 +12,7 @@ php-runtime = { path = "../php-runtime" }
 php-opcache = { path = "../php-opcache" }
 php-support = { path = "../php-support" }
 php-streams = { path = "../php-streams" }
+rustc-hash = "2"
 
 [lints]
 workspace = true

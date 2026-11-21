@@ -7,24 +7,28 @@
 
 use php_opcache::blacklist::Blacklist;
 use php_opcache::file_cache;
-use php_opcache::{CacheLookup, InsertRefused, PreloadStats, ScriptCache};
+use php_opcache::{CacheLookup, InsertRefused, PreloadStats};
 pub use php_opcache::{JitBuffer, JitConfig, JitTraceInfo, JitTraceTracker};
 use php_runtime::{Value, ZArray, ZStr};
 use php_support::ini::{Access, IniDirective, ModifyHandler};
-use php_vm::compiler::CompiledUnit;
 use php_vm::ext::{Args, Extension, InfoItem, ModuleBuilder, NativeFn, Throw, VmResult};
 use php_vm::include::{CacheAnswer, CompileOutcome};
 use php_vm::Vm;
+use shared::with_cache;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+mod shared;
+
+/// `ZCSG(restart_pending)`: set by `opcache_reset()`, cleared when the
+/// next request starts (php-src restarts then; Buzz has already).
+static RESTART_PENDING: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    static GLOBAL_CACHE: RefCell<ScriptCache<Rc<CompiledUnit>>> = RefCell::new(ScriptCache::new(10000));
     /// `accel_blacklist`, with the `opcache.blacklist_filename` it was
     /// loaded from.
     static BLACKLIST: RefCell<Option<(String, Rc<Blacklist>)>> = const { RefCell::new(None) };
-    /// `ZCSG(restart_pending)`.
-    static RESTART_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// `JIT_G(enabled)`: decided at startup, cleared by a run-time
     /// `opcache.jit=disable`.
     static JIT_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
@@ -308,13 +312,16 @@ fn check_startup_ini(vm: &mut Vm) {
 /// Sizes the in-memory cache as `zend_accel_init_shm` does: as many
 /// scripts as the hash table for `opcache.max_accelerated_files` holds,
 /// in `opcache.memory_consumption` (less the 1 MiB that
-/// `opcache_get_status()` counts as used without any script).
+/// `opcache_get_status()` counts as used without any script). The cache
+/// is the process's, sized once at startup as php-src sizes its shared
+/// memory in the master: a later VM (another pool's) does not resize it.
 fn configure_cache(vm: &Vm) {
     const MIB: usize = 1024 * 1024;
+    static CONFIGURED: std::sync::Once = std::sync::Once::new();
     let files = usize::try_from(vm.ini_long("opcache.max_accelerated_files")).unwrap_or(0);
     let memory = usize::try_from(vm.ini_long("opcache.memory_consumption")).unwrap_or(0);
     let limit = memory.saturating_mul(MIB).saturating_sub(MIB);
-    GLOBAL_CACHE.with(|c| c.borrow_mut().configure(files, limit));
+    CONFIGURED.call_once(|| with_cache(|c| c.configure(files, limit)));
 }
 
 /// `cache_script_in_shared_memory`: stores a compiled script in the
@@ -327,11 +334,14 @@ fn cache_in_memory(
     memory: usize,
     now: i64,
     unit: &Rc<php_vm::compiler::CompiledUnit>,
+    image: Option<&[u8]>,
 ) {
-    let stored = GLOBAL_CACHE.with(|c| {
-        c.borrow_mut()
-            .insert(path.to_owned(), mtime, memory, now, unit.clone())
-    });
+    let fingerprint = vm.compile_fingerprint();
+    let Some(script) = shared::share(path, unit, fingerprint, image) else {
+        // A value without a compile-time form: nothing to share.
+        return;
+    };
+    let stored = with_cache(|c| c.insert(path.to_owned(), mtime, memory, now, script));
     match stored {
         Ok(()) => vm_accel_log(vm, AccelLog::Info, &format!("Cached script '{path}'")),
         Err(InsertRefused::Full) => {}
@@ -509,6 +519,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
     m.ini_on_modify("opcache.enable", on_update_enable);
     m.ini_on_modify("opcache.jit", on_update_jit);
     m.on_request_startup(check_startup_ini);
+    m.on_request_startup(|_| RESTART_PENDING.store(false, Ordering::Relaxed));
     m.ini(d(
         "opcache.enable",
         Some("1"),
@@ -731,12 +742,7 @@ fn register_ini(m: &mut ModuleBuilder<'_>) {
         Access::SYSTEM,
         ModifyHandler::Long,
     ))
-    .ini(d(
-        "opcache.jit_debug",
-        Some("0"),
-        Access::ALL,
-        JIT_DEBUG,
-    ))
+    .ini(d("opcache.jit_debug", Some("0"), Access::ALL, JIT_DEBUG))
     .ini(d(
         "opcache.jit_bisect_limit",
         Some("0"),
@@ -962,7 +968,7 @@ fn parse_jit_mode(s: &str) -> (i64, i64, i64) {
 /// first request: [`Vm::run_preload`]) made persistent. The preload script
 /// itself never runs in a request.
 fn sync_preload_stats() {
-    if GLOBAL_CACHE.with(|c| c.borrow().preload_stats.is_some()) {
+    if with_cache(|c| c.preload_stats.is_some()) {
         return;
     }
     let Some(info) = Vm::preload_info() else {
@@ -974,11 +980,10 @@ fn sync_preload_stats() {
     let preloaded_scripts: Vec<String> = info.scripts.iter().map(name).collect();
 
     // The preload request compiled the scripts through the compile hook,
-    // which cached them (the cache is per thread, as preloading is).
+    // which cached them in the process's cache.
     // Calculate memory consumption
     let base_preload_mem = 16384;
-    let script_mem: usize = GLOBAL_CACHE.with(|c| {
-        let cache = c.borrow();
+    let script_mem: usize = with_cache(|cache| {
         preloaded_scripts
             .iter()
             .filter_map(|s| cache.scripts.get(s).map(|e| e.memory_consumption))
@@ -994,8 +999,8 @@ fn sync_preload_stats() {
         scripts: preloaded_scripts,
     };
 
-    GLOBAL_CACHE.with(|c| {
-        c.borrow_mut().preload_stats = Some(stats);
+    with_cache(|c| {
+        c.preload_stats = Some(stats);
     });
 }
 
@@ -1017,8 +1022,7 @@ fn filename_is_in_cache(vm: &mut Vm, filename: &ZStr) -> bool {
     let Some(key) = persistent_key(vm, filename.as_bytes()) else {
         return false;
     };
-    let Some(script) = GLOBAL_CACHE.with(|c| c.borrow().resolve_key(&key).map(str::to_owned))
-    else {
+    let Some(script) = with_cache(|c| c.resolve_key(&key).map(str::to_owned)) else {
         return false;
     };
     let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
@@ -1031,8 +1035,8 @@ fn filename_is_in_cache(vm: &mut Vm, filename: &ZStr) -> bool {
         }
         script_stat(std::path::Path::new(&script)).map(|st| st.mtime)
     };
-    GLOBAL_CACHE.with(|c| {
-        c.borrow_mut().is_valid(
+    with_cache(|c| {
+        c.is_valid(
             &script,
             current_mtime,
             validate_timestamps,
@@ -1244,8 +1248,7 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probed> {
 /// `opcache_compile_file` turns it down; `looked_up` says whether the
 /// lookup here already did.
 fn count_blacklist_miss(looked_up: bool) {
-    GLOBAL_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
+    with_cache(|cache| {
         if !looked_up {
             cache.misses += 1;
         }
@@ -1273,8 +1276,7 @@ fn memory_lookup(
     let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
     let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
     let vm_ref: &Vm = vm;
-    let found = GLOBAL_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
+    let found = with_cache(|cache| {
         let current_mtime = || p.revalidated_mtime(vm_ref);
         let found = if count_absent {
             cache.get(
@@ -1293,12 +1295,29 @@ fn memory_lookup(
                 p.now_sec,
             )
         };
+        // This thread's unit of the image, when it has one; else the
+        // image, decoded below outside the lock.
         match found {
-            CacheLookup::Hit(unit) => MemoryLookup::Hit(unit.clone()),
-            CacheLookup::Stale => MemoryLookup::Stale,
-            CacheLookup::Miss => MemoryLookup::Absent,
+            CacheLookup::Hit(script) => match shared::known(script) {
+                Some(unit) => Err(MemoryLookup::Hit(unit)),
+                None => Ok(std::sync::Arc::clone(script)),
+            },
+            CacheLookup::Stale => Err(MemoryLookup::Stale),
+            CacheLookup::Miss => Err(MemoryLookup::Absent),
         }
     });
+    // Decoded once per image and thread. An image compiled under other
+    // compiler inputs is compiled again (and replaces the entry).
+    let found = match found {
+        Ok(script) => {
+            let fingerprint = vm.compile_fingerprint();
+            match shared::decode(&p.real_str, &script, fingerprint) {
+                Some(unit) => MemoryLookup::Hit(unit),
+                None => MemoryLookup::Absent,
+            }
+        }
+        Err(other) => other,
+    };
     if let MemoryLookup::Hit(unit) = &found {
         unit.clear_runtime_caches();
         if vm.ini_bool("opcache.record_warnings") {
@@ -1370,6 +1389,7 @@ fn lookup(
                         payload.len(),
                         p.now_sec,
                         &unit,
+                        payload.get(8..),
                     );
                 }
                 return Ok(Some(unit));
@@ -1413,7 +1433,7 @@ fn opcache_precompiled_hook(
     if !looked_up {
         if let Some(unit) = lookup(vm, &p, filename)? {
             if let Some(key) = key {
-                GLOBAL_CACHE.with(|c| c.borrow_mut().add_key(&key, &p.real_str));
+                with_cache(|c| c.add_key(&key, &p.real_str));
             }
             return Ok(CacheAnswer::Hit(unit));
         }
@@ -1433,7 +1453,7 @@ fn keyed_lookup(
 ) -> VmResult<CacheAnswer<Rc<php_vm::compiler::CompiledUnit>>> {
     LOOKUP_MISSED.with(|m| m.borrow_mut().take());
     KEYED_STALE.with(|k| k.set(false));
-    if GLOBAL_CACHE.with(|c| c.borrow().is_empty()) {
+    if with_cache(|c| c.is_empty()) {
         return file_cache_by_name(vm, requested);
     }
     if vm.ini_bool("opcache.revalidate_path") {
@@ -1450,7 +1470,7 @@ fn keyed_lookup(
     let Some(key) = persistent_key(vm, requested.as_bytes()) else {
         return Ok(CacheAnswer::Miss);
     };
-    let script = GLOBAL_CACHE.with(|c| c.borrow().resolve_key(&key).map(ZStr::from));
+    let script = with_cache(|c| c.resolve_key(&key).map(ZStr::from));
     let Some(script) = script.filter(|s| s.as_bytes() != requested.as_bytes()) else {
         return Ok(CacheAnswer::Miss);
     };
@@ -1577,7 +1597,7 @@ fn persistent_key<'a>(vm: &mut Vm, name: &'a [u8]) -> Option<std::borrow::Cow<'a
 /// VM could read.
 fn access_refused(vm: &Vm, key: &str) -> bool {
     vm.ini_bool("opcache.validate_permission")
-        && GLOBAL_CACHE.with(|c| c.borrow().is_cached(key))
+        && with_cache(|c| c.is_cached(key))
         && !script_readable(key.as_bytes())
 }
 
@@ -1647,10 +1667,18 @@ fn opcache_compile_hook(
         // `zend_accel_script_optimize` -> `zend_optimize_script`.
         vm.call_registered_optimizer_passes();
         if !p.file_cache_only {
-            cache_in_memory(vm, &p.real_str, mtime, src.len() + 1024, p.now_sec, unit);
+            cache_in_memory(
+                vm,
+                &p.real_str,
+                mtime,
+                src.len() + 1024,
+                p.now_sec,
+                unit,
+                None,
+            );
             if let Some((key, path)) = PENDING_KEY.with(|k| k.borrow_mut().take()) {
                 if path == p.real_str {
-                    GLOBAL_CACHE.with(|c| c.borrow_mut().add_key(&key, &path));
+                    with_cache(|c| c.add_key(&key, &path));
                 }
             }
         }
@@ -1782,10 +1810,10 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     }
     // `zend_accel_schedule_restart(ACCEL_RESTART_USER)`, which does not
     // schedule (or log) a pending restart twice.
-    if !RESTART_PENDING.with(|r| r.replace(true)) {
+    if !RESTART_PENDING.swap(true, Ordering::Relaxed) {
         vm_accel_log(vm, AccelLog::Debug, "Restart Scheduled! Reason: user");
     }
-    GLOBAL_CACHE.with(|c| c.borrow_mut().reset());
+    with_cache(shared::reset);
     Ok(Value::Bool(true))
 }
 
@@ -1815,8 +1843,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Array(map));
     }
 
-    GLOBAL_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
+    with_cache(|cache| {
         let mut status = ZArray::new();
         status
             .make_mut()
@@ -2179,7 +2206,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `persistent_compile_file` loads the script it compiled
     // (`zend_accel_load_script`); a fatal error while declaring its
     // functions or classes is caught (`zend_try`), and the script goes on.
-    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&path.to_string_lossy()));
+    let cached = with_cache(|c| c.is_cached(&path.to_string_lossy()));
     match vm.load_script(&unit, cached) {
         Ok(()) => Ok(Value::Bool(true)),
         Err(Throw::Fatal) => {
@@ -2232,10 +2259,7 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64);
 
-    let was_cached = GLOBAL_CACHE.with(|c| {
-        c.borrow_mut()
-            .invalidate(&real_str, force, mtime_sec, validate_timestamps)
-    });
+    let was_cached = with_cache(|c| c.invalidate(&real_str, force, mtime_sec, validate_timestamps));
 
     Ok(Value::Bool(file_found || was_cached))
 }
