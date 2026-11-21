@@ -374,6 +374,22 @@ pub fn getcwd() -> Option<Vec<u8>> {
         .map(|p| p.as_os_str().as_bytes().to_vec())
 }
 
+/// Gives the calling thread its own working directory, umask and root
+/// (`unshare(CLONE_FS)`), initialised from the process's: a later
+/// `chdir()` or `umask()` on it changes only this thread, and only its
+/// relative paths, C libraries and child processes see it. A worker
+/// thread of a threaded server calls it before its first request, so that
+/// each request's `chdir()` into its script's directory stays its own
+/// (php-src ZTS keeps a virtual cwd per thread, `VCWD_*`).
+///
+/// # Errors
+///
+/// The `unshare(2)` error, e.g. `EPERM` under a seccomp filter that
+/// forbids the call.
+pub fn own_fs_context() -> io::Result<()> {
+    nix::sched::unshare(nix::sched::CloneFlags::CLONE_FS).map_err(io::Error::from)
+}
+
 /// Linux `major()` of a device number.
 pub fn dev_major(dev: u64) -> u64 {
     ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff)

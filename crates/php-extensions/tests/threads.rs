@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier};
 
@@ -131,8 +132,8 @@ fn fresh_outputs() -> Vec<String> {
         .collect()
 }
 
-/// Runs `f` on a thread with a stack as large as the servers give their
-/// request threads.
+/// Runs `f` on a thread set up like a server's request thread: as large a
+/// stack, its own allocator and its own working directory.
 fn on_thread<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> std::thread::JoinHandle<T> {
@@ -140,6 +141,7 @@ fn on_thread<T: Send + 'static>(
         .stack_size(256 << 20)
         .spawn(|| {
             php_memlimit::attach_thread();
+            php_streams::sys::own_fs_context().expect("unshare(CLONE_FS)");
             f()
         })
         .expect("spawn a VM thread")
@@ -330,4 +332,77 @@ echo strlen($s), ' ', memory_get_usage() > (16 << 20) ? 'counted' : 'missing', "
         "{a_out}"
     );
     assert_eq!(b_out, "16777216 counted\n");
+}
+
+#[test]
+fn a_chdir_moves_only_its_own_thread() {
+    // The working directory per thread (php-src ZTS: `VCWD_*`): A and B
+    // each `chdir()` into their own directory and only then, once both
+    // have moved, resolve relative paths: PHP's file functions, `include`
+    // and a child process must all see the thread's own directory.
+    const SETUP: &str = r#"<?php
+chdir('@DIR@');
+file_put_contents('tag.txt', '@TAG@');
+file_put_contents('inc.php', '<?php return "inc-@TAG@";');
+"#;
+    const READ: &str = r#"<?php
+$f = fopen('tag.txt', 'r');
+echo getcwd() === realpath('@DIR@') ? 'cwd' : 'other cwd', ' ',
+    file_get_contents('tag.txt'), ' ', fread($f, 10), ' ', include 'inc.php', ' ',
+    file_exists('../' . basename('@DIR@') . '/tag.txt') ? 'found' : 'missing', ' ',
+    trim(shell_exec('pwd')) === realpath('@DIR@') ? 'child' : 'other child', "\n";
+"#;
+    let process_cwd = std::env::current_dir().expect("cwd");
+    let tmp = php_streams::temp::temp_dir();
+    let dirs: Vec<Vec<u8>> = (0..2)
+        .map(|_| {
+            let d = php_streams::temp::tempnam(&tmp, b"cwd").expect("tempnam");
+            let p = std::path::Path::new(std::ffi::OsStr::from_bytes(&d));
+            std::fs::remove_file(p).expect("drop the temp file");
+            std::fs::create_dir(p).expect("a directory in its place");
+            d
+        })
+        .collect();
+    let moved = Arc::new(Barrier::new(2));
+    let workers: Vec<_> = ["A", "B"]
+        .into_iter()
+        .zip(dirs.iter().cloned())
+        .map(|(tag, dir)| {
+            let moved = Arc::clone(&moved);
+            on_thread(move || {
+                let sink = Sink::default();
+                let mut vm = new_vm(&sink);
+                let fill = |src: &str| {
+                    src.replace("@TAG@", tag)
+                        .replace("@DIR@", &String::from_utf8_lossy(&dir))
+                };
+                vm.run_script(fill(SETUP).as_bytes(), "/setup.php");
+                let setup = sink.take();
+                vm.request_reset();
+                moved.wait();
+                vm.run_script(fill(READ).as_bytes(), "/read.php");
+                (setup, sink.take())
+            })
+        })
+        .collect();
+    let out: Vec<(String, String)> = workers
+        .into_iter()
+        .map(|w| w.join().expect("worker thread"))
+        .collect();
+    for d in &dirs {
+        let _ = std::fs::remove_dir_all(std::path::Path::new(std::ffi::OsStr::from_bytes(d)));
+    }
+    assert_eq!(
+        out[0],
+        (String::new(), "cwd A A inc-A found child\n".to_string())
+    );
+    assert_eq!(
+        out[1],
+        (String::new(), "cwd B B inc-B found child\n".to_string())
+    );
+    assert_eq!(
+        std::env::current_dir().expect("cwd"),
+        process_cwd,
+        "the process's directory stays"
+    );
 }
