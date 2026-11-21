@@ -240,6 +240,27 @@ fn merge(dest: &mut HashTable, src: &ZArray) {
     }
 }
 
+/// `check_http_proxy()` (bug #72573, "httpoxy", CVE-2016-5385): a request
+/// header `Proxy` must not pose as the `HTTP_PROXY` environment variable
+/// that HTTP clients take their proxy from. An `HTTP_PROXY` entry becomes
+/// the process environment's value, or goes when there is none.
+fn check_http_proxy(track: &mut ZArray) {
+    use std::os::unix::ffi::OsStrExt;
+    if track.get_str(b"HTTP_PROXY").is_none() {
+        return;
+    }
+    let key = ArrayKey::from_bytes(b"HTTP_PROXY");
+    let t = track.make_mut();
+    match std::env::var_os("HTTP_PROXY") {
+        Some(local) => {
+            t.insert(key, Value::Str(ZStr::from(local.as_bytes())));
+        }
+        None => {
+            t.remove(&key);
+        }
+    }
+}
+
 /// `SG(request_info).content_type`, as a C string.
 fn content_type(vm: &Vm) -> Option<Vec<u8>> {
     vm.request_info
@@ -614,6 +635,8 @@ pub fn populate<S: SapiVariables + ?Sized>(vm: &mut Vm, s: &S) {
         }
     }
 
+    check_http_proxy(&mut server);
+
     // $_ENV
     let mut env = ZArray::new();
     if has(b'E') {
@@ -626,6 +649,8 @@ pub fn populate<S: SapiVariables + ?Sized>(vm: &mut Vm, s: &S) {
             );
         }
     }
+
+    check_http_proxy(&mut env);
 
     // $_REQUEST
     let mut request = ZArray::new();

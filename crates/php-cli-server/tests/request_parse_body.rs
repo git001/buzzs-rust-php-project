@@ -48,12 +48,19 @@ impl Drop for ServerProc {
 /// Starts `php -n [-d ini]... -t <root> -S 127.0.0.1:0` serving `script`
 /// as `/test.php`.
 fn start(name: &str, script: &str, ini: &[&str]) -> ServerProc {
+    start_env(name, script, ini, &[])
+}
+
+/// [`start`] with `env` added to the server's environment (and
+/// `HTTP_PROXY` removed from it unless given).
+fn start_env(name: &str, script: &str, ini: &[&str], env: &[(&str, &str)]) -> ServerProc {
     let root =
         std::env::temp_dir().join(format!("php-cli-server-rpb-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("test.php"), script).unwrap();
     let mut cmd = Command::new(php_binary());
+    cmd.env_remove("HTTP_PROXY").envs(env.iter().copied());
     cmd.arg("-n");
     for setting in ini {
         cmd.args(["-d", setting]);
@@ -82,14 +89,16 @@ fn start(name: &str, script: &str, ini: &[&str]) -> ServerProc {
 /// Sends `method /test.php` with the body and returns the response body,
 /// the document root replaced by `%ROOT%`.
 fn send(srv: &ServerProc, method: &str, content_type: Option<&str>, body: &[u8]) -> String {
-    send_to(srv, method, "/test.php", content_type, body)
+    send_to(srv, method, "/test.php", &[], content_type, body)
 }
 
-/// [`send`] to `target` (a path with an optional query string).
+/// [`send`] to `target` (a path with an optional query string), with
+/// further `headers` (`"Name: value"`).
 fn send_to(
     srv: &ServerProc,
     method: &str,
     target: &str,
+    headers: &[&str],
     content_type: Option<&str>,
     body: &[u8],
 ) -> String {
@@ -106,6 +115,10 @@ fn send_to(
     };
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     let mut req = format!("{method} {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    for h in headers {
+        req.push_str(h);
+        req.push_str("\r\n");
+    }
     if let Some(ct) = content_type {
         req.push_str(&format!("Content-Type: {ct}\r\n"));
     }
@@ -1817,6 +1830,7 @@ the limit change max_input_vars in php.ini. in Unknown on line 0\n";
             &srv,
             "POST",
             "/test.php?a=1&b=2&c=3",
+            &[],
             Some("application/x-www-form-urlencoded"),
             b"x=1",
         );
@@ -1825,5 +1839,34 @@ the limit change max_input_vars in php.ini. in Unknown on line 0\n";
             format!("{warning}int(2)\n{post}string(3) \"x=1\"\n"),
             "ob={ob}"
         );
+    }
+}
+
+/// `check_http_proxy()` (httpoxy, CVE-2016-5385): a `Proxy` request header
+/// does not become `$_SERVER['HTTP_PROXY']`; the server's own environment
+/// value takes its place when there is one.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn proxy_header_is_not_http_proxy() {
+    let script = "<?php var_dump($_SERVER['HTTP_PROXY'] ?? null, $_ENV['HTTP_PROXY'] ?? null);";
+    let ini = ["variables_order=EGPCS"];
+    let cases: [(&[(&str, &str)], &str); 2] = [
+        (&[], "NULL\nNULL\n"),
+        (
+            &[("HTTP_PROXY", "http://local:3128")],
+            "string(17) \"http://local:3128\"\nstring(17) \"http://local:3128\"\n",
+        ),
+    ];
+    for (i, (env, expect)) in cases.into_iter().enumerate() {
+        let srv = start_env(&format!("httpoxy_{i}"), script, &ini, env);
+        let out = send_to(
+            &srv,
+            "GET",
+            "/test.php",
+            &["Proxy: http://evil:8080"],
+            None,
+            b"",
+        );
+        assert_eq!(out, expect, "env {env:?}");
     }
 }
