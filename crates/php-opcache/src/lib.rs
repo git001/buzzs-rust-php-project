@@ -110,7 +110,14 @@ pub struct ScriptCache<T> {
     /// Cached scripts keyed by full canonical path. Changed only through
     /// the methods, which keep [`ScriptCache::used_memory`] in step.
     pub scripts: HashMap<String, ScriptEntry<T>>,
-    /// The number of scripts the cache holds (`max_cached_keys`).
+    /// The other keys a script is found under (`accel_make_persistent_key`:
+    /// the name it was included by, with the working directory and
+    /// `include_path` for a relative one), each naming the full path of
+    /// its script: the indirect entries of `ZCSG(hash)`. A key outlives
+    /// its script until a reset, as an entry of `ZCSG(hash)` does.
+    keys: HashMap<String, String>,
+    /// The number of entries (scripts and keys) the cache holds
+    /// (`max_cached_keys`).
     pub max_cached_keys: usize,
     /// The memory the scripts may take (`opcache.memory_consumption`);
     /// 0 for no limit.
@@ -568,6 +575,7 @@ impl<T> ScriptCache<T> {
             .unwrap_or(0);
         Self {
             scripts: HashMap::new(),
+            keys: HashMap::new(),
             start_time: now,
             last_restart_time: 0,
             hits: 0,
@@ -604,6 +612,8 @@ impl<T> ScriptCache<T> {
         } else {
             self.scripts.clear();
         }
+        let scripts = &self.scripts;
+        self.keys.retain(|_, path| scripts.contains_key(path));
         self.used_memory = self.scripts.values().map(|e| e.memory_consumption).sum();
         self.full = false;
         if let Some(ref mut buf) = self.jit_buffer {
@@ -703,8 +713,49 @@ impl<T> ScriptCache<T> {
         revalidate_freq: i64,
         now: i64,
     ) -> CacheLookup<'_, T> {
+        self.get_entry(
+            path,
+            current_mtime,
+            validate_timestamps,
+            revalidate_freq,
+            now,
+            true,
+        )
+    }
+
+    /// [`ScriptCache::get`] for a name that may only be a key: when `path`
+    /// is no script, [`CacheLookup::Miss`] counts no miss yet.
+    pub fn get_known(
+        &mut self,
+        path: &str,
+        current_mtime: impl FnOnce() -> Option<i64>,
+        validate_timestamps: bool,
+        revalidate_freq: i64,
+        now: i64,
+    ) -> CacheLookup<'_, T> {
+        self.get_entry(
+            path,
+            current_mtime,
+            validate_timestamps,
+            revalidate_freq,
+            now,
+            false,
+        )
+    }
+
+    fn get_entry(
+        &mut self,
+        path: &str,
+        current_mtime: impl FnOnce() -> Option<i64>,
+        validate_timestamps: bool,
+        revalidate_freq: i64,
+        now: i64,
+        count_absent: bool,
+    ) -> CacheLookup<'_, T> {
         let Some(entry) = self.scripts.get(path) else {
-            self.misses += 1;
+            if count_absent {
+                self.misses += 1;
+            }
             return CacheLookup::Miss;
         };
         let due = entry.revalidation_due(validate_timestamps, revalidate_freq, now);
@@ -747,7 +798,7 @@ impl<T> ScriptCache<T> {
         if self.full {
             return Err(InsertRefused::Full);
         }
-        if !self.scripts.contains_key(&path) && self.scripts.len() >= self.max_cached_keys {
+        if !self.scripts.contains_key(&path) && self.num_entries() >= self.max_cached_keys {
             self.full = true;
             return Err(InsertRefused::HashFull);
         }
@@ -774,6 +825,42 @@ impl<T> ScriptCache<T> {
         self.used_memory = self.used_memory - replaced + memory;
         self.scripts.insert(path, entry);
         Ok(())
+    }
+
+    /// `zend_accel_add_key`: makes the script cached under `path` also
+    /// found under `key`. Nothing is added for a key that is already an
+    /// entry or for a script that is not cached; when the hash table has
+    /// no entry left the cache counts as full (`ZSMMG(memory_exhausted)`).
+    /// Returns whether the key was added.
+    pub fn add_key(&mut self, key: &str, path: &str) -> bool {
+        if self.scripts.contains_key(key) || self.keys.contains_key(key) {
+            return false;
+        }
+        if !self.scripts.contains_key(path) {
+            return false;
+        }
+        if self.num_entries() >= self.max_cached_keys {
+            self.full = true;
+            return false;
+        }
+        self.keys.insert(key.to_owned(), path.to_owned());
+        true
+    }
+
+    /// The full path of the script `key` names: itself for a script's own
+    /// entry, else the script a key entry points to (`zend_accel_hash_find`
+    /// on a key). `None` when it is no entry.
+    pub fn resolve_key<'a>(&'a self, key: &'a str) -> Option<&'a str> {
+        if self.scripts.contains_key(key) {
+            return Some(key);
+        }
+        self.keys.get(key).map(String::as_str)
+    }
+
+    /// The entries of the hash table, scripts and keys
+    /// (`ZCSG(hash).num_entries`, reported as `num_cached_keys`).
+    pub fn num_entries(&self) -> usize {
+        self.scripts.len() + self.keys.len()
     }
 
     /// Removes a script, releasing its memory.
@@ -1077,6 +1164,34 @@ mod tests {
         assert_eq!(accel_hash_size(16229), 16229);
         assert_eq!(accel_hash_size(1_000_000), 1_048_793);
         assert_eq!(accel_hash_size(2_000_000), 2_000_000);
+    }
+
+    #[test]
+    fn keys_name_their_script_and_count_as_entries() {
+        let mut cache: ScriptCache<u8> = ScriptCache::new(5);
+        assert_eq!(cache.insert("/a/lib.php".into(), 1, 10, 0, 0), Ok(()));
+        // Not for an existing entry or a script that is not cached.
+        assert!(!cache.add_key("/a/lib.php", "/a/lib.php"));
+        assert!(!cache.add_key("lib.php:/a", "/b/x.php"));
+        assert!(cache.add_key("lib.php:/a", "/a/lib.php"));
+        assert!(!cache.add_key("lib.php:/a", "/a/lib.php"));
+        assert_eq!(cache.resolve_key("lib.php:/a"), Some("/a/lib.php"));
+        assert_eq!(cache.resolve_key("/a/lib.php"), Some("/a/lib.php"));
+        assert_eq!(cache.resolve_key("lib.php:/b"), None);
+        assert_eq!(cache.num_entries(), 2);
+        // A key takes an entry of the hash table.
+        for i in cache.num_entries()..cache.max_cached_keys {
+            assert!(cache.add_key(&format!("/a/{i}/../lib.php"), "/a/lib.php"));
+        }
+        assert!(!cache.full);
+        assert!(!cache.add_key("/a/./lib.php", "/a/lib.php"));
+        assert!(cache.full);
+        // A key outlives its invalidated script until a reset.
+        assert!(cache.invalidate("/a/lib.php", true, None, true));
+        assert_eq!(cache.resolve_key("lib.php:/a"), Some("/a/lib.php"));
+        cache.reset();
+        assert_eq!(cache.resolve_key("lib.php:/a"), None);
+        assert_eq!(cache.num_entries(), 0);
     }
 
     #[test]
