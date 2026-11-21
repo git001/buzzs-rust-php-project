@@ -604,6 +604,46 @@ impl Vm {
     }
 
     /// Declares the hoisted functions and classes of a unit.
+    /// `_zend_accel_class_hash_copy` when a script is loaded from the
+    /// cache: the classes bound when it was compiled (its early-bound
+    /// classes; with a parent, only one declared before it in the same
+    /// file, as `zend_compile_ignore_class` ignores the others) are copied
+    /// into the class table, and one whose name is taken is an error
+    /// raised before the script runs. Under `opcache.dups_fix` the class
+    /// already declared stays and the script's declaration binds nothing.
+    fn bind_cached_classes(&mut self, unit: &CompiledUnit) -> VmResult<()> {
+        let mut bound: Vec<ZStr> = Vec::new();
+        for &i in &unit.hoisted_classes {
+            let d = unit.decls.classes.borrow()[i as usize].clone();
+            let lc = d.name.to_ascii_lowercase();
+            let in_class_table = d.parent.as_ref().is_none_or(|parent| {
+                bound
+                    .iter()
+                    .any(|b| b.as_bytes().eq_ignore_ascii_case(parent.as_bytes()))
+            });
+            if !in_class_table {
+                continue;
+            }
+            bound.push(lc.clone());
+            let Some(old) = self.classes.get(&lc).cloned() else {
+                continue;
+            };
+            // `preload_remove_declares`: a preloaded script's classes are
+            // not in its class table any more.
+            if self.is_preloaded_class(&d) {
+                continue;
+            }
+            if self.ini.get_bool("opcache.dups_fix") {
+                self.bound_decls.insert(Rc::as_ptr(&d) as usize, old);
+                continue;
+            }
+            let msg = crate::classlink::class_redeclaration_message(&old.name, &old);
+            self.report_compile_error(&msg, &d.filename, d.line_start, false);
+            return Err(Throw::Fatal);
+        }
+        Ok(())
+    }
+
     pub(crate) fn declare_hoisted(&mut self, unit: &CompiledUnit) -> VmResult<()> {
         for &i in &unit.hoisted_functions {
             let f = unit.decls.functions.borrow()[i as usize].clone();
@@ -1000,6 +1040,7 @@ impl Vm {
                         if self.included_set.insert(real_z.clone()) {
                             self.included.push(real_z);
                         }
+                        self.bind_cached_classes(&unit)?;
                         self.declare_hoisted(&unit)?;
                         self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
                         return Ok(true);
@@ -1055,6 +1096,7 @@ impl Vm {
         if self.included_set.insert(path.clone()) {
             self.included.push(path);
         }
+        self.bind_cached_classes(unit)?;
         self.declare_hoisted(unit)?;
         self.push_include_frame(unit, FrameKind::Include, dst, Some(kind_name));
         Ok(true)
