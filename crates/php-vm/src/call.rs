@@ -3510,6 +3510,7 @@ impl Vm {
         set_opt(&mut frame.builtin_name, builtin_name);
         set_opt(&mut frame.magic_name, magic_name);
         frame.observer_hidden = observer_hidden;
+        frame.dynamic = call.dynamic;
         if spare_args.capacity() > 0 {
             self.put_arg_vec(spare_args);
         }
@@ -3680,7 +3681,10 @@ impl Vm {
                 }
             }
         }
-        if call.dynamic && self.frames[depth - 1].scope.is_none() {
+        // `ZEND_CALL_DYNAMIC`: `$f()`, or a callback from a builtin, which
+        // php-src calls through `zend_call_function()`.
+        let from_builtin = depth >= 2 && self.frames[depth - 2].kind == FrameKind::Builtin;
+        if (call.dynamic || from_builtin) && self.frames[depth - 1].scope.is_none() {
             if let Some(e) = self.forbidden_dynamic_call(b) {
                 return self.builtin_arg_error(depth, e);
             }
@@ -3878,12 +3882,7 @@ impl Vm {
     fn forbidden_dynamic_call(&mut self, b: &Builtin) -> Option<Throw> {
         matches!(
             b.name.as_bytes(),
-            b"extract"
-                | b"compact"
-                | b"get_defined_vars"
-                | b"func_get_args"
-                | b"func_get_arg"
-                | b"func_num_args"
+            b"extract" | b"compact" | b"get_defined_vars"
         )
         .then(|| {
             self.make_throw(

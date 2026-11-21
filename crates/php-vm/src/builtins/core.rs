@@ -11,67 +11,63 @@ use crate::vm::{ErrorHandler, FrameKind, PendingCall, Throw, Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, PhpRef, PropertyPurpose, Value, ZArray, ZStr};
 use std::rc::Rc;
 
+/// The frame that called the running builtin.
 fn caller_idx(vm: &Vm) -> Option<usize> {
-    let n = vm.frames.len();
-    if n < 2 {
-        return None;
-    }
-    Some(n - 2)
+    vm.frames.len().checked_sub(2)
 }
 
-/// `zend_forbid_dynamic_call()` for a call without a previous frame (a
-/// shutdown function or other `zend_call_function()` call from outside
-/// any frame is `ZEND_CALL_DYNAMIC`).
-#[cold]
-fn called_dynamically(vm: &mut Vm, name: &str) -> Throw {
-    vm.make_throw("Error", &format!("Cannot call {name}() dynamically"))
+/// The frame whose arguments `func_get_args()` & co. read
+/// (`EX(prev_execute_data)`), after php-src's checks in their order: a
+/// caller that is code rather than a function (`ZEND_CALL_CODE`: the main
+/// script, an included file, `eval()`) is the global scope, reported as
+/// `global_scope`; then `zend_forbid_dynamic_call()`. The call is dynamic
+/// when made as `$f()`, without a caller (a shutdown function), or from a
+/// builtin: an internal function calls back through `zend_call_function()`,
+/// which always marks the call `ZEND_CALL_DYNAMIC`.
+fn args_frame(vm: &mut Vm, name: &str, global_scope: &str) -> VmResult<usize> {
+    let caller = caller_idx(vm);
+    let kind = caller.map(|idx| vm.frames[idx].kind);
+    if matches!(
+        kind,
+        Some(FrameKind::Main | FrameKind::Include | FrameKind::Eval)
+    ) {
+        return Err(vm.make_throw("Error", global_scope));
+    }
+    let dynamic = vm.frames.last().is_some_and(|f| f.dynamic);
+    match (caller, kind) {
+        (Some(idx), Some(FrameKind::Function)) if !dynamic => Ok(idx),
+        _ => Err(vm.make_throw("Error", &format!("Cannot call {name}() dynamically"))),
+    }
 }
 
 fn func_get_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let Some(idx) = caller_idx(vm) else {
-        return Err(called_dynamically(vm, "func_get_args"));
-    };
-    if vm.frames[idx].kind != FrameKind::Function {
-        return Err(vm.make_throw(
-            "Error",
-            "func_get_args() cannot be called from the global scope",
-        ));
-    }
+    let idx = args_frame(
+        vm,
+        "func_get_args",
+        "func_get_args() cannot be called from the global scope",
+    )?;
     Ok(Value::Array(vm.frame_args(idx)))
 }
 
 fn func_num_args(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let Some(idx) = caller_idx(vm) else {
-        return Err(called_dynamically(vm, "func_num_args"));
-    };
-    if vm.frames[idx].kind != FrameKind::Function {
-        return Err(vm.make_throw(
-            "Error",
-            "func_num_args() must be called from a function context",
-        ));
-    }
-    let f = &vm.frames[idx];
-    let n = f.num_args();
-    Ok(Value::Int(i64::try_from(n).unwrap_or(0)))
+    let idx = args_frame(
+        vm,
+        "func_num_args",
+        "func_num_args() must be called from a function context",
+    )?;
+    Ok(Value::Int(i64::try_from(vm.frames[idx].num_args()).unwrap_or(0)))
 }
 
 fn func_get_arg(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let n = i(a, 0);
-    let Some(idx) = caller_idx(vm) else {
-        if n < 0 {
-            return Err(value_error(vm, a, 1, "must be greater than or equal to 0"));
-        }
-        return Err(called_dynamically(vm, "func_get_arg"));
-    };
-    if vm.frames[idx].kind != FrameKind::Function {
-        return Err(vm.make_throw(
-            "Error",
-            "func_get_arg() cannot be called from the global scope",
-        ));
-    }
     if n < 0 {
         return Err(value_error(vm, a, 1, "must be greater than or equal to 0"));
     }
+    let idx = args_frame(
+        vm,
+        "func_get_arg",
+        "func_get_arg() cannot be called from the global scope",
+    )?;
     let args = vm.frame_args(idx);
     match args.get(&ArrayKey::Int(n)) {
         Some(v) => Ok(v.clone()),

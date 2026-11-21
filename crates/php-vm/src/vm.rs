@@ -1000,6 +1000,9 @@ pub struct Frame {
     pub(crate) observed: bool,
     /// VM implementation frames must not be exposed as PHP calls.
     pub(crate) observer_hidden: bool,
+    /// Made by a dynamic call (`$f()`, `ZEND_CALL_DYNAMIC`): the
+    /// scope-introspection builtins refuse it.
+    pub(crate) dynamic: bool,
     /// Made current by the tape's call protocol (`exec::tape::calls`),
     /// which leaves every field but the slots, the passed arguments and the
     /// resume state as [`Frame::clear_for_reuse`] leaves them: released by
@@ -1183,6 +1186,7 @@ impl Frame {
             called_from_internal: false,
             observed: false,
             observer_hidden: false,
+            dynamic: false,
             direct: false,
             direct_argc: 0,
         }
@@ -1231,6 +1235,7 @@ impl Frame {
         self.called_from_internal = false;
         self.observed = false;
         self.observer_hidden = false;
+        self.dynamic = false;
         self.direct = false;
         self.direct_argc = 0;
     }
@@ -1368,6 +1373,7 @@ impl Frame {
             called_from_internal: false,
             observed: false,
             observer_hidden: false,
+            dynamic: false,
             direct: false,
             direct_argc: 0,
         }
@@ -1497,6 +1503,7 @@ impl Frame {
         self.called_from_internal = false;
         self.observed = false;
         self.observer_hidden = false;
+        self.dynamic = false;
         self.direct = false;
         self.direct_argc = 0;
     }
@@ -1604,6 +1611,7 @@ impl Frame {
         self.called_from_internal = false;
         self.observed = false;
         self.observer_hidden = false;
+        self.dynamic = false;
         self.direct = false;
         self.direct_argc = 0;
         true
@@ -1843,6 +1851,7 @@ impl Frame {
             called_from_internal: false,
             observed: false,
             observer_hidden: false,
+            dynamic: false,
             direct: false,
             direct_argc: 0,
         }
