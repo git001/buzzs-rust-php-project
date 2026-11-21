@@ -289,8 +289,7 @@ impl StaticHeader {
 }
 
 /// `zend_empty_string`.
-static EMPTY: StaticHeader =
-    StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes_const(b""), true);
+static EMPTY: StaticHeader = StaticHeader::new(CHAR_BYTES.as_ptr(), 0, zend_hash_bytes(b""), true);
 
 /// `zend_one_char_string`: `CHARS[c]` is the string of the single byte `c`.
 #[allow(clippy::cast_possible_truncation)]
@@ -301,50 +300,58 @@ static CHARS: [StaticHeader; 256] = {
     while i < table.len() {
         // SAFETY: `i < 256`, so the offset stays inside `CHAR_BYTES`.
         let ptr = unsafe { CHAR_BYTES.as_ptr().add(i) };
-        table[i] = StaticHeader::new(ptr, 1, zend_hash_bytes_const(&[i as u8]), i < 0x80);
+        table[i] = StaticHeader::new(ptr, 1, zend_hash_bytes(&[i as u8]), i < 0x80);
         i += 1;
     }
     table
 };
 
-/// Computes PHP's string hash (`zend_inline_hash_func`, 64-bit variant).
+/// `33^k` for `k` in `0..=8` (wrapping): DJBX33A's factors for the bytes
+/// of an eight-byte block and for the hash before it.
+const POW33: [u64; 9] = {
+    let mut p = [1u64; 9];
+    let mut k = 1;
+    while k < p.len() {
+        p[k] = p[k - 1].wrapping_mul(33);
+        k += 1;
+    }
+    p
+};
+
+/// Computes PHP's string hash (`zend_inline_hash_func`, 64-bit variant):
+/// DJBX33A, `h = h * 33 + c` from `h = 5381`.
 ///
 /// The result always has its most significant bit set, so it is never zero.
+///
+/// An eight-byte block takes one step `h * 33^8 + c0 * 33^7 + … + c7`, the
+/// expanded form of eight byte steps (equal modulo 2^64): its products do
+/// not wait for each other, while the byte steps form one serial chain.
+/// A `const fn`, so that static strings carry their hash.
 #[must_use]
-pub fn zend_hash_bytes(bytes: &[u8]) -> u64 {
-    #[inline]
-    fn step(hash: u64, b: u8) -> u64 {
-        hash.wrapping_mul(33).wrapping_add(u64::from(b))
-    }
+#[inline]
+pub const fn zend_hash_bytes(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 5381;
-    // Eight bytes per iteration, like `zend_inline_hash_func`'s unrolled
-    // loop: the same sequential chain, without per-byte loop overhead.
-    let mut chunks = bytes.chunks_exact(8);
-    for c in &mut chunks {
-        hash = step(hash, c[0]);
-        hash = step(hash, c[1]);
-        hash = step(hash, c[2]);
-        hash = step(hash, c[3]);
-        hash = step(hash, c[4]);
-        hash = step(hash, c[5]);
-        hash = step(hash, c[6]);
-        hash = step(hash, c[7]);
+    let mut rest = bytes;
+    while let Some((block, tail)) = rest.split_first_chunk::<8>() {
+        // Big-endian, so that byte `k` of the block is `w >> (56 - 8k)`.
+        let w = u64::from_be_bytes(*block);
+        hash = hash
+            .wrapping_mul(POW33[8])
+            .wrapping_add((w >> 56).wrapping_mul(POW33[7]))
+            .wrapping_add(((w >> 48) & 0xff).wrapping_mul(POW33[6]))
+            .wrapping_add(((w >> 40) & 0xff).wrapping_mul(POW33[5]))
+            .wrapping_add(((w >> 32) & 0xff).wrapping_mul(POW33[4]))
+            .wrapping_add(((w >> 24) & 0xff).wrapping_mul(POW33[3]))
+            .wrapping_add(((w >> 16) & 0xff).wrapping_mul(POW33[2]))
+            .wrapping_add(((w >> 8) & 0xff).wrapping_mul(POW33[1]))
+            .wrapping_add(w & 0xff);
+        rest = tail;
     }
-    for &b in chunks.remainder() {
-        hash = step(hash, b);
-    }
-    hash | 0x8000_0000_0000_0000
-}
-
-/// [`zend_hash_bytes`] for compile-time tables: the same chain, one byte
-/// per step, as a `const fn`.
-#[allow(clippy::cast_lossless)] // `u64::from` is not `const`
-const fn zend_hash_bytes_const(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 5381;
-    let mut i = 0;
-    while i < bytes.len() {
-        hash = hash.wrapping_mul(33).wrapping_add(bytes[i] as u64);
-        i += 1;
+    while let Some((&b, tail)) = rest.split_first() {
+        hash = hash
+            .wrapping_mul(33)
+            .wrapping_add(u64::from_be_bytes([0, 0, 0, 0, 0, 0, 0, b]));
+        rest = tail;
     }
     hash | 0x8000_0000_0000_0000
 }
@@ -2019,11 +2026,10 @@ mod tests {
     }
 
     #[test]
-    fn const_hash_matches_runtime_hash() {
-        assert_eq!(zend_hash_bytes_const(b""), zend_hash_bytes(b""));
-        assert_eq!(zend_hash_bytes_const(b"a"), zend_hash_bytes(b"a"));
-        let text = b"hello world, 12345: a string longer than one hash chunk";
-        assert_eq!(zend_hash_bytes_const(text), zend_hash_bytes(text));
+    fn static_strings_carry_the_runtime_hash() {
+        const TEXT: &[u8] = b"hello world, 12345: a string longer than one hash chunk";
+        const HASH: u64 = zend_hash_bytes(TEXT);
+        assert_eq!(HASH, zend_hash_bytes(TEXT.to_vec().as_slice()));
     }
 
     /// `zend_empty_string` / `zend_one_char_string[]`: static, interned,

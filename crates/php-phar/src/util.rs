@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Small byte-level helpers shared by the formats: little-endian fields,
-//! `zend_hash_func`, the `phar_path_check()` scanner, `phar_fix_filepath()`,
+//! the entry inode, the `phar_path_check()` scanner, `phar_fix_filepath()`,
 //! alias validation and case-insensitive searches.
 
 /// Reads a little-endian `u32` at `pos` (callers guarantee bounds).
@@ -44,15 +44,6 @@ pub(crate) fn to_i64(v: usize) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
 
-/// `zend_inline_hash_func()` (DJBX33A with the high bit forced on).
-pub fn zend_hash_func(data: &[u8]) -> u64 {
-    let mut h: u64 = 5381;
-    for &b in data {
-        h = h.wrapping_mul(33).wrapping_add(u64::from(b));
-    }
-    h | 0x8000_0000_0000_0000
-}
-
 /// `phar_set_inode()`: the fake inode of an entry, derived from the archive
 /// path and the entry name (PHP 8.3 semantics; master hashes the
 /// `zend_string` header by mistake).
@@ -63,7 +54,7 @@ pub fn entry_inode(fname: &[u8], filename: &[u8]) -> u16 {
     tmp.extend_from_slice(filename);
     tmp.truncate(MAXPATHLEN);
     // `(unsigned short)` keeps the low 16 bits.
-    u16::try_from(zend_hash_func(&tmp) & 0xFFFF).unwrap_or_default()
+    u16::try_from(php_runtime::string::zend_hash_bytes(&tmp) & 0xFFFF).unwrap_or_default()
 }
 
 /// `phar_validate_alias()`: aliases may not contain `/ \ : ; \r \n`.
