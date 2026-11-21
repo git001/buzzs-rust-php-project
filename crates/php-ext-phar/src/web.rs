@@ -29,14 +29,6 @@ struct CliHost<'a> {
     sapi: String,
 }
 
-/// `sapi_module.name`: the `PHP_SAPI` constant the SAPI registered.
-fn sapi_name(vm: &Vm) -> String {
-    match vm.constants.get(b"PHP_SAPI".as_slice()) {
-        Some(Value::Str(s)) => s.to_string_lossy(),
-        _ => "cli".into(),
-    }
-}
-
 /// `$_SERVER`, if the request has one.
 fn server_array(vm: &Vm) -> Option<ZArray> {
     let mut g = vm.globals.borrow_mut();
@@ -213,7 +205,7 @@ pub fn web_phar(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         has_rewrite: rewrite.is_some(),
     };
     let res = {
-        let sapi = sapi_name(vm);
+        let sapi = vm.sapi_name().to_string_lossy();
         let mut host = CliHost {
             vm,
             rewrite,

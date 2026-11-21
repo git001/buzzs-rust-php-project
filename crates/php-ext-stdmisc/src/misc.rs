@@ -340,13 +340,13 @@ fn print_items(p: &mut InfoPrinter, items: &[InfoItem], ini: &[(Vec<u8>, Vec<u8>
 /// SAPI that registered `PHP_SAPI`: the CLI (and phpdbg/embed) print
 /// text, the web SAPIs print an HTML page.
 fn sapi_info_mode(vm: &Vm) -> (bool, Option<&'static str>) {
-    match constant_str(vm, "PHP_SAPI", "cli").as_str() {
-        "cgi-fcgi" => (false, Some("CGI/FastCGI")),
-        "cli-server" => (false, Some("Built-in HTTP server")),
-        "apache2handler" => (false, Some("Apache 2.0 Handler")),
-        "fpm-fcgi" => (true, Some("FPM/FastCGI")),
-        "phpdbg" => (true, Some("phpdbg")),
-        "embed" => (true, Some("PHP Embedded Library")),
+    match vm.sapi_name().as_bytes() {
+        b"cgi-fcgi" => (false, Some("CGI/FastCGI")),
+        b"cli-server" => (false, Some("Built-in HTTP server")),
+        b"apache2handler" => (false, Some("Apache 2.0 Handler")),
+        b"fpm-fcgi" => (true, Some("FPM/FastCGI")),
+        b"phpdbg" => (true, Some("phpdbg")),
+        b"embed" => (true, Some("PHP Embedded Library")),
         _ => (true, Some("Command Line Interface")),
     }
 }

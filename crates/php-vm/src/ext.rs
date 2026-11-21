@@ -1356,6 +1356,15 @@ impl Vm {
         crate::builtins::reg(self, signature, handler);
     }
 
+    /// `sapi_module.name`: the `PHP_SAPI` constant the running SAPI
+    /// registered, `cli` until one did (Core's default).
+    pub fn sapi_name(&self) -> ZStr {
+        match self.constants.get(b"PHP_SAPI".as_slice()) {
+            Some(Value::Str(s)) => s.clone(),
+            _ => ZStr::from("cli"),
+        }
+    }
+
     /// The currently registered function `name`, if native.
     pub fn native_function(&self, name: &str) -> Option<Rc<Builtin>> {
         match self.functions.get(name.to_ascii_lowercase().as_bytes()) {
