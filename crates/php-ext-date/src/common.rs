@@ -20,21 +20,29 @@ pub(crate) const E_WARNING: i64 = 2;
 pub(crate) const E_DEPRECATED: i64 = 8192;
 
 thread_local! {
-    /// `DATEG(timezone)`: the zone set with `date_default_timezone_set()`.
-    static TZ_OVERRIDE: RefCell<Option<String>> = const { RefCell::new(None) };
     /// `DATEG(last_errors)`.
     static LAST_ERRORS: RefCell<Option<Errors>> = const { RefCell::new(None) };
 }
 
 /// Clears the per-request state (`RSHUTDOWN`).
 pub(crate) fn reset_request_state() {
-    TZ_OVERRIDE.with(|t| *t.borrow_mut() = None);
+    tz::set_default_override(None);
     LAST_ERRORS.with(|e| *e.borrow_mut() = None);
 }
 
-/// Sets `DATEG(timezone)`.
+/// Sets `DATEG(timezone)` (`name` is a valid identifier).
 pub(crate) fn set_tz_override(name: &str) {
-    TZ_OVERRIDE.with(|t| *t.borrow_mut() = Some(name.to_string()));
+    tz::set_default_override(tz::get(name));
+}
+
+/// Records `name` as `date.timezone` (`DATEG(default_timezone)`) if it is
+/// a valid identifier, else none (UTC).
+pub(crate) fn set_configured_tz(name: Option<&[u8]>) {
+    let zone = name
+        .and_then(|n| std::str::from_utf8(n).ok())
+        .filter(|n| !n.is_empty() && tz::is_valid_id(n))
+        .and_then(tz::get);
+    tz::set_default_configured(zone);
 }
 
 /// `update_errors_warnings()`: remembers the parse messages for
@@ -55,33 +63,12 @@ pub(crate) fn last_errors() -> Option<Errors> {
     LAST_ERRORS.with(|l| l.borrow().clone())
 }
 
-/// `guess_timezone()`: the override, else a valid `date.timezone`, else UTC.
-pub(crate) fn default_tz_name(vm: &Vm) -> String {
-    if let Some(n) = TZ_OVERRIDE.with(|t| t.borrow().clone()) {
-        if !n.is_empty() {
-            return n;
-        }
-    }
-    if let Some(v) = vm.ini_string("date.timezone") {
-        if let Ok(s) = std::str::from_utf8(&v) {
-            if !s.is_empty() && tz::is_valid_id(s) {
-                return s.to_string();
-            }
-        }
-    }
-    "UTC".to_string()
-}
-
-/// `get_timezone_info()`.
-pub(crate) fn default_tz(vm: &mut Vm) -> VmResult<Arc<TzInfo>> {
-    let name = default_tz_name(vm);
-    match tz::get(&name).or_else(|| tz::get("UTC")) {
-        Some(t) => Ok(t),
-        None => Err(vm.throw(
-            "DateError",
-            "Timezone database is corrupt. Please file a bug report as this should never happen",
-        )),
-    }
+/// `get_timezone_info()`: the thread's default timezone
+/// ([`tz::default_zone`]: the override, else a valid `date.timezone`, else
+/// UTC).
+#[allow(clippy::unnecessary_wraps)] // the callers' `?`; php-src can throw here
+pub(crate) fn default_tz(_vm: &mut Vm) -> VmResult<Arc<TzInfo>> {
+    Ok(tz::default_zone())
 }
 
 /// The current time as seconds and microseconds (`gettimeofday`).

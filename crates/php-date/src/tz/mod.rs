@@ -748,6 +748,39 @@ pub fn get(name: &str) -> Option<Arc<TzInfo>> {
     Some(tz)
 }
 
+thread_local! {
+    /// `DATEG(timezone)`: the zone `date_default_timezone_set()` chose for
+    /// the request.
+    static OVERRIDE: std::cell::RefCell<Option<Arc<TzInfo>>> = const { std::cell::RefCell::new(None) };
+    /// `DATEG(default_timezone)`: the valid `date.timezone` of the request.
+    static CONFIGURED: std::cell::RefCell<Option<Arc<TzInfo>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The default timezone of the calling thread (`guess_timezone()`): the
+/// one `date_default_timezone_set()` chose, else `date.timezone`, else
+/// UTC. ext/date keeps both up to date ([`set_default_override`],
+/// [`set_default_configured`]); everything else only reads it here, as
+/// it reads the clock through `php_support::time::now()`.
+#[must_use]
+pub fn default_zone() -> Arc<TzInfo> {
+    OVERRIDE
+        .with(|o| o.borrow().clone())
+        .or_else(|| CONFIGURED.with(|c| c.borrow().clone()))
+        .or_else(|| get("UTC"))
+        .expect("the timezone database has UTC")
+}
+
+/// Sets (`Some`) or clears (`None`, request end) the zone chosen with
+/// `date_default_timezone_set()`.
+pub fn set_default_override(zone: Option<Arc<TzInfo>>) {
+    OVERRIDE.with(|o| *o.borrow_mut() = zone);
+}
+
+/// Sets the zone `date.timezone` names (`None`: unset or invalid).
+pub fn set_default_configured(zone: Option<Arc<TzInfo>>) {
+    CONFIGURED.with(|c| *c.borrow_mut() = zone);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

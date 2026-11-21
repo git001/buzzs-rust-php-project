@@ -61,10 +61,12 @@ fn valid_ini_timezone(vm: &Vm) -> String {
         .unwrap_or_else(|| "UTC".to_string())
 }
 
-/// `OnUpdate_date_timezone`: rejects unknown identifiers with a warning.
+/// `OnUpdate_date_timezone`: rejects unknown identifiers with a warning;
+/// an accepted one becomes the configured default timezone.
 fn on_update_timezone(vm: &mut Vm, v: &[u8]) -> VmResult<bool> {
     let name = String::from_utf8_lossy(v).into_owned();
     if php_date::tz::is_valid_id(&name) {
+        common::set_configured_tz(Some(v));
         return Ok(true);
     }
     let cur = valid_ini_timezone(vm);
@@ -74,9 +76,13 @@ fn on_update_timezone(vm: &mut Vm, v: &[u8]) -> VmResult<bool> {
     Ok(false)
 }
 
-/// The same check for the startup value (`-d`/php.ini).
+/// Request startup: the configured default timezone from `date.timezone`
+/// (the request's value, also after the previous request's `ini_set()`
+/// was undone), and the startup check of `-d`/php.ini values.
 fn check_startup_timezone(vm: &mut Vm) {
-    let Some(v) = vm.ini_string("date.timezone") else {
+    let v = vm.ini_string("date.timezone");
+    common::set_configured_tz(v.as_deref());
+    let Some(v) = v else {
         return;
     };
     let name = String::from_utf8_lossy(&v).into_owned();
@@ -100,7 +106,7 @@ fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
             php_date::tz::version(),
         ),
         row("Timezone Database", "internal"),
-        row("Default timezone", &common::default_tz_name(vm)),
+        row("Default timezone", &php_date::tz::default_zone().name),
         InfoItem::TableEnd,
         InfoItem::IniEntries,
     ]
