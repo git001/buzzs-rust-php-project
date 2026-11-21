@@ -904,8 +904,8 @@ fn finish(vm: &mut Vm, ctx: &RequestCtx) {
     ctx.timer.disarm();
     apply_fatal_status(vm);
     php_header(vm);
-    crate::multipart::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
-    crate::multipart::cleanup(&ctx.orphaned_uploads.take());
+    php_sapi_input::rfc1867::cleanup(&std::mem::take(&mut vm.rfc1867_uploaded_files));
+    php_sapi_input::rfc1867::cleanup(&ctx.orphaned_uploads.take());
 }
 
 /// Makes `php://input` read the request body through the SAPI (the

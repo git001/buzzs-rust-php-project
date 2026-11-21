@@ -8,9 +8,9 @@
 //! fresh arrays.
 
 use crate::backend::{Backend, IntField, StrField, Table};
-use crate::multipart::{self, RegValue, Target, UploadSettings};
 use crate::request::{Body, RequestCtx, POST_BLOCK_SIZE};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use php_sapi_input::rfc1867::{self, RegValue, Target, UploadSettings};
 use php_stdmisc::query::{self, InputSettings, ParseKind, RegisterOptions};
 use php_vm::ext::{ParseBodyOptions, Rfc1867Event};
 use php_vm::{Throw, Vm, VmResult};
@@ -296,11 +296,13 @@ fn handle_multipart(
         read_post_bytes: ctx.read_post_bytes.get(),
     };
     let callback = vm.rfc1867_callback;
+    // mbstring's multibyte callbacks (`mbstring.encoding_translation`).
+    let mut translation = php_vm::ext::rfc1867_translation_hook().and_then(|hook| hook(vm));
     // The parse got past its early checks: MULTIPART_EVENT_START follows
     // the new SG(rfc1867_uploaded_files).
     let mut started = false;
     let mut read = |buf: &mut [u8]| ctx.read_post(buf);
-    let outcome = multipart::parse_with_events(
+    let outcome = rfc1867::parse_with_events(
         content_type,
         content_length(ctx),
         &upload,
@@ -311,6 +313,7 @@ fn handle_multipart(
             }
             callback.is_none_or(|cb| cb(vm, event, bytes))
         },
+        translation.as_deref_mut(),
     );
     if started {
         // The files of an earlier parse are no longer uploaded files.

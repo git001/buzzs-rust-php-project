@@ -1259,6 +1259,7 @@ dependencies = [
  "php-memlimit",
  "php-runtime",
  "php-sapi",
+ "php-sapi-input",
  "php-stdmisc",
  "php-streams",
  "php-support",

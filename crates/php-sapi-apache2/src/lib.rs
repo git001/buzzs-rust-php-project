@@ -11,7 +11,8 @@
 //!   thread, the `max_execution_time` watchdog.
 //! * [`request`] — one request's lifecycle around the [`php_vm::Vm`].
 //! * [`vars`] — `$_GET`/`$_POST`/`$_COOKIE`/`$_FILES`/`$_SERVER`/`$_ENV`/
-//!   `$_REQUEST`; [`multipart`] — the rfc1867 upload parser.
+//!   `$_REQUEST`, with the rfc1867 upload parser of
+//!   [`php_sapi_input::rfc1867`].
 //! * [`headers`] — `sapi_header_op()` with the Apache header handler;
 //!   [`cookie`] — `setcookie()` formatting.
 //! * [`functions`] — the PHP functions the SAPI provides (`header()`,
@@ -30,6 +31,5 @@ pub mod ffi;
 pub mod functions;
 pub mod handler;
 pub mod headers;
-pub mod multipart;
 pub mod request;
 pub mod vars;

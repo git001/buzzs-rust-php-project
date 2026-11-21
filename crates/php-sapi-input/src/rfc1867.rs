@@ -1456,6 +1456,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_without_an_observer_is_unchanged() {
+        let (with_events, _) = run_events(PROGRESS_BODY, &|_| true);
+        let plain = run(CT, PROGRESS_BODY, &tmp_settings());
+        assert_eq!(names(&plain), names(&with_events));
+        cleanup(&with_events.uploaded);
+        cleanup(&plain.uploaded);
+    }
+
+    #[test]
     fn a_later_parse_counts_on_from_earlier_reads() {
         // request_parse_body() after a startup parse: SG(read_post_bytes)
         // already exceeds post_max_size, so fill_buffer() reads nothing and
