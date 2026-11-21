@@ -522,6 +522,60 @@ echo "$own $bad\n";
 }
 
 #[test]
+fn locale_set_default_changes_only_its_own_thread() {
+    // `INTL_G(default_locale)` per thread: requests that call
+    // `Locale::setDefault()` with different locales run side by side and
+    // each reads back its own; the next request on the same thread starts
+    // from the configuration again.
+    const THREADS: usize = 6;
+    const REQUEST: &str = r#"<?php
+$own = '@LOCALE@';
+$bad = 0;
+for ($i = 0; $i < 300; $i++) {
+    Locale::setDefault($own);
+    $bad += Locale::getDefault() !== $own;
+    $bad += ini_get('intl.default_locale') !== $own;
+}
+echo "$own $bad\n";
+"#;
+    const AFTER: &str =
+        "<?php echo ini_get('intl.default_locale'), '|', Locale::getDefault(), \"\\n\";";
+    let initial = on_thread(|| {
+        let sink = Sink::default();
+        let mut vm = new_vm(&sink);
+        vm.run_script(AFTER.as_bytes(), "/after.php");
+        sink.take()
+    })
+    .join()
+    .expect("thread");
+    let start = Arc::new(Barrier::new(THREADS));
+    let workers: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let start = Arc::clone(&start);
+            let own = ["de_DE", "fr_FR", "ja_JP"][t % 3];
+            on_thread(move || {
+                let sink = Sink::default();
+                let mut vm = new_vm(&sink);
+                start.wait();
+                vm.run_script(REQUEST.replace("@LOCALE@", own).as_bytes(), "/locale.php");
+                let out = sink.take();
+                vm.request_reset();
+                vm.run_script(AFTER.as_bytes(), "/after.php");
+                (own, out, sink.take())
+            })
+        })
+        .collect();
+    for w in workers {
+        let (own, out, after) = w.join().expect("worker thread");
+        assert_eq!(out, format!("{own} 0\n"));
+        assert_eq!(
+            after, initial,
+            "{own}: the next request starts from the configuration"
+        );
+    }
+}
+
+#[test]
 fn every_thread_starts_with_the_process_lc_ctype() {
     // `zend_reset_lc_ctype_locale()` at process start (the standard
     // extension's `module_startup`): "C.UTF-8", so `escapeshellarg()`

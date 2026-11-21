@@ -1,10 +1,10 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
-//! Process-wide intl state and helpers shared by several classes:
-//! the `intl.default_locale` INI value, version constants and locale
+//! intl state and helpers shared by several classes: the
+//! `intl.default_locale` INI value, version constants and locale
 //! validation helpers.
 
-use std::sync::Mutex;
+use std::cell::RefCell;
 
 /// `INTL_ICU_VERSION`.
 pub const ICU_VERSION: &str = env!("PHP_INTL_ICU_VERSION");
@@ -15,25 +15,27 @@ pub const ULOC_FULLNAME_CAPACITY: usize = 157;
 /// `INTL_MAX_LOCALE_LEN`.
 pub const INTL_MAX_LOCALE_LEN: usize = ULOC_FULLNAME_CAPACITY - 1;
 
-static DEFAULT_LOCALE: Mutex<Option<String>> = Mutex::new(None);
+thread_local! {
+    /// `INTL_G(default_locale)`: per thread, as the VM whose request set
+    /// it (each VM lives on its own thread). One copy for the process
+    /// would hand one thread's `Locale::setDefault()` to the requests of
+    /// all others.
+    static DEFAULT_LOCALE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
 
-/// Sets the `intl.default_locale` INI value (`None` = unset).  The VM calls
-/// this whenever the INI entry changes (including via
-/// `Locale::setDefault()`).
+/// Sets the `intl.default_locale` INI value (`None` = unset) of this
+/// thread.  The VM calls this whenever the INI entry changes (including
+/// via `Locale::setDefault()`) and at request start.
 pub fn set_ini_default_locale(value: Option<&str>) {
-    if let Ok(mut g) = DEFAULT_LOCALE.lock() {
-        *g = value.filter(|v| !v.is_empty()).map(str::to_owned);
-    }
+    let value = value.filter(|v| !v.is_empty()).map(str::to_owned);
+    DEFAULT_LOCALE.with(|d| *d.borrow_mut() = value);
 }
 
 /// `intl_locale_get_default()`: the INI value, or ICU's default locale.
 pub fn default_locale() -> String {
-    if let Ok(g) = DEFAULT_LOCALE.lock() {
-        if let Some(v) = g.as_ref() {
-            return v.clone();
-        }
-    }
-    icu_default_locale()
+    DEFAULT_LOCALE
+        .with(|d| d.borrow().clone())
+        .unwrap_or_else(icu_default_locale)
 }
 
 /// `uloc_getDefault()`.
