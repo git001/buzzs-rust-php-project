@@ -691,35 +691,6 @@ fn router_return(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(v)
 }
 
-/// The `UPLOAD_ERR_*` constants (`php_rfc1867_register_constants`).
-pub const UPLOAD_ERR: &[(&str, i64)] = &[
-    ("UPLOAD_ERR_OK", 0),
-    ("UPLOAD_ERR_INI_SIZE", 1),
-    ("UPLOAD_ERR_FORM_SIZE", 2),
-    ("UPLOAD_ERR_PARTIAL", 3),
-    ("UPLOAD_ERR_NO_FILE", 4),
-    ("UPLOAD_ERR_NO_TMP_DIR", 6),
-    ("UPLOAD_ERR_CANT_WRITE", 7),
-    ("UPLOAD_ERR_EXTENSION", 8),
-];
-
-/// Registers the `UPLOAD_ERR_*` constants; core constants that every SAPI
-/// has (the CLI binary can register this module too).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Rfc1867Constants;
-
-impl Extension for Rfc1867Constants {
-    fn name(&self) -> &'static str {
-        "rfc1867"
-    }
-
-    fn register(&self, m: &mut ModuleBuilder<'_>) {
-        for (name, v) in UPLOAD_ERR {
-            m.constant(name, Value::Int(*v));
-        }
-    }
-}
-
 /// `cgi_sapi_module.name`.
 pub const CGI_SAPI_NAME: &str = "cgi-fcgi";
 
@@ -799,9 +770,6 @@ impl Extension for CliServerModule {
                 Rc::new(crate::log::ConsoleLog)
             };
             vm.set_sapi_module(log);
-        }
-        for (name, v) in UPLOAD_ERR {
-            m.constant(name, Value::Int(*v));
         }
         let (sapi, sapi_name): (&str, NativeFn) = if self.cgi {
             (CGI_SAPI_NAME, php_sapi_name_cgi)

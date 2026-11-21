@@ -19,23 +19,7 @@ use std::path::{Path, PathBuf};
 /// `FILLUNIT`: the multipart buffer size.
 const FILLUNIT: usize = 1024 * 5;
 
-/// `UPLOAD_ERR_*` codes (`PHP_UPLOAD_ERROR_*`).
-pub mod upload_err {
-    /// `UPLOAD_ERR_INI_SIZE` (`upload_max_filesize`).
-    pub const INI_SIZE: i64 = 1;
-    /// `UPLOAD_ERR_FORM_SIZE` (`MAX_FILE_SIZE`).
-    pub const FORM_SIZE: i64 = 2;
-    /// `UPLOAD_ERR_PARTIAL`.
-    pub const PARTIAL: i64 = 3;
-    /// `UPLOAD_ERR_NO_FILE`.
-    pub const NO_FILE: i64 = 4;
-    /// `UPLOAD_ERR_NO_TMP_DIR`.
-    pub const NO_TMP_DIR: i64 = 6;
-    /// `UPLOAD_ERR_CANT_WRITE`.
-    pub const CANT_WRITE: i64 = 7;
-    /// `UPLOAD_ERR_EXTENSION` (the upload observer cancelled it).
-    pub const EXTENSION: i64 = 8;
-}
+pub use php_sapi::upload_err;
 
 /// INI settings consulted by the upload handler.
 #[derive(Debug, Clone, PartialEq, Eq)]

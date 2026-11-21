@@ -1272,6 +1272,7 @@ dependencies = [
  "libc",
  "memchr",
  "php-memlimit",
+ "php-sapi",
  "php-support",
  "php-vm",
 ]

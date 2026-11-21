@@ -8,8 +8,10 @@
 //! SAPI.
 
 mod module;
+mod upload;
 
 pub use module::{SapiModule, StderrLog};
+pub use upload::{upload_err, UPLOAD_ERR_CONSTANTS};
 
 /// `sapi_request_info`: the request as the SAPI describes it. Strings are
 /// raw bytes; `None` is php-src's `NULL`. Fields a SAPI does not know stay

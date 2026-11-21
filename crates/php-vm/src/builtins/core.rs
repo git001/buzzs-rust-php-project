@@ -3091,6 +3091,9 @@ pub(crate) fn register(vm: &mut Vm) {
     constant(vm, "PHP_OUTPUT_HANDLER_STARTED", Value::Int(4096));
     constant(vm, "PHP_OUTPUT_HANDLER_DISABLED", Value::Int(8192));
     constant(vm, "PHP_OUTPUT_HANDLER_PROCESSED", Value::Int(16384));
+    for (name, value) in php_sapi::UPLOAD_ERR_CONSTANTS {
+        constant(vm, name, Value::Int(*value));
+    }
     let _ = (Throw::Fatal,);
 }
 
