@@ -1,4 +1,4 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// buzzs-rust-php-project - Copyright (c) 2026 Aleks <al-git001@none.at>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The clock as php-src reads it.
 

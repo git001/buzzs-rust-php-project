@@ -1,4 +1,4 @@
-// buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
+// buzzs-rust-php-project - Copyright (c) 2026 Aleks <al-git001@none.at>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The log timestamp `php_format_date("d-M-Y H:i:s e", ts, localtime)`
 //! when no timezone applies: before the modules are activated
