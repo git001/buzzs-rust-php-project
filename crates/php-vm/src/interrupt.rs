@@ -5,8 +5,21 @@
 //!
 //! Anything that must run "soon" from outside the executor — a signal
 //! handler (pcntl async signals), the execution-time timer, a SAPI noticing
-//! a client abort — sets [`request_interrupt`]; the executor polls the flag
-//! after every opcode and runs the registered interrupt handlers.
+//! a client abort — requests an interrupt; the executor polls for it after
+//! every opcode and runs the registered interrupt handlers.
+//!
+//! # Per thread, like `EG()` under ZTS
+//!
+//! The flags belong to the thread a VM runs on ([`Signals`]): one thread
+//! runs one VM, and a server's worker threads run theirs side by side, so
+//! a timeout or an interrupt reaches only the VM it is meant for, and one
+//! thread clearing its flags leaves the others' alone. Code on the VM's
+//! own thread uses [`request_interrupt`]; another thread (a SAPI's
+//! watchdog, the timer thread) holds a [`SignalHandle`] taken on the VM's
+//! thread with [`this_thread`]. Signal handlers, which run on whatever
+//! thread the kernel picks, reach the process's first VM thread
+//! ([`request_interrupt_primary`]): pcntl is only loaded by the CLI SAPIs,
+//! which run one VM.
 //!
 //! # The safe-point flag
 //!
@@ -16,143 +29,223 @@
 //! polling each source after every instruction, whoever raises one of them
 //! also sets one combined flag (`raise_safe_point`, php-src's
 //! `EG(vm_interrupt)`), and the executor polls only that flag. When it is
-//! set, the executor runs its `Vm::safe_point` work, which
-//! checks every source in the same order as before, and then
-//! `resync_safe_point` clears the flag unless a source is still set.
-//! A spuriously set flag costs one pass over the sources and nothing else.
+//! set, the executor runs its `Vm::safe_point` work, which checks every
+//! source in the same order as before, and then `resync_safe_point` clears
+//! the flag unless a source is still set. A spuriously set flag costs one
+//! pass over the sources and nothing else.
 //!
-//! The flag is process-wide, like the interrupt flag (the timer thread and
-//! signal handlers on other threads must reach it), while the destructor
-//! and collector sources are per thread. A thread only clears it when it is
-//! the only thread executing PHP code (`ExecutionGuard` counts them), so
-//! it can never clear a flag another executing thread still needs.
+//! The poll reads one process-wide count of the threads whose flag is set
+//! ([`THREADS_DUE`]); only when it is not zero does it read the thread's
+//! own [`Signals`], through a pointer in a constant-initialised
+//! thread-local (no lazy initialisation, no destructor). An extra TLS load
+//! on every instruction cost 6.7 % in a tight loop; the count costs what
+//! the old process-wide flag did. A thread without a VM points at
+//! [`IDLE`], whose flags nobody raises.
 //!
 //! The delayed `memory_limit` violation is recorded by `php-memlimit`,
 //! which raises the flag through its pending hook
-//! ([`install_memory_limit_hook`], once per process), so the executor's
-//! per-instruction poll reads the flag alone; [`php_memlimit::is_pending`]
-//! is only consulted by the safe-point work itself, which checks each
-//! source on its own.
-//!
-//! # Linkage of the flags
-//!
-//! The per-instruction poll is one load of `SAFE_POINT`, and it is only a
-//! RIP-relative load while the static has internal linkage. rustc exports a
-//! private static (and the executor then reaches it through the GOT, one
-//! more instruction per opcode) as soon as some body that other crates may
-//! inline names it, including closures and small leaf functions, which are
-//! cross-crate inlinable without `#[inline]`. So the only inlinable code
-//! that touches `SAFE_POINT` is the poll (`safe_point_due`, called from the
-//! executor's private loop); every raiser and every bookkeeping path goes
-//! through a function that is never inlined (`raise_safe_point`,
-//! `resync_safe_point`, the `ExecutionGuard` entry and exit helpers).
-//! `INTERRUPT` is kept internal the same way: its only inlinable reader is
-//! the call-boundary poll `Vm::check_interrupt`.
+//! ([`install_memory_limit_hook`], once per process) on the allocating
+//! thread; [`php_memlimit::is_pending`] is only consulted by the safe-point
+//! work itself.
 
-use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use php_runtime::Value;
 
 use crate::vm::{Vm, VmResult};
 
-/// The process-wide interrupt flag (async-signal-safe to set).
-///
-/// Only touched by functions that other crates cannot inline (see
-/// [`request_interrupt`]), so the executor reads it with one RIP-relative
-/// load instead of going through the GOT.
-static INTERRUPT: AtomicBool = AtomicBool::new(false);
-/// `EG(vm_interrupt)`: whether some safe-point work may be due (see the
-/// module docs), and how many threads execute PHP code. Like
-/// [`INTERRUPT`], only touched by the executor's poll and by this crate's
-/// non-inlinable code ("Linkage of the flags" in the module docs), so the
-/// per-instruction poll is a single direct load.
-static SAFE_POINT: SafePoint = SafePoint::new();
-
-thread_local! {
-    /// How deeply this thread nests [`Vm::execute`] (see [`ExecutionGuard`]).
-    static EXECUTION_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-/// The combined safe-point flag plus the count of threads executing PHP
-/// code, which decides whether a thread may clear the flag.
-struct SafePoint {
-    /// Set by raisers, cleared by [`SafePoint::resync`].
+/// One thread's interrupt state: `EG(vm_interrupt)` (the safe-point flag),
+/// the interrupt request and `EG(timed_out)`.
+#[derive(Debug, Default)]
+pub struct Signals {
+    /// The safe-point flag the executor polls (module docs).
     due: AtomicBool,
-    /// Threads currently inside [`Vm::execute`] (each counted once,
-    /// however deeply it nests executions).
-    executing: AtomicUsize,
+    /// An interrupt was requested: run the interrupt handlers.
+    interrupt: AtomicBool,
+    /// `max_execution_time` elapsed and the executor has not raised the
+    /// fatal yet.
+    timed_out: AtomicBool,
 }
 
-impl SafePoint {
+impl Signals {
     const fn new() -> Self {
         Self {
             due: AtomicBool::new(false),
-            executing: AtomicUsize::new(0),
+            interrupt: AtomicBool::new(false),
+            timed_out: AtomicBool::new(false),
         }
     }
 
     #[inline]
-    fn is_due(&self) -> bool {
-        self.due.load(Ordering::Relaxed)
+    /// Sets the flag; the first raise since the last clear counts the
+    /// thread in [`THREADS_DUE`].
+    #[inline(never)]
+    fn raise(&self) {
+        if !self.due.swap(true, Ordering::AcqRel) {
+            THREADS_DUE.fetch_add(1, Ordering::Release);
+        }
     }
 
-    #[inline]
-    fn raise(&self) {
-        self.due.store(true, Ordering::Release);
+    fn interrupt(&self) {
+        self.interrupt.store(true, Ordering::Release);
+        self.raise();
+    }
+
+    /// `zend_timeout_handler`: flags the timeout and interrupts, unless the
+    /// previous timeout is still unhandled (then `false`: php-src's
+    /// hard-timeout condition).
+    fn time_out(&self) -> bool {
+        if self.timed_out.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        self.interrupt();
+        true
     }
 
     /// Clears the flag unless `sources_set()` (evaluated after the clear)
-    /// reports work still waiting or another thread executes PHP code (its
-    /// sources are its own; this thread cannot see them).
+    /// reports work still waiting.
     ///
     /// The clear first, the sources after: a raiser sets its source before
     /// the flag, so either the swap reads (and synchronizes with) that store
     /// and `sources_set` sees the source, or the raiser's store comes later
     /// and the flag ends up set.
     fn resync(&self, sources_set: impl FnOnce() -> bool) {
-        if self.executing.load(Ordering::Acquire) > 1 {
-            // Keep it (and skip the swap): another thread may need it.
-            return;
+        if self.due.swap(false, Ordering::AcqRel) {
+            THREADS_DUE.fetch_sub(1, Ordering::Release);
         }
-        let _ = self.due.swap(false, Ordering::AcqRel);
-        if sources_set() || self.executing.load(Ordering::Acquire) > 1 {
+        if sources_set() {
             self.raise();
         }
     }
+}
 
-    fn thread_entered(&self) {
-        self.executing.fetch_add(1, Ordering::AcqRel);
+/// The flags of threads without a VM: nothing raises them, so their poll
+/// stays false.
+static IDLE: Signals = Signals::new();
+
+/// How many threads' safe-point flags are set: the executor's
+/// per-instruction poll reads this one process-wide value (a single
+/// RIP-relative load, as long as only this crate's non-inlinable code names
+/// it) and looks at its own thread's flag only when some thread has work
+/// waiting. A thread clears its own flag and count only, so the count is
+/// zero again as soon as every thread has run its work.
+static THREADS_DUE: AtomicUsize = AtomicUsize::new(0);
+
+/// The first thread that ran a VM, for signal handlers (leaked: it stays
+/// valid for the process).
+static PRIMARY: AtomicPtr<Signals> = AtomicPtr::new(std::ptr::null_mut());
+
+thread_local! {
+    /// The thread's [`Signals`]: [`IDLE`] or the one [`OWNER`] keeps.
+    /// Constant-initialised and without a destructor, so the executor's
+    /// poll is a plain TLS load, and it stays readable while other
+    /// thread-locals are destroyed.
+    static CURRENT: Cell<*const Signals> = const { Cell::new(&raw const IDLE) };
+    /// Keeps the thread's [`Signals`] alive; pointing [`CURRENT`] back at
+    /// [`IDLE`] when the thread ends.
+    static OWNER: RefCell<Option<Owner>> = const { RefCell::new(None) };
+    /// How deeply this thread nests [`Vm::execute`] (see [`ExecutionGuard`]).
+    static EXECUTION_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// The owner of a thread's [`Signals`].
+struct Owner(Arc<Signals>);
+
+impl Drop for Owner {
+    fn drop(&mut self) {
+        let _ = CURRENT.try_with(|c| c.set(&raw const IDLE));
+    }
+}
+
+/// Whether `s` is [`IDLE`]: the thread runs no VM.
+#[inline]
+fn is_idle(s: &Signals) -> bool {
+    std::ptr::eq(s, &raw const IDLE)
+}
+
+/// The thread's flags.
+#[inline]
+fn current() -> &'static Signals {
+    // SAFETY: `CURRENT` points at `IDLE` (a static) or at the `Signals`
+    // that `OWNER` keeps alive; `Owner::drop` points it back at `IDLE`
+    // before releasing them. The reference does not outlive this thread's
+    // use of it: callers read a flag and drop it.
+    CURRENT.with(|c| unsafe { &*c.get() })
+}
+
+/// A handle to one thread's interrupt state, for other threads (a SAPI's
+/// watchdog, the timer thread).
+#[derive(Debug, Clone)]
+pub struct SignalHandle(Arc<Signals>);
+
+impl SignalHandle {
+    /// Asks that thread's executor to run its interrupt handlers at its
+    /// next safe point.
+    pub fn request_interrupt(&self) {
+        self.0.interrupt();
     }
 
-    fn thread_left(&self) {
-        self.executing.fetch_sub(1, Ordering::AcqRel);
+    /// A timer the SAPI runs ([`Vm::timer_hook`]) expired: flags the
+    /// timeout and requests an interrupt, so the executor raises the
+    /// "Maximum execution time" fatal at its next safe point. Returns
+    /// `false` when the previous expiry is still unhandled: php-src's
+    /// hard-timeout condition, on which it kills the process.
+    #[must_use]
+    pub fn timer_expired(&self) -> bool {
+        self.0.time_out()
     }
+
+    /// Whether a flagged timeout still waits for the executor
+    /// (`EG(timed_out)`).
+    #[must_use]
+    pub fn timeout_pending(&self) -> bool {
+        self.0.timed_out.load(Ordering::Acquire)
+    }
+}
+
+/// This thread's interrupt state, created on first use (every `Vm` takes
+/// it when it is created).
+#[must_use]
+pub fn this_thread() -> SignalHandle {
+    let signals = OWNER.with(|o| {
+        let mut o = o.borrow_mut();
+        let owner = o.get_or_insert_with(|| {
+            let signals = Arc::new(Signals::new());
+            CURRENT.with(|c| c.set(Arc::as_ptr(&signals)));
+            let _ = PRIMARY.compare_exchange(
+                std::ptr::null_mut(),
+                Arc::into_raw(Arc::clone(&signals)).cast_mut(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            Owner(signals)
+        });
+        Arc::clone(&owner.0)
+    });
+    SignalHandle(signals)
 }
 
 /// Whether the executor must run its safe-point work after the current
-/// instruction (one relaxed load: the per-instruction poll).
+/// instruction (the per-instruction poll).
 #[inline]
 pub(crate) fn safe_point_due() -> bool {
-    SAFE_POINT.is_due()
+    THREADS_DUE.load(Ordering::Relaxed) != 0 && current().due.load(Ordering::Relaxed)
 }
 
 /// Asks for a safe point after the current instruction: called by whoever
-/// queues work for it (a destructor, a due collection), after setting its
-/// own source. Async-signal-safe.
-///
-/// Never inlined, so that no inlinable body of a raiser (the destructor
-/// queue, the collector's root buffering behind the inlinable
-/// `gc::possible_root`, the execution guard) names `SAFE_POINT` and gets
-/// it exported ("Linkage of the flags" in the module docs). In the release
-/// binaries of 4e1c2df8 and of the 13:33 acceptance run the static was a global
-/// symbol polled through the GOT, although every reference to it was
-/// php-vm code. Raising is rare (a destructor queued, a collection due, a
-/// signal), so the call costs nothing measurable.
+/// queues work for it on this thread (a destructor, a due collection, the
+/// allocator's `memory_limit` hook), after setting its own source. No
+/// allocation, no lock. A thread without a VM has nothing to run it; its
+/// next execution checks the sources ([`ExecutionGuard`]).
 #[inline(never)]
 pub(crate) fn raise_safe_point() {
-    SAFE_POINT.raise();
+    let s = current();
+    if !is_idle(s) {
+        s.raise();
+    }
 }
 
 /// `php-memlimit`'s pending hook: a `memory_limit` violation was just
@@ -173,24 +266,26 @@ pub(crate) fn install_memory_limit_hook() {
     let _ = php_memlimit::set_pending_hook(memory_limit_pending);
 }
 
+/// Whether some safe-point work of this thread is waiting.
+fn sources_set(s: &Signals) -> bool {
+    crate::object::has_pending_destructors()
+        || crate::gc::wants_run()
+        || s.interrupt.load(Ordering::Acquire)
+        || php_memlimit::is_pending()
+}
+
 /// Ends a safe point: clears the flag unless one of its sources is still
-/// set (work left behind by an error, or raised while the work ran) or
-/// another thread is executing PHP code.
+/// set (work left behind by an error, or raised while the work ran).
 #[cold]
 #[inline(never)]
 pub(crate) fn resync_safe_point() {
-    SAFE_POINT.resync(|| {
-        crate::object::has_pending_destructors()
-            || crate::gc::wants_run()
-            || INTERRUPT.load(Ordering::Acquire)
-            || php_memlimit::is_pending()
-    });
+    let s = current();
+    s.resync(|| sources_set(s));
 }
 
-/// Counts this thread as executing PHP code while alive (created by
-/// [`Vm::execute`]): [`resync_safe_point`] only clears the flag while a
-/// single thread executes. A guard leaked by an abandoned native stack only
-/// overcounts, which keeps the flag set (slower, never wrong).
+/// Tracks how deeply this thread executes PHP code (created by
+/// [`Vm::execute`]). The outermost execution flags work queued while the
+/// thread was not executing.
 pub(crate) struct ExecutionGuard {
     _not_send: std::marker::PhantomData<*const ()>,
 }
@@ -217,64 +312,49 @@ impl ExecutionGuard {
 impl Drop for ExecutionGuard {
     #[inline]
     fn drop(&mut self) {
-        let last = EXECUTION_DEPTH.with(|d| {
-            let n = d.get();
-            d.set(n.saturating_sub(1));
-            n == 1
-        });
-        if last {
-            last_execution_on_thread();
-        }
+        EXECUTION_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
     }
 }
 
-/// This thread starts executing PHP code: it is counted, and work it queued
-/// while not executing (when another thread may have cleared the flag) is
-/// flagged again.
+/// This thread starts executing PHP code: work it queued while not
+/// executing is flagged.
 #[cold]
 #[inline(never)]
 fn first_execution_on_thread() {
-    SAFE_POINT.thread_entered();
-    if crate::object::has_pending_destructors() || crate::gc::wants_run() {
-        raise_safe_point();
+    let s = current();
+    if !is_idle(s) && sources_set(s) {
+        s.raise();
     }
 }
 
-/// This thread's outermost execution ended: it is no longer counted. Out
-/// of line, like [`first_execution_on_thread`], so that the guard's
-/// inlinable `drop` never names `SAFE_POINT` (module docs, "Linkage of the
-/// flags").
-#[cold]
-#[inline(never)]
-fn last_execution_on_thread() {
-    SAFE_POINT.thread_left();
-}
-
-/// Set by the timer thread when `max_execution_time` elapsed.
-static TIMED_OUT: AtomicBool = AtomicBool::new(false);
-/// Generation of the armed timer (re-arming cancels older timers).
-static TIMER_GEN: AtomicU64 = AtomicU64::new(0);
-
-/// Asks the executor to run the interrupt handlers at its next safe point
-/// (`zend_atomic_bool_store(&EG(vm_interrupt), true)`). Safe to call from
-/// signal handlers and other threads.
-///
-/// Not inlinable into other crates (`#[inline(never)]`): an inlinable body
-/// would export the `INTERRUPT` and `SAFE_POINT` statics and turn the executor's
-/// per-instruction poll into a GOT load.
+/// Asks this thread's executor to run the interrupt handlers at its next
+/// safe point (`zend_atomic_bool_store(&EG(vm_interrupt), true)`).
+/// No allocation, no lock: safe in code the allocator runs.
 #[inline(never)]
 pub fn request_interrupt() {
-    INTERRUPT.store(true, Ordering::Release);
-    raise_safe_point();
+    let s = current();
+    if !is_idle(s) {
+        s.interrupt();
+    }
 }
 
-/// The interrupt-request flag itself. Storing `true` into it directly is
-/// seen at the next call boundary (`check_interrupt` after a builtin call,
-/// `zend_call_function`); use [`request_interrupt`] to be seen after the
-/// current instruction.
+/// [`request_interrupt`] for the process's first VM thread, from a signal
+/// handler (async-signal-safe: two atomic stores).
 #[inline(never)]
-pub fn interrupt_flag() -> &'static AtomicBool {
-    &INTERRUPT
+pub fn request_interrupt_primary() {
+    let p = PRIMARY.load(Ordering::Acquire);
+    // SAFETY: `PRIMARY` is null or a leaked `Arc<Signals>` (`this_thread`),
+    // valid for the rest of the process.
+    if let Some(s) = unsafe { p.as_ref() } {
+        s.interrupt();
+    }
+}
+
+/// Whether an interrupt is requested on this thread (seen at the next call
+/// boundary).
+#[inline(never)]
+pub fn interrupt_requested() -> bool {
+    current().interrupt.load(Ordering::Acquire)
 }
 
 /// An interrupt handler (`zend_interrupt_function`).
@@ -292,8 +372,9 @@ pub struct UserTick {
     pub(crate) calling: bool,
 }
 
-/// `(Re)arms` the execution-time limit: after `seconds` (0 = none) the
-/// executor raises "Maximum execution time of N seconds exceeded".
+/// The execution-time timer of a VM: arms `seconds` (0 = none) on the
+/// process's timer thread; when they pass, the VM's thread raises "Maximum
+/// execution time of N seconds exceeded" at its next safe point.
 ///
 /// `hard` is `hard_timeout`: like `zend_timeout_handler`, each expiry
 /// re-arms the timer for that many seconds, so code that still runs after
@@ -302,42 +383,17 @@ pub struct UserTick {
 /// first one still unhandled; this timer counts wall-clock time rather than
 /// `ITIMER_PROF` CPU time (a blocking builtin is not burning CPU), so it
 /// stops instead.
-pub(crate) fn arm_timer(seconds: i64, hard: i64) {
-    let gen = TIMER_GEN.fetch_add(1, Ordering::AcqRel) + 1;
-    TIMED_OUT.store(false, Ordering::Release);
-    let Ok(secs) = u64::try_from(seconds) else {
-        return;
-    };
-    if secs == 0 {
-        return;
-    }
+fn execution_timer(signals: &SignalHandle, seconds: i64, hard: i64) -> Option<php_timer::Timer> {
+    let secs = u64::try_from(seconds).ok().filter(|&s| s > 0)?;
     let hard = u64::try_from(hard).unwrap_or(0);
-    let _ = std::thread::Builder::new()
-        .name("php-timeout".into())
-        .spawn(move || {
-            let mut wait = secs;
-            loop {
-                std::thread::sleep(Duration::from_secs(wait));
-                match timer_expired(&TIMER_GEN, &TIMED_OUT, gen, hard) {
-                    Some(next) => wait = next,
-                    None => return,
-                }
-            }
-        });
-}
-
-/// One expiry of the timer armed as generation `gen`
-/// (`zend_timeout_handler`): flags the timeout and requests an interrupt
-/// unless the timer was re-armed since or the previous timeout is still
-/// pending. Returns the seconds until the next expiry (`hard_timeout`), or
-/// `None` when the timer thread should stop.
-fn timer_expired(current: &AtomicU64, timed_out: &AtomicBool, gen: u64, hard: u64) -> Option<u64> {
-    if current.load(Ordering::Acquire) != gen || timed_out.load(Ordering::Acquire) {
-        return None;
-    }
-    timed_out.store(true, Ordering::Release);
-    request_interrupt();
-    (hard > 0).then_some(hard)
+    let s = signals.clone();
+    let timer = php_timer::Timers::global().timer(move |me| {
+        if s.timer_expired() && hard > 0 {
+            me.arm(Duration::from_secs(hard));
+        }
+    });
+    timer.arm(Duration::from_secs(secs));
+    Some(timer)
 }
 
 impl Vm {
@@ -346,7 +402,7 @@ impl Vm {
     /// the combined flag is set) and at call boundaries.
     #[inline]
     pub(crate) fn check_interrupt(&mut self) -> VmResult<()> {
-        if INTERRUPT.load(Ordering::Relaxed) {
+        if current().interrupt.load(Ordering::Relaxed) {
             self.handle_interrupt()?;
         }
         Ok(())
@@ -354,8 +410,9 @@ impl Vm {
 
     #[cold]
     fn handle_interrupt(&mut self) -> VmResult<()> {
-        INTERRUPT.store(false, Ordering::Release);
-        if TIMED_OUT.swap(false, Ordering::AcqRel) {
+        let s = current();
+        s.interrupt.store(false, Ordering::Release);
+        if s.timed_out.swap(false, Ordering::AcqRel) {
             // `zend_timeout`.
             let n = self.timeout_seconds;
             let msg = format!(
@@ -415,46 +472,33 @@ impl Vm {
     /// `set_time_limit()` / `max_execution_time` (`zend_set_timeout`):
     /// restarts the timer. A SAPI that runs the timer itself
     /// ([`Vm::timer_hook`]) is told the new limit instead; it reports
-    /// expiry with [`sapi_timer_expired`].
+    /// expiry through a [`SignalHandle`] of the VM's thread.
     pub fn set_time_limit(&mut self, seconds: i64) {
         self.timeout_seconds = seconds;
+        // `zend_set_timeout` resets `EG(timed_out)`; the old timer goes.
+        self.signals.0.timed_out.store(false, Ordering::Release);
+        self.execution_timer = None;
         if let Some(hook) = self.timer_hook {
-            // Cancels a wall-clock timer armed before the hook was
-            // installed and clears a flagged timeout (`zend_set_timeout`
-            // resets `EG(timed_out)`).
-            arm_timer(0, 0);
             hook(self, seconds);
             return;
         }
-        arm_timer(seconds, self.ini.get_long("hard_timeout"));
+        let hard = self.ini.get_long("hard_timeout");
+        self.execution_timer = execution_timer(&self.signals, seconds, hard);
     }
-}
 
-/// A timer run by the SAPI ([`Vm::timer_hook`]) expired: the
-/// `zend_timeout_handler` half the VM's own timer thread performs in
-/// `arm_timer`. Flags the timeout and requests an interrupt, so the
-/// executor raises the "Maximum execution time" fatal at its next safe
-/// point. Returns `false` when the previous expiry is still unhandled:
-/// php-src's hard-timeout condition, on which it kills the process.
-#[inline(never)]
-pub fn sapi_timer_expired() -> bool {
-    if TIMED_OUT.swap(true, Ordering::AcqRel) {
-        return false;
+    /// The interrupt state of this VM's thread, for other threads.
+    #[must_use]
+    pub fn signals(&self) -> SignalHandle {
+        self.signals.clone()
     }
-    request_interrupt();
-    true
-}
 
-/// Whether a flagged timeout still waits for the executor (`EG(timed_out)`).
-#[inline(never)]
-pub fn timeout_pending() -> bool {
-    TIMED_OUT.load(Ordering::Acquire)
-}
-
-/// Clears pending timeout and interrupt flags for a new request.
-pub fn clear_interrupt() {
-    TIMED_OUT.store(false, Ordering::Release);
-    INTERRUPT.store(false, Ordering::Release);
+    /// Clears this VM's pending timeout and interrupt and stops its timer,
+    /// for a new request.
+    pub fn clear_interrupt(&mut self) {
+        self.execution_timer = None;
+        self.signals.0.timed_out.store(false, Ordering::Release);
+        self.signals.0.interrupt.store(false, Ordering::Release);
+    }
 }
 
 /// `register_tick_function(callable $callback, mixed ...$args): bool`.
@@ -577,53 +621,105 @@ pub(crate) fn set_time_limit(vm: &mut Vm, a: &mut crate::func::Args) -> VmResult
 #[cfg(test)]
 mod tests {
     use super::{
-        request_interrupt, timer_expired, ExecutionGuard, SafePoint, EXECUTION_DEPTH, INTERRUPT,
+        current, is_idle, request_interrupt, request_interrupt_primary, this_thread,
+        ExecutionGuard, Signals, EXECUTION_DEPTH, IDLE,
     };
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, PoisonError};
+
+    /// Held by the tests that raise flags of other threads: the primary
+    /// thread's may be the one another of them checks.
+    static FLAGS: Mutex<()> = Mutex::new(());
 
     #[test]
     fn safe_point_flag_is_cleared_only_without_sources() {
-        let sp = SafePoint::new();
-        assert!(!sp.is_due());
+        let sp = Signals::new();
+        assert!(!sp.due.load(Ordering::Acquire));
         sp.raise();
-        assert!(sp.is_due());
         // Work still waiting keeps the flag.
         sp.resync(|| true);
-        assert!(sp.is_due());
+        assert!(sp.due.load(Ordering::Acquire));
         // Nothing left: cleared.
         sp.resync(|| false);
-        assert!(!sp.is_due());
+        assert!(!sp.due.load(Ordering::Acquire));
         // A stale resync never sets it without a source.
         sp.resync(|| false);
-        assert!(!sp.is_due());
+        assert!(!sp.due.load(Ordering::Acquire));
     }
 
     #[test]
     fn safe_point_sources_are_read_after_the_clear() {
-        let sp = SafePoint::new();
+        let sp = Signals::new();
         sp.raise();
         // A source raised while the check runs (here: inside the closure,
         // i.e. after the swap) leaves the flag set.
         sp.resync(|| {
-            assert!(!sp.is_due());
+            assert!(!sp.due.load(Ordering::Acquire));
             sp.raise();
             false
         });
-        assert!(sp.is_due());
+        assert!(sp.due.load(Ordering::Acquire));
     }
 
     #[test]
-    fn safe_point_flag_stays_while_another_thread_executes() {
-        let sp = SafePoint::new();
-        sp.thread_entered();
-        sp.thread_entered();
-        sp.raise();
-        sp.resync(|| false);
-        assert!(sp.is_due(), "the other thread may still need it");
-        sp.thread_left();
-        sp.resync(|| false);
-        assert!(!sp.is_due());
-        sp.thread_left();
+    fn each_thread_has_its_own_flags() {
+        let _serial = FLAGS.lock().unwrap_or_else(PoisonError::into_inner);
+        std::thread::spawn(|| {
+            // No VM yet: nothing to interrupt.
+            request_interrupt();
+            assert!(is_idle(current()));
+            assert!(!IDLE.interrupt.load(Ordering::Acquire));
+            let mine = this_thread();
+            let other = std::thread::spawn(|| {
+                let theirs = this_thread();
+                request_interrupt();
+                assert!(current().interrupt.load(Ordering::Acquire));
+                theirs
+            })
+            .join()
+            .expect("other thread");
+            assert!(other.0.interrupt.load(Ordering::Acquire));
+            assert!(
+                !current().interrupt.load(Ordering::Acquire),
+                "not this thread's"
+            );
+            assert!(std::ptr::eq(current(), std::sync::Arc::as_ptr(&mine.0)));
+            // A handle from another thread reaches this one.
+            let handle = mine.clone();
+            std::thread::spawn(move || handle.request_interrupt())
+                .join()
+                .expect("raiser");
+            assert!(current().interrupt.load(Ordering::Acquire));
+            assert!(current().due.load(Ordering::Acquire));
+        })
+        .join()
+        .expect("thread");
+    }
+
+    #[test]
+    fn timeouts_flag_once_until_handled() {
+        let s = Signals::new();
+        assert!(s.time_out(), "first expiry");
+        assert!(s.interrupt.load(Ordering::Acquire));
+        assert!(
+            !s.time_out(),
+            "still unhandled: php-src's hard-timeout case"
+        );
+        s.timed_out.store(false, Ordering::Release);
+        assert!(s.time_out(), "handled, flags again");
+    }
+
+    #[test]
+    fn signal_handlers_reach_the_first_vm_thread() {
+        let _serial = FLAGS.lock().unwrap_or_else(PoisonError::into_inner);
+        // Some thread of the test binary registered first; whichever it is,
+        // its flags get the request.
+        let _ = this_thread();
+        request_interrupt_primary();
+        let p = super::PRIMARY.load(Ordering::Acquire);
+        // SAFETY: set from a leaked `Arc` by `this_thread`.
+        let s = unsafe { p.as_ref() }.expect("a primary thread");
+        assert!(s.interrupt.load(Ordering::Acquire));
     }
 
     #[test]
@@ -643,33 +739,5 @@ mod tests {
         })
         .join()
         .expect("guard thread");
-    }
-
-    #[test]
-    fn flag_round_trip() {
-        request_interrupt();
-        assert!(INTERRUPT.swap(false, Ordering::AcqRel));
-    }
-
-    #[test]
-    fn timer_rearms_for_hard_timeout_after_a_handled_timeout() {
-        let gen = AtomicU64::new(7);
-        let timed_out = AtomicBool::new(false);
-        // First expiry: flagged, re-armed for hard_timeout.
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), Some(2));
-        assert!(timed_out.load(Ordering::Acquire));
-        // Not handled yet: the timer stops (php-src would hard-kill).
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), None);
-        // Handled (zend_timeout clears the flag): it fires again.
-        timed_out.store(false, Ordering::Release);
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 2), Some(2));
-        // hard_timeout=0: one expiry only.
-        timed_out.store(false, Ordering::Release);
-        assert_eq!(timer_expired(&gen, &timed_out, 7, 0), None);
-        assert!(timed_out.load(Ordering::Acquire));
-        // Re-armed since (set_time_limit): the old timer does nothing.
-        timed_out.store(false, Ordering::Release);
-        assert_eq!(timer_expired(&gen, &timed_out, 6, 2), None);
-        assert!(!timed_out.load(Ordering::Acquire));
     }
 }

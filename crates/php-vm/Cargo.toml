@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 rustc-hash = "2"
+php-timer = { path = "../php-timer" }
 php-lexer = { path = "../php-lexer" }
 php-parser = { path = "../php-parser" }
 php-mbstring = { path = "../php-mbstring" }

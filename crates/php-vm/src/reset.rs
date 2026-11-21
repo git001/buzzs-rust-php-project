@@ -137,7 +137,7 @@ impl Vm {
         crate::lazy::reset();
         crate::typed_refs::reset();
         crate::builtins::dump::reset();
-        crate::interrupt::clear_interrupt();
+        self.clear_interrupt();
         crate::gc::request_startup(self.ini.get_bool("zend.enable_gc"));
         crate::object::set_destructors_enabled(true);
 

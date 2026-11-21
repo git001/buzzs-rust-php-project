@@ -265,6 +265,8 @@ impl Vm {
             ticks_count: 0,
             fiber_switch_block: 0,
             timeout_seconds: 0,
+            signals: crate::interrupt::this_thread(),
+            execution_timer: None,
             headers_sent: false,
             response_mimetype: None,
             send_default_content_type: true,

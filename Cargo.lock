@@ -1405,6 +1405,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "php-timer"
+version = "0.1.0"
+
+[[package]]
 name = "php-uri"
 version = "0.1.0"
 
@@ -1424,6 +1428,7 @@ dependencies = [
  "php-stdarr",
  "php-stdstr",
  "php-support",
+ "php-timer",
  "rustc-hash",
 ]
 

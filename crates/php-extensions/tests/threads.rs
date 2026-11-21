@@ -244,3 +244,46 @@ echo count($all), ' ', $all[0] === $f ? 'own' : 'stale', "\n";
         ]
     );
 }
+
+#[test]
+fn a_timeout_ends_only_its_own_request() {
+    // `max_execution_time` per thread (php-src ZTS: `EG(timed_out)` per
+    // thread): A spins past its limit while B works through it; the
+    // timeout reaches A alone.
+    const SPIN: &str = "<?php set_time_limit(1); echo \"A start\\n\"; while (true) {}";
+    const WORK: &str = r#"<?php
+set_time_limit(5);
+$t = microtime(true);
+while (microtime(true) - $t < 2.0) {}
+echo "B done\n";
+"#;
+    let start = Arc::new(Barrier::new(2));
+    let run = |src: &'static str, start: Arc<Barrier>| {
+        on_thread(move || {
+            let sink = Sink::default();
+            let mut vm = new_vm(&sink);
+            start.wait();
+            let began = std::time::Instant::now();
+            vm.run_script(src.as_bytes(), "/timeout.php");
+            (sink.take(), began.elapsed())
+        })
+    };
+    let a = run(SPIN, Arc::clone(&start));
+    let b = run(WORK, start);
+    let (a_out, a_took) = a.join().expect("thread A");
+    let (b_out, b_took) = b.join().expect("thread B");
+    assert!(
+        a_out.starts_with("A start\n")
+            && a_out.contains("Maximum execution time of 1 second exceeded"),
+        "{a_out}"
+    );
+    assert!(
+        a_took < std::time::Duration::from_secs(3),
+        "A took {a_took:?}"
+    );
+    assert_eq!(b_out, "B done\n");
+    assert!(
+        b_took >= std::time::Duration::from_secs(2),
+        "B took {b_took:?}"
+    );
+}

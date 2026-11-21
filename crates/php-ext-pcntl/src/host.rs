@@ -37,7 +37,7 @@ extern "C" fn notify_handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: 
         let f: SigInfoHandler = unsafe { std::mem::transmute::<usize, SigInfoHandler>(addr) };
         f(sig, info, ctx);
     }
-    php_vm::interrupt::request_interrupt();
+    php_vm::interrupt::request_interrupt_primary();
 }
 
 /// Wraps the queueing handler php-pcntl just installed for `signo` so

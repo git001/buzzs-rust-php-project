@@ -10,7 +10,7 @@
 //! php-src arms `ITIMER_PROF` and its `SIGPROF` handler flags the timeout
 //! for the executor.  Here the httpd thread that waits for the request
 //! thread polls that thread's CPU clock instead ([`watchdog`]); on expiry
-//! it flags the timeout through [`php_vm::interrupt::sapi_timer_expired`]
+//! it flags the timeout through the request thread's [`php_vm::interrupt::SignalHandle`]
 //! and the executor raises the "Maximum execution time" fatal at its next
 //! safe point, exactly as the signal handler would.  Only `hard_timeout`
 //! (a second expiry finding the first unhandled: a native call that does
@@ -163,12 +163,13 @@ fn run_thread(make: BackendFactory, params: RunParams, watch: Option<&dyn Backen
     let watchdog_handle = if let Some(r) = watch {
         if let Some(clock) = current_cpu_clock() {
             let timer_clone = timer.clone();
+            let signals = php_vm::interrupt::this_thread();
             let raw_r: (usize, usize) = unsafe { std::mem::transmute(r as *const dyn Backend) };
             std::thread::Builder::new()
                 .name("php-watchdog".into())
                 .spawn(move || {
                     let r: &dyn Backend = unsafe { std::mem::transmute(raw_r) };
-                    let mut sink = EngineTimeout { r };
+                    let mut sink = EngineTimeout { r, signals };
                     watchdog(&timer_clone, &rx, &mut || clock_ns(clock), &mut sink);
                 })
                 .ok()
@@ -210,15 +211,17 @@ pub(crate) trait TimeoutSink {
 /// The production [`TimeoutSink`]: php-vm's interrupt module.
 struct EngineTimeout<'a> {
     r: &'a dyn Backend,
+    /// The request thread's interrupt state.
+    signals: php_vm::interrupt::SignalHandle,
 }
 
 impl TimeoutSink for EngineTimeout<'_> {
     fn expired(&mut self) {
-        php_vm::interrupt::sapi_timer_expired();
+        let _ = self.signals.timer_expired();
     }
 
     fn pending(&self) -> bool {
-        php_vm::interrupt::timeout_pending()
+        self.signals.timeout_pending()
     }
 
     fn kill(&mut self, secs: i64, hard: i64) {
@@ -230,7 +233,7 @@ impl TimeoutSink for EngineTimeout<'_> {
     }
 
     fn abort(&mut self) {
-        php_vm::interrupt::request_interrupt();
+        self.signals.request_interrupt();
     }
 }
 

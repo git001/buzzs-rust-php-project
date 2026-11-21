@@ -2234,6 +2234,11 @@ pub struct Vm {
     pub fiber_switch_block: u32,
     /// `EG(timeout_seconds)`.
     pub(crate) timeout_seconds: i64,
+    /// The interrupt state of the thread this VM runs on.
+    pub(crate) signals: crate::interrupt::SignalHandle,
+    /// The `max_execution_time` timer (`None`: no limit, or the SAPI's
+    /// [`Vm::timer_hook`] runs it).
+    pub(crate) execution_timer: Option<php_timer::Timer>,
     /// Whether output has been flushed to the SAPI at least once.
     pub headers_sent: bool,
     /// First accepted response MIME type (`SG(sapi_headers).mimetype`).
@@ -2255,8 +2260,8 @@ pub struct Vm {
     pub sapi_flush_hook: Option<crate::ext::SapiFlushFn>,
     /// A SAPI running the execution timer itself (`zend_set_timeout` on a
     /// CPU-time clock, as `ITIMER_PROF` does): [`Vm::set_time_limit`] tells
-    /// it the limit instead of arming the VM's wall-clock timer thread, and
-    /// it reports expiry with [`crate::interrupt::sapi_timer_expired`].
+    /// it the limit instead of arming the VM's wall-clock timer, and
+    /// it reports expiry through [`crate::interrupt::SignalHandle::timer_expired`].
     pub timer_hook: Option<crate::ext::TimerFn>,
     /// Observer of the SAPI's multipart parser (`php_rfc1867_callback`).
     pub rfc1867_callback: Option<crate::ext::Rfc1867Fn>,
