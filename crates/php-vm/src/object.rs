@@ -1097,7 +1097,12 @@ pub(crate) fn free_object_storage() {
     let mut trash = Vec::new();
     let mut states = Vec::new();
     for o in objects.iter().rev() {
-        crate::gc::clear_object(data(o), &mut trash, &mut states);
+        let d = data(o);
+        // `IS_OBJ_FREE_CALLED`: no destructor runs for it any more, not
+        // even when the collector meets it in a cycle afterwards (after a
+        // fatal error, shutdown called none).
+        d.flags.set(d.flags.get() | oflags::DESTRUCTED);
+        crate::gc::clear_object(d, &mut trash, &mut states);
     }
     // Released only now, with no object borrowed: freeing the contents
     // frees the objects that only they held.
