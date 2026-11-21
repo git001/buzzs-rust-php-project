@@ -10,3 +10,12 @@ pub fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
+
+/// `gettimeofday()` as seconds with a fraction (0.0 before the epoch), as
+/// `sapi_get_request_time()` and the upload progress record it.
+#[must_use]
+pub fn now_float() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}

@@ -43,12 +43,6 @@ pub struct UploadProgress {
     files: Vec<FileProgress>,
 }
 
-fn now_f64() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64())
-}
-
 impl UploadProgress {
     /// The progress array as stored in the session.
     #[must_use]
@@ -283,7 +277,7 @@ fn update(h: &mut dyn SessionHost, p: &mut UploadProgress, force: bool) {
         }
         let min_freq = h.session().config.rfc1867_min_freq;
         if min_freq > 0.0 {
-            let now = now_f64();
+            let now = php_support::time::now_float();
             if now < p.next_update_time {
                 return;
             }
