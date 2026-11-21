@@ -70,9 +70,6 @@ impl Extension for Opcache {
         check_jit_at_registration(module.vm());
         override_file_functions(module.vm());
 
-        // Includes of deleted files served from the cache (`validate_timestamps=0`).
-        Vm::set_cached_include_hook(opcache_cached_include);
-
         // Register functions
         module
             .function_static("opcache_reset(): bool", opcache_reset)
@@ -1004,17 +1001,31 @@ fn now_sec() -> i64 {
 /// and still valid, its timestamp checked as on an include. Off without
 /// the in-memory cache (`ZCG(accelerator_enabled)`: opcache off for this
 /// SAPI, or file-cache-only mode).
-fn filename_is_in_cache(vm: &Vm, filename: &ZStr) -> bool {
+fn filename_is_in_cache(vm: &mut Vm, filename: &ZStr) -> bool {
     if !vm.opcache_enabled() || vm.ini_bool("opcache.file_cache_only") {
         return false;
     }
-    let realpath = script_key_path(filename);
+    let Some(key) = persistent_key(vm, filename.as_bytes()) else {
+        return false;
+    };
+    let Some(script) = GLOBAL_CACHE.with(|c| c.borrow().resolve_key(&key).map(str::to_owned))
+    else {
+        return false;
+    };
     let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
     let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
+    // `do_validate_timestamps`: the name must still resolve to the script.
+    let vm: &Vm = vm;
+    let current_mtime = || {
+        if vm.resolve_path(filename.as_bytes())?.as_bytes() != script.as_bytes() {
+            return None;
+        }
+        script_stat(std::path::Path::new(&script)).map(|st| st.mtime)
+    };
     GLOBAL_CACHE.with(|c| {
         c.borrow_mut().is_valid(
-            &realpath.to_string_lossy(),
-            || script_stat(&realpath).map(|st| st.mtime),
+            &script,
+            current_mtime,
             validate_timestamps,
             revalidate_freq,
             now_sec(),
@@ -1092,6 +1103,11 @@ struct Probe {
     /// The script's key: its resolved path.
     realpath: std::path::PathBuf,
     real_str: String,
+    /// The name the script was found under by its key, before the file
+    /// was opened (`None` once it was): only the in-memory cache knows
+    /// keys, and a revalidation checks that the name still resolves to
+    /// this script.
+    requested: Option<ZStr>,
     /// Modification time and size (`zend_get_file_handle_timestamp`),
     /// determined on first use (see [`Probe::mtime`]).
     stat: std::cell::OnceCell<Option<ScriptStat>>,
@@ -1111,6 +1127,19 @@ impl Probe {
     /// costs no `stat`, as in `validate_timestamp_and_record`.
     fn mtime(&self) -> Option<i64> {
         self.stat().map(|st| st.mtime)
+    }
+
+    /// The modification time a revalidation compares, `None` (the script
+    /// is stale) when it cannot be determined or, for a script found by
+    /// its key, when the requested name resolves to another file now (a
+    /// symlink on the path changed, `do_validate_timestamps`).
+    fn revalidated_mtime(&self, vm: &Vm) -> Option<i64> {
+        if let Some(requested) = &self.requested {
+            if vm.resolve_path(requested.as_bytes())?.as_bytes() != self.real_str.as_bytes() {
+                return None;
+            }
+        }
+        self.mtime()
     }
 
     fn stat(&self) -> Option<ScriptStat> {
@@ -1144,6 +1173,12 @@ thread_local! {
     /// the VM then reads and compiles it, and the compile hook need not
     /// look it up again.
     static LOOKUP_MISSED: std::cell::RefCell<Option<ZStr>> = const { std::cell::RefCell::new(None) };
+    /// Set when [`keyed_lookup`] found a script by its key but it was
+    /// stale: the include compiles without looking up its opened path.
+    static KEYED_STALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The key the script that just missed is cached under too, with the
+    /// script's path ([`cache_key`]).
+    static PENDING_KEY: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The key path of `filename`. The VM passes the opened path of a plain
@@ -1186,6 +1221,7 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probed> {
     Some(Probed::Cacheable(Probe {
         real_str: realpath.to_string_lossy().into_owned(),
         realpath,
+        requested: None,
         stat: std::cell::OnceCell::new(),
         now_sec,
         file_cache_dir: get_ini_string(vm, "opcache.file_cache"),
@@ -1208,6 +1244,61 @@ fn count_blacklist_miss(looked_up: bool) {
     });
 }
 
+/// What the in-memory cache has for a probed script.
+enum MemoryLookup {
+    Hit(Rc<php_vm::compiler::CompiledUnit>),
+    /// Cached but out of date: evicted, and counted as a miss.
+    Stale,
+    /// Not cached; counted as a miss only when asked to.
+    Absent,
+}
+
+/// The in-memory part of [`lookup`]: a hit is made current and replays
+/// the recorded warnings under `opcache.record_warnings`.
+fn memory_lookup(
+    vm: &mut Vm,
+    p: &Probe,
+    filename: &ZStr,
+    count_absent: bool,
+) -> VmResult<MemoryLookup> {
+    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
+    let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
+    let vm_ref: &Vm = vm;
+    let found = GLOBAL_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        let current_mtime = || p.revalidated_mtime(vm_ref);
+        let found = if count_absent {
+            cache.get(
+                &p.real_str,
+                current_mtime,
+                validate_timestamps,
+                revalidate_freq,
+                p.now_sec,
+            )
+        } else {
+            cache.get_known(
+                &p.real_str,
+                current_mtime,
+                validate_timestamps,
+                revalidate_freq,
+                p.now_sec,
+            )
+        };
+        match found {
+            CacheLookup::Hit(unit) => MemoryLookup::Hit(unit.clone()),
+            CacheLookup::Stale => MemoryLookup::Stale,
+            CacheLookup::Miss => MemoryLookup::Absent,
+        }
+    });
+    if let MemoryLookup::Hit(unit) = &found {
+        unit.clear_runtime_caches();
+        if vm.ini_bool("opcache.record_warnings") {
+            vm.emit_compile_warnings(unit, filename)?;
+        }
+    }
+    Ok(found)
+}
+
 /// The cached unit of a probed script: from the in-memory cache, else
 /// from the file cache (`zend_file_cache_script_load`). Replays the
 /// recorded warnings under `opcache.record_warnings`.
@@ -1216,41 +1307,26 @@ fn lookup(
     p: &Probe,
     filename: &ZStr,
 ) -> VmResult<Option<Rc<php_vm::compiler::CompiledUnit>>> {
-    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
-    let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
-
     // 1. In-memory cache check (unless file_cache_only)
     if !p.file_cache_only {
-        let hit = GLOBAL_CACHE.with(|c| {
-            let mut cache = c.borrow_mut();
-            match cache.get(
-                &p.real_str,
-                || p.mtime(),
-                validate_timestamps,
-                revalidate_freq,
-                p.now_sec,
-            ) {
-                CacheLookup::Hit(unit) => Some(unit.clone()),
-                _ => None,
-            }
-        });
-        if let Some(unit) = hit {
-            unit.clear_runtime_caches();
-            if vm.ini_bool("opcache.record_warnings") {
-                vm.emit_compile_warnings(&unit, filename)?;
-            }
+        if let MemoryLookup::Hit(unit) = memory_lookup(vm, p, filename, true)? {
             return Ok(Some(unit));
         }
     }
 
     // 2. File cache check: the entry holds compiled bytecode, valid only
-    // for the compiler inputs it was compiled under (`fingerprint`).
+    // for the compiler inputs it was compiled under (`fingerprint`). It is
+    // found by the opened path only (`zend_file_cache_script_load`).
+    if p.requested.is_some() {
+        return Ok(None);
+    }
     let Some(fingerprint) = vm.compile_fingerprint() else {
         return Ok(None);
     };
     if p.file_cache_dir.is_empty() {
         return Ok(None);
     }
+    let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
     // An entry is validated by the script's modification time, so with
     // `validate_timestamps` a script whose time cannot be determined is
     // not loaded (`zend_file_cache_script_load_ex`).
@@ -1305,20 +1381,184 @@ fn lookup(
 /// `zend_stream_fixup` would read it.
 fn opcache_precompiled_hook(
     vm: &mut Vm,
-    filename: &ZStr,
+    requested: &ZStr,
+    opened: Option<&ZStr>,
 ) -> VmResult<CacheAnswer<Rc<php_vm::compiler::CompiledUnit>>> {
     sync_preload_stats();
+    let Some(filename) = opened else {
+        return keyed_lookup(vm, requested);
+    };
     let Some(Probed::Cacheable(p)) = probe(vm, filename) else {
         return Ok(CacheAnswer::Miss);
     };
     if !p.file_cache_only && access_refused(vm, &p.real_str) {
         return Ok(CacheAnswer::Refused);
     }
-    if let Some(unit) = lookup(vm, &p, filename)? {
-        return Ok(CacheAnswer::Hit(unit));
+    let key = cache_key(vm, requested, &p);
+    // A script found by its key but stale is compiled again without a
+    // second lookup, as one miss (`persistent_compile_file`); a path
+    // already looked up by its name is not looked up again.
+    let missed = LOOKUP_MISSED.with(|m| m.borrow_mut().take());
+    let looked_up = KEYED_STALE.with(std::cell::Cell::take)
+        || missed.is_some_and(|m| m.as_bytes() == filename.as_bytes());
+    if !looked_up {
+        if let Some(unit) = lookup(vm, &p, filename)? {
+            if let Some(key) = key {
+                GLOBAL_CACHE.with(|c| c.borrow_mut().add_key(&key, &p.real_str));
+            }
+            return Ok(CacheAnswer::Hit(unit));
+        }
     }
     LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some(filename.clone()));
+    PENDING_KEY.with(|k| *k.borrow_mut() = key.map(|key| (key, p.real_str.clone())));
     Ok(CacheAnswer::Miss)
+}
+
+/// `persistent_compile_file` before the file is opened: unless
+/// `opcache.revalidate_path` is set, a script is found by its key
+/// (`accel_make_persistent_key`) in the in-memory cache, without resolving
+/// the path. A key that is not found is no miss yet.
+fn keyed_lookup(
+    vm: &mut Vm,
+    requested: &ZStr,
+) -> VmResult<CacheAnswer<Rc<php_vm::compiler::CompiledUnit>>> {
+    LOOKUP_MISSED.with(|m| m.borrow_mut().take());
+    KEYED_STALE.with(|k| k.set(false));
+    if GLOBAL_CACHE.with(|c| c.borrow().is_empty()) {
+        return file_cache_by_name(vm, requested);
+    }
+    if vm.ini_bool("opcache.revalidate_path") {
+        return Ok(CacheAnswer::Miss);
+    }
+    // An absolute name is its own key (`accel_make_persistent_key`); a
+    // normalized one is tried as a script's path first, so a hit takes one
+    // hash lookup. Any other key names its script.
+    if php_vm::include::is_normalized_absolute(requested.as_bytes()) {
+        if let Some(answer) = keyed_script(vm, requested, requested)? {
+            return Ok(answer);
+        }
+    }
+    let Some(key) = persistent_key(vm, requested.as_bytes()) else {
+        return Ok(CacheAnswer::Miss);
+    };
+    let script = GLOBAL_CACHE.with(|c| c.borrow().resolve_key(&key).map(ZStr::from));
+    let Some(script) = script.filter(|s| s.as_bytes() != requested.as_bytes()) else {
+        return Ok(CacheAnswer::Miss);
+    };
+    Ok(keyed_script(vm, requested, &script)?.unwrap_or(CacheAnswer::Miss))
+}
+
+/// [`keyed_lookup`] of the script cached as `script`: `None` when no
+/// script is cached under that path (nothing counted).
+fn keyed_script(
+    vm: &mut Vm,
+    requested: &ZStr,
+    script: &ZStr,
+) -> VmResult<Option<CacheAnswer<Rc<php_vm::compiler::CompiledUnit>>>> {
+    let Some(Probed::Cacheable(mut p)) = probe(vm, script) else {
+        return Ok(Some(CacheAnswer::Miss));
+    };
+    if p.file_cache_only {
+        return Ok(Some(CacheAnswer::Miss));
+    }
+    if access_refused(vm, &p.real_str) {
+        return Ok(Some(CacheAnswer::Refused));
+    }
+    p.requested = Some(requested.clone());
+    Ok(match memory_lookup(vm, &p, script, false)? {
+        MemoryLookup::Hit(unit) => Some(CacheAnswer::Hit(unit)),
+        MemoryLookup::Stale => {
+            KEYED_STALE.with(|k| k.set(true));
+            Some(CacheAnswer::Miss)
+        }
+        MemoryLookup::Absent => None,
+    })
+}
+
+/// Without in-memory scripts (`opcache.file_cache_only`, or none cached
+/// yet), a normalized absolute name is looked up in the file cache as the
+/// path it names, saving the path resolution when it is the opened path:
+/// the entry is validated by that file's timestamp. Any other name waits
+/// for the opened path.
+fn file_cache_by_name(
+    vm: &mut Vm,
+    requested: &ZStr,
+) -> VmResult<CacheAnswer<Rc<php_vm::compiler::CompiledUnit>>> {
+    if !php_vm::include::is_normalized_absolute(requested.as_bytes()) {
+        return Ok(CacheAnswer::Miss);
+    }
+    let Some(Probed::Cacheable(p)) = probe(vm, requested) else {
+        return Ok(CacheAnswer::Miss);
+    };
+    if !p.file_cache_only {
+        return Ok(CacheAnswer::Miss);
+    }
+    if let Some(unit) = lookup(vm, &p, requested)? {
+        return Ok(CacheAnswer::Hit(unit));
+    }
+    LOOKUP_MISSED.with(|m| *m.borrow_mut() = Some(requested.clone()));
+    Ok(CacheAnswer::Miss)
+}
+
+/// The key `requested` adds to the script opened as `p` once it is cached
+/// (`zend_accel_add_key`, `cache_script_in_shared_memory`): none under
+/// `opcache.revalidate_path`, without the in-memory cache, or when the
+/// key is the script's own path.
+fn cache_key(vm: &mut Vm, requested: &ZStr, p: &Probe) -> Option<String> {
+    if p.file_cache_only || vm.ini_bool("opcache.revalidate_path") {
+        return None;
+    }
+    persistent_key(vm, requested.as_bytes())
+        .filter(|key| *key != p.real_str)
+        .map(std::borrow::Cow::into_owned)
+}
+
+/// `accel_make_persistent_key`: the key a script is found under by the
+/// name it is included by. An absolute name and a cacheable stream path
+/// (`file://`, `phar://`) are their own key, as is any name under
+/// `opcache.use_cwd=0`; a relative one is qualified by the working
+/// directory, `include_path` and the directory of the including script,
+/// which all take part in resolving it. `None` for a stream that is not
+/// cached, or when the working directory cannot be determined.
+fn persistent_key<'a>(vm: &mut Vm, name: &'a [u8]) -> Option<std::borrow::Cow<'a, str>> {
+    let scheme = php_streams::wrapper::scheme_len(name);
+    let is_stream = scheme > 0 && name[scheme..].starts_with(b"://");
+    if php_vm::include::is_uncacheable_stream_path(name) {
+        return None;
+    }
+    if php_streams::paths::is_absolute(name) || is_stream || !vm.ini_bool("opcache.use_cwd") {
+        return Some(String::from_utf8_lossy(name));
+    }
+    let Some(cwd) = php_streams::sys::getcwd() else {
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        vm_accel_log(
+            vm,
+            AccelLog::Info,
+            &format!(
+                "getcwd() failed for '{}' ({errno}), please try to set opcache.use_cwd to 0 in ini file",
+                String::from_utf8_lossy(name)
+            ),
+        );
+        return None;
+    };
+    let mut key = Vec::with_capacity(name.len() + cwd.len() + 64);
+    key.extend_from_slice(name);
+    key.push(b':');
+    key.extend_from_slice(&cwd);
+    let include_path = vm.ini_string("include_path").unwrap_or_default();
+    if !include_path.is_empty() {
+        key.push(b':');
+        key.extend_from_slice(&include_path);
+    }
+    // `zend_get_executed_filename_ex()`: the including script's directory.
+    if vm.is_executing() {
+        let (parent, _) = vm.current_location();
+        let parent = parent.as_bytes();
+        let dir = parent.iter().rposition(|&c| c == b'/').unwrap_or(0);
+        key.push(b':');
+        key.extend_from_slice(&parent[..dir]);
+    }
+    Some(String::from_utf8_lossy(&key).into_owned().into())
 }
 
 /// `opcache.validate_permission`: whether the include of a script in the
@@ -1399,6 +1639,11 @@ fn opcache_compile_hook(
         vm.call_registered_optimizer_passes();
         if !p.file_cache_only {
             cache_in_memory(vm, &p.real_str, mtime, src.len() + 1024, p.now_sec, unit);
+            if let Some((key, path)) = PENDING_KEY.with(|k| k.borrow_mut().take()) {
+                if path == p.real_str {
+                    GLOBAL_CACHE.with(|c| c.borrow_mut().add_key(&key, &path));
+                }
+            }
         }
         let writable = !p.file_cache_dir.is_empty() && !p.file_cache_read_only;
         if let (true, Some(fingerprint)) = (writable, vm.compile_fingerprint()) {
@@ -1492,63 +1737,6 @@ fn load_cached_unit(
     }
     let unit = Rc::new(php_vm::bytecode_cache::decode(image).ok()?);
     vm.install_cached_unit(&unit, filename).then_some(unit)
-}
-
-/// An include of a file that cannot be opened: `persistent_compile_file`
-/// looks the script up by its key before opening the file, so with
-/// `opcache.validate_timestamps=0` a cached script runs even after its file
-/// was deleted (until `opcache_invalidate()`).
-fn opcache_cached_include(
-    vm: &mut Vm,
-    name: &[u8],
-) -> VmResult<CacheAnswer<(ZStr, Rc<CompiledUnit>)>> {
-    use std::os::unix::ffi::OsStrExt;
-    if !vm.opcache_enabled()
-        || vm.ini_bool("opcache.file_cache_only")
-        || vm.ini_bool("opcache.validate_timestamps")
-    {
-        return Ok(CacheAnswer::Miss);
-    }
-    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
-    let full = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        match std::env::current_dir() {
-            Ok(cwd) => cwd.join(path),
-            Err(_) => return Ok(CacheAnswer::Miss),
-        }
-    };
-    // The file is gone: resolve its directory.
-    let key = match (full.parent(), full.file_name()) {
-        (Some(dir), Some(base)) => {
-            std::fs::canonicalize(dir).map_or(full.clone(), |d| d.join(base))
-        }
-        _ => full,
-    };
-    let key = key.to_string_lossy().into_owned();
-    if access_refused(vm, &key) {
-        return Ok(CacheAnswer::Refused);
-    }
-    let now_sec = now_sec();
-    let hit = GLOBAL_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if !cache.is_cached(&key) {
-            return None;
-        }
-        match cache.get(&key, || None, false, 0, now_sec) {
-            CacheLookup::Hit(unit) => Some(unit.clone()),
-            _ => None,
-        }
-    });
-    let Some(unit) = hit else {
-        return Ok(CacheAnswer::Miss);
-    };
-    unit.clear_runtime_caches();
-    let filename = ZStr::from(key.as_bytes());
-    if vm.ini_bool("opcache.record_warnings") {
-        vm.emit_compile_warnings(&unit, &filename)?;
-    }
-    Ok(CacheAnswer::Hit((filename, unit)))
 }
 
 /// `validate_api_restriction`: with `opcache.restrict_api` set, only a
@@ -1673,18 +1861,16 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             .insert(ZStr::from("interned_strings_usage"), Value::Array(interned));
 
         let mut stats = ZArray::new();
-        let num_scripts = if cache.preload_stats.is_some() {
-            cache.len() + 1
-        } else {
-            cache.len()
-        };
+        // The preloaded scripts count as one more script (`$PRELOAD$`).
+        let preload_entry = usize::from(cache.preload_stats.is_some());
+        let num_scripts = cache.len() + preload_entry;
         stats.make_mut().insert(
             ZStr::from("num_cached_scripts"),
             Value::Int(num_scripts as i64),
         );
         stats.make_mut().insert(
             ZStr::from("num_cached_keys"),
-            Value::Int(num_scripts as i64),
+            Value::Int(i64::try_from(cache.num_entries() + preload_entry).unwrap_or(i64::MAX)),
         );
         stats.make_mut().insert(
             ZStr::from("max_cached_keys"),

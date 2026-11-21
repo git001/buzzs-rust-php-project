@@ -35,18 +35,14 @@ pub enum CacheAnswer<T> {
     Refused,
 }
 
-/// A hook that serves an `include` whose file cannot be opened from a
-/// script cache (opcache finds a script by its key before opening the
-/// file, so with `opcache.validate_timestamps=0` a deleted file still
-/// runs). A hit is the cached unit and its path.
-pub type CachedIncludeHookFn =
-    fn(&mut Vm, &[u8]) -> VmResult<CacheAnswer<(ZStr, Rc<CompiledUnit>)>>;
-
-/// A hook asked for a cached unit of an included file before the file is
-/// read (by its opened path): a script cache serves the include without
-/// reading the source, as opcache loads a script before
-/// `zend_stream_fixup` reads it.
-pub type PrecompiledHookFn = fn(&mut Vm, &ZStr) -> VmResult<CacheAnswer<Rc<CompiledUnit>>>;
+/// A hook asked for a cached unit of an included file before its source
+/// is read, as `persistent_compile_file` serves a script before
+/// `zend_stream_fixup` reads it. It is asked twice: with the name as
+/// requested and no opened path before the file is looked up (opcache
+/// finds a script by its key, `accel_make_persistent_key`, without
+/// resolving the path), then, if that missed, with the opened path.
+pub type PrecompiledHookFn =
+    fn(&mut Vm, &ZStr, Option<&ZStr>) -> VmResult<CacheAnswer<Rc<CompiledUnit>>>;
 
 /// `tsrm_realpath()` as the stream layer implements it, with
 /// `CWDG(realpath_cache)`: the real path of an existing file, `None` when
@@ -59,7 +55,6 @@ pub type OptimizerPassFn = fn(&mut Vm);
 
 thread_local! {
     static OPTIMIZER_PASSES: std::cell::RefCell<Vec<OptimizerPassFn>> = const { std::cell::RefCell::new(Vec::new()) };
-    static CACHED_INCLUDE_HOOK: std::cell::Cell<Option<CachedIncludeHookFn>> = const { std::cell::Cell::new(None) };
     static COMPILE_HOOK: std::cell::Cell<Option<CompileHookFn>> = const { std::cell::Cell::new(None) };
     static PRECOMPILED_HOOK: std::cell::Cell<Option<PrecompiledHookFn>> = const { std::cell::Cell::new(None) };
     static REALPATH_HOOK: std::cell::Cell<Option<IncludeRealpathFn>> = const { std::cell::Cell::new(None) };
@@ -80,7 +75,7 @@ thread_local! {
 
 /// `is_stream_path() && !is_cacheable_stream_path()` (ZendAccelerator.c):
 /// a `scheme://` name whose wrapper is neither `file` nor `phar`.
-fn is_uncacheable_stream_path(name: &[u8]) -> bool {
+pub fn is_uncacheable_stream_path(name: &[u8]) -> bool {
     let scheme = name
         .iter()
         .take_while(|&&c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
@@ -133,12 +128,6 @@ impl Vm {
     /// path component.
     pub fn set_include_realpath_hook(f: IncludeRealpathFn) {
         REALPATH_HOOK.with(|h| h.set(Some(f)));
-    }
-
-    /// Installs the hook serving includes of unopenable files from a
-    /// script cache.
-    pub fn set_cached_include_hook(f: CachedIncludeHookFn) {
-        CACHED_INCLUDE_HOOK.with(|h| h.set(Some(f)));
     }
 
     /// Runs `f` with `ZEND_COMPILE_IGNORE_OTHER_FILES` set: compiling then
@@ -868,6 +857,15 @@ impl Vm {
         self.source_filter.is_some() && self.source_filter_probe.is_none_or(|probe| probe(path))
     }
 
+    /// `zend_resolve_path`: the opened path `name` would be included
+    /// from (through `include_path` and the realpath cache), `None` when
+    /// no file is found.
+    pub fn resolve_path(&self, name: &[u8]) -> Option<ZStr> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = self.resolve_include_path(name)?;
+        Some(ZStr::from(opened_path(&path).as_os_str().as_bytes()))
+    }
+
     fn resolve_include_path(&self, name: &[u8]) -> Option<std::path::PathBuf> {
         use std::os::unix::ffi::OsStrExt;
         let p = std::path::Path::new(std::ffi::OsStr::from_bytes(name));
@@ -964,53 +962,35 @@ impl Vm {
                 crate::ext::IncludeOpen::NotHandled => {}
             }
         }
-        // A script cache is asked for an absolute name before the file is
-        // looked up, as `persistent_compile_file` finds a script by
-        // `accel_make_persistent_key` (the name itself) before opening it:
-        // a hit costs no `stat`. The script counts as included under the
-        // path it was compiled under. A name already included once is
-        // answered first, so `include_once` does not load it again.
-        // Only a normalized name is its own key; one with `.`/`..`
-        // segments is resolved below through the realpath cache.
-        let mut asked: Option<&[u8]> = None;
-        if is_normalized_absolute(name) {
-            if matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
-                && self.included_set.contains(&s)
-            {
-                self.set_tmp(dst, Value::Bool(true));
-                return Ok(false);
-            }
-            if !self.source_filter_may_rewrite(&s) {
-                if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
-                    match hook(self, &s)? {
-                        CacheAnswer::Hit(unit) => {
-                            let path = unit.main.code.filename.clone();
-                            return self.include_cached(kind, kind_name, &unit, path, dst);
-                        }
-                        CacheAnswer::Refused => {
-                            return self.include_failed(kind, kind_name, &s, dst)
-                        }
-                        CacheAnswer::Miss => {}
+        // A name already included once is answered first, so
+        // `include_once` does not load it again; a normalized absolute
+        // name is its own opened path.
+        if is_normalized_absolute(name)
+            && matches!(kind, IncludeKind::IncludeOnce | IncludeKind::RequireOnce)
+            && self.included_set.contains(&s)
+        {
+            self.set_tmp(dst, Value::Bool(true));
+            return Ok(false);
+        }
+        // A script cache is asked for the name before the file is looked
+        // up, as `persistent_compile_file` finds a script by its key
+        // before opening it: a hit costs no `stat`, and serves a file that
+        // is gone. The script counts as included under the path it was
+        // compiled under.
+        if !name.is_empty() && !self.source_filter_may_rewrite(&s) {
+            if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
+                match hook(self, &s, None)? {
+                    CacheAnswer::Hit(unit) => {
+                        let path = unit.main.code.filename.clone();
+                        return self.include_cached(kind, kind_name, &unit, path, dst);
                     }
-                    asked = Some(name);
+                    CacheAnswer::Refused => return self.include_failed(kind, kind_name, &s, dst),
+                    CacheAnswer::Miss => {}
                 }
             }
         }
         let resolved = self.resolve_include_path(name);
         let Some(path) = resolved else {
-            if !name.is_empty() {
-                if let Some(hook) = CACHED_INCLUDE_HOOK.with(std::cell::Cell::get) {
-                    match hook(self, name)? {
-                        CacheAnswer::Hit((path, unit)) => {
-                            return self.include_cached(kind, kind_name, &unit, path, dst);
-                        }
-                        CacheAnswer::Refused => {
-                            return self.include_failed(kind, kind_name, &s, dst)
-                        }
-                        CacheAnswer::Miss => {}
-                    }
-                }
-            }
             if name.is_empty() {
                 self.warning(&format!("{kind_name}(): Filename cannot be empty"))?;
             } else {
@@ -1031,11 +1011,10 @@ impl Vm {
             return Ok(false);
         }
         // A script cache serves the include without the file being read,
-        // unless the source filter may rewrite what would be read. It is
-        // not asked twice for the same path.
-        if asked != Some(real_z.as_bytes()) && !self.source_filter_may_rewrite(&real_z) {
+        // unless the source filter may rewrite what would be read.
+        if !self.source_filter_may_rewrite(&real_z) {
             if let Some(hook) = PRECOMPILED_HOOK.with(std::cell::Cell::get) {
-                match hook(self, &real_z)? {
+                match hook(self, &s, Some(&real_z))? {
                     CacheAnswer::Hit(unit) => {
                         if self.included_set.insert(real_z.clone()) {
                             self.included.push(real_z);
@@ -1237,7 +1216,7 @@ impl Vm {
 /// segments and without a trailing slash: such a name needs no resolving
 /// to serve as a script cache key (symbolic links aside, which a key may
 /// keep, as `accel_make_persistent_key` does).
-fn is_normalized_absolute(name: &[u8]) -> bool {
+pub fn is_normalized_absolute(name: &[u8]) -> bool {
     name.len() > 1
         && name.first() == Some(&b'/')
         && name.last() != Some(&b'/')
