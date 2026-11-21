@@ -206,6 +206,46 @@ fn idle_connection_does_not_block_others() {
     assert_eq!(split(&r).1, "ok");
 }
 
+/// A client that hangs up in the middle of a response ends that script
+/// (`php_handle_aborted_connection`, without `ignore_user_abort`): its
+/// shutdown function sees `connection_status()` 1, the rest of its loop
+/// does not run, and the next request is served at once instead of after
+/// the script's three seconds.
+#[test]
+#[ignore = "needs target/debug/php"]
+fn a_client_that_hangs_up_frees_the_server() {
+    const LONG: &str = r#"<?php
+register_shutdown_function(function () {
+    file_put_contents(__DIR__ . '/status.txt', 'shutdown ' . connection_status() . "\n", FILE_APPEND);
+});
+$t = microtime(true);
+while (microtime(true) - $t < 3) { echo str_repeat('x', 8192), "\n"; flush(); usleep(1000); }
+file_put_contents(__DIR__ . '/status.txt', "loop finished\n", FILE_APPEND);
+"#;
+    let srv = start(
+        "hangup",
+        &[("long.php", LONG), ("quick.php", "<?php echo 'ok';")],
+        None,
+    );
+    let mut client = TcpStream::connect(("127.0.0.1", srv.port)).unwrap();
+    client
+        .write_all(b"GET /long.php HTTP/1.0\r\nHost: x\r\n\r\n")
+        .unwrap();
+    let mut some = [0u8; 2000];
+    client.read_exact(&mut some).unwrap();
+    drop(client);
+    let started = Instant::now();
+    let r = request(srv.port, "GET /quick.php HTTP/1.0\r\n\r\n");
+    let waited = started.elapsed();
+    assert_eq!(split(&r).1, "ok");
+    assert!(
+        waited < Duration::from_secs(2),
+        "next request waited {waited:?}"
+    );
+    let status = std::fs::read_to_string(srv.root.join("status.txt")).unwrap_or_default();
+    assert_eq!(status, "shutdown 1\n");
+}
+
 /// The start-up path of `ext/curl/tests/server.inc`: a relative router
 /// (`.inc`), stderr closed by the parent right after the banner, then an
 /// immediate connect probe and a request.

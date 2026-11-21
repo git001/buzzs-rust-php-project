@@ -412,7 +412,8 @@ impl Vm {
         let s = current();
         s.interrupt.store(false, Ordering::Release);
         if s.timed_out.swap(false, Ordering::AcqRel) {
-            // `zend_timeout`.
+            // `zend_timeout`, after `zend_on_timeout` (`php_on_timeout`).
+            self.note_timeout();
             let n = self.timeout_seconds;
             let msg = format!(
                 "Maximum execution time of {n} second{} exceeded",

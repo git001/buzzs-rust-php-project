@@ -285,9 +285,4 @@ fn ftok_and_connection() {
         ctx.messages(),
         ["Warning: ftok(): ftok() failed - No such file or directory"]
     );
-    let mut c = system::ConnectionState::default();
-    assert_eq!(c.connection_status(), 0);
-    assert_eq!(c.connection_aborted(), 0);
-    assert_eq!(c.ignore_user_abort(Some(true)), 0);
-    assert_eq!(c.ignore_user_abort(None), 1);
 }

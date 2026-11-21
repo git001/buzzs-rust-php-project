@@ -16,9 +16,10 @@ use std::os::unix::ffi::OsStrExt;
 ///
 /// `std::io::stdout()` adds a re-entrant lock and a line buffer
 /// (a `memrchr` per write) under the VM's own buffer; under the CLI's
-/// `implicit_flush=1` every `echo` paid for both layers. Writing to the
-/// descriptor itself (not a duplicate) keeps C's behaviour after
-/// `fclose(STDOUT)`: later output fails silently.
+/// `implicit_flush=1` every `echo` paid for both layers. Every failed
+/// write is an error, a closed descriptor (`fclose(STDOUT)`, `EBADF`)
+/// too: `sapi_cli_ub_write` then aborts the connection, and PHP 8.6
+/// stops the script with exit status 255.
 pub struct RawStdout;
 
 impl std::io::Write for RawStdout {
@@ -26,19 +27,7 @@ impl std::io::Write for RawStdout {
         // SAFETY: `buf` is a live slice of `buf.len()` initialised bytes;
         // write(2) only reads it.
         let n = unsafe { libc::write(libc::STDOUT_FILENO, buf.as_ptr().cast(), buf.len()) };
-        match usize::try_from(n) {
-            Ok(n) => Ok(n),
-            Err(_) => {
-                let e = std::io::Error::last_os_error();
-                // Like `std::io::stdout()`: a closed descriptor swallows
-                // the output.
-                if e.raw_os_error() == Some(libc::EBADF) {
-                    Ok(buf.len())
-                } else {
-                    Err(e)
-                }
-            }
-        }
+        usize::try_from(n).map_err(|_| std::io::Error::last_os_error())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -94,8 +83,34 @@ fn cli_get_process_title(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
+/// The CLI's `sapi_module`: its log on stderr (`sapi_cli_log_message`),
+/// its output on standard output, and exit status 255 when that fails
+/// (`sapi_cli_ub_write`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CliSapi;
+
+impl php_sapi::SapiModule for CliSapi {
+    fn log_message(&self, message: &[u8], severity: i32) {
+        php_sapi::StderrLog.log_message(message, severity);
+    }
+
+    /// `sapi_cli_ub_write()` writes to file descriptor 1 at once, so a
+    /// lost reader (`EPIPE`) or a closed descriptor (`EBADF`) shows in
+    /// this write: the buffer in front of [`RawStdout`] is emptied here.
+    fn ub_write(&self, out: &mut dyn std::io::Write, data: &[u8]) -> Result<(), php_sapi::Aborted> {
+        out.write_all(data)
+            .and_then(|()| out.flush())
+            .map_err(|_| php_sapi::Aborted)
+    }
+
+    fn exit_status_on_abort(&self) -> Option<i32> {
+        Some(255)
+    }
+}
+
 /// Registers the CLI functions and constants on a freshly created VM.
 pub fn register(vm: &mut Vm, cfg: &Config) {
+    vm.set_sapi_module(std::rc::Rc::new(CliSapi));
     INI_FILES.with(|f| *f.borrow_mut() = (cfg.opened_path.clone(), cfg.scanned_files.clone()));
     vm.register_function("php_ini_loaded_file(): string|false", php_ini_loaded_file);
     vm.register_function(

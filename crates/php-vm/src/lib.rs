@@ -26,6 +26,7 @@ mod classlink;
 mod closure;
 pub mod compiler;
 mod configuration;
+pub mod connection;
 mod context;
 mod discard;
 mod enums;
@@ -274,7 +275,6 @@ impl Vm {
             send_default_content_type: true,
             response_header_hook: None,
             send_headers_hook: None,
-            sapi_flush_hook: None,
             timer_hook: None,
             rfc1867_callback: None,
             rfc1867_uploaded_files: Vec::new(),
@@ -294,6 +294,7 @@ impl Vm {
             startup_diagnostics: Vec::new(),
             module_diagnostics: Vec::new(),
             sapi_module: std::rc::Rc::new(php_sapi::StderrLog),
+            connection_status: connection::NORMAL,
             main_return: Value::Null,
             native_stack_base: 0,
             native_stack_size: 8 << 20,
@@ -378,6 +379,8 @@ impl Vm {
     /// Request startup: initializes output buffering, runs extension RINIT
     /// startup hooks, and starts memory limit accounting.
     pub fn request_startup(&mut self) {
+        // `php_request_startup()`: `PG(connection_status) = PHP_CONNECTION_NORMAL`.
+        self.connection_status = connection::NORMAL;
         php_support::output::request_startup(
             self,
             None,

@@ -274,10 +274,16 @@ impl std::fmt::Debug for ServerOutput {
 }
 
 impl Write for ServerOutput {
+    /// `sapi_cli_server_ub_write()`: a failed `send()` to the client is an
+    /// error, which the VM's `ub_write` turns into
+    /// `php_handle_aborted_connection()`.
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let ctx = self.0.borrow().clone();
         if let Some(ctx) = ctx {
             ctx.write(buf);
+            if ctx.aborted.get() {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
         }
         Ok(buf.len())
     }
@@ -574,16 +580,6 @@ fn php_sapi_name_cgi(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(str_value(CGI_SAPI_NAME))
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(ctx_or(false, |c| c.aborted.get())))
-}
-
-#[allow(clippy::unnecessary_wraps)]
-fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(i64::from(ctx_or(false, |c| c.aborted.get()))))
-}
-
 /// `apache_request_headers()` / `getallheaders()`.
 #[allow(clippy::unnecessary_wraps)]
 fn apache_request_headers(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
@@ -734,8 +730,6 @@ impl Extension for CliServerModule {
             .function_static("flush(): void", flush)
             .function_static("php_sapi_name(): string|false", sapi_name)
             .function_static("getmypid(): int|false", getmypid)
-            .function_static("connection_aborted(): bool", connection_aborted)
-            .function_static("connection_status(): int", connection_status)
             .function_static("apache_request_headers(): array", apache_request_headers)
             .function_static("getallheaders(): array", apache_request_headers)
             .function_static("apache_response_headers(): array", apache_response_headers);

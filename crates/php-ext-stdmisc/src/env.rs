@@ -6,14 +6,13 @@
 
 use crate::ctx::{global, RtExt};
 use php_runtime::{Value, ZArray, ZStr};
-use php_stdmisc::system::{self, ConnectionState, EnvState, PageInfo};
+use php_stdmisc::system::{self, EnvState, PageInfo};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 use std::cell::RefCell;
 
 thread_local! {
     static ENV: RefCell<EnvState> = RefCell::new(EnvState::default());
-    static CONNECTION: RefCell<ConnectionState> = RefCell::new(ConnectionState::default());
 }
 
 fn getenv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -176,23 +175,23 @@ fn time_sleep_until(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .map(Value::Bool)
 }
 
+/// `connection_aborted()`: `PG(connection_status) & PHP_CONNECTION_ABORTED`.
 #[allow(clippy::unnecessary_wraps)] // native handler signature
-fn connection_aborted(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+fn connection_aborted(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(
-        CONNECTION.with(|c| c.borrow().connection_aborted()) != 0,
+        vm.connection_status() & php_vm::connection::ABORTED != 0,
     ))
 }
 
+/// `connection_status()`: `PG(connection_status)`.
 #[allow(clippy::unnecessary_wraps)] // native handler signature
-fn connection_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Int(
-        CONNECTION.with(|c| c.borrow().connection_status()),
-    ))
+fn connection_status(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
+    Ok(Value::Int(vm.connection_status()))
 }
 
 /// `ignore_user_abort($enable)`: returns the previous setting (`bool` in
-/// php-src master: `RETURN_BOOL(old_setting)`), updating
-/// the `ignore_user_abort` INI entry.
+/// php-src master: `RETURN_BOOL(old_setting)`), updating the
+/// `ignore_user_abort` INI entry, which is `PG(ignore_user_abort)`.
 #[allow(clippy::unnecessary_wraps)] // native handler signature
 fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let old = vm.ini_bool("ignore_user_abort");
@@ -204,7 +203,6 @@ fn ignore_user_abort(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             if enable { b"1" } else { b"0" },
             &mut sink,
         );
-        CONNECTION.with(|c| c.borrow_mut().ignore_user_abort(Some(enable)));
     }
     Ok(Value::Bool(old))
 }
@@ -235,8 +233,12 @@ fn get_cfg_var(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 /// Registers the functions and constants.
 pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
-    for (name, v) in system::CONNECTION_CONSTANTS {
-        m.constant(name, Value::Int(*v));
+    for (name, v) in [
+        ("CONNECTION_ABORTED", php_vm::connection::ABORTED),
+        ("CONNECTION_NORMAL", php_vm::connection::NORMAL),
+        ("CONNECTION_TIMEOUT", php_vm::connection::TIMEOUT),
+    ] {
+        m.constant(name, Value::Int(v));
     }
     m.function_static(
         "getenv(?string $name = null, bool $local_only = false): string|array|false",

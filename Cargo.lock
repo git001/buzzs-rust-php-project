@@ -1290,6 +1290,7 @@ dependencies = [
 name = "php-sapi"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "php-stdstr",
 ]
 

@@ -885,7 +885,12 @@ impl OutputHost for Vm {
 
     fn sapi_write(&mut self, data: &[u8]) {
         self.headers_sent = true;
-        let _ = self.stdout.write_all(data);
+        if self.sapi_module.ub_write(&mut *self.stdout, data).is_err() {
+            if let Some(status) = self.sapi_module.exit_status_on_abort() {
+                self.exit_status = status;
+            }
+            self.handle_aborted_connection();
+        }
     }
 
     #[inline]
@@ -935,11 +940,8 @@ impl OutputHost for Vm {
     }
 
     fn sapi_flush(&mut self) {
-        match self.sapi_flush_hook {
-            Some(hook) => hook(self),
-            None => {
-                let _ = self.stdout.flush();
-            }
+        if self.sapi_module.flush(&mut *self.stdout).is_err() {
+            self.handle_aborted_connection();
         }
     }
 

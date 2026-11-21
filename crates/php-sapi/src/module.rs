@@ -4,10 +4,18 @@
 //! the engine. Each SAPI implements [`SapiModule`] once and hands it to
 //! the VM; the engine calls it instead of asking which SAPI runs.
 //!
-//! It starts with the logger; further callbacks move here as the SAPIs
-//! need them (`FastCGI`, FPM).
+//! It holds the logger and the output (`ub_write`, `flush`); further
+//! callbacks move here as the SAPIs need them (`FastCGI`, FPM).
 
 use std::io::Write;
+
+/// The client is gone: [`SapiModule::ub_write`] or [`SapiModule::flush`]
+/// could not deliver output. The engine then runs
+/// `php_handle_aborted_connection()`: the connection counts as aborted,
+/// output is switched off and, without `ignore_user_abort`, the script
+/// stops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Aborted;
 
 /// The callbacks of `sapi_module_struct` the engine uses.
 pub trait SapiModule {
@@ -17,6 +25,38 @@ pub trait SapiModule {
     /// `severity` is a syslog priority (`LOG_ERR`, …), or -1 for
     /// `error_log($message, 4)`.
     fn log_message(&self, message: &[u8], severity: i32);
+
+    /// `ub_write(str, len)`: delivers script output to the client, here
+    /// through `out`, the output stream the VM was made with. `Err` when
+    /// the client is gone (`sapi_cli_ub_write` on a failed `write()`,
+    /// the built-in server on a failed `send()`, FPM on a failed
+    /// `fcgi_write()`).
+    ///
+    /// # Errors
+    /// [`Aborted`] when the output could not be delivered.
+    fn ub_write(&self, out: &mut dyn Write, data: &[u8]) -> Result<(), Aborted> {
+        out.write_all(data).map_err(|_| Aborted)
+    }
+
+    /// `flush()`: pushes delivered output on to the client
+    /// (`sapi_cli_flush`: `fflush(stdout)`, where `EBADF`, a closed
+    /// standard output, is no abort).
+    ///
+    /// # Errors
+    /// [`Aborted`] when the client is gone.
+    fn flush(&self, out: &mut dyn Write) -> Result<(), Aborted> {
+        match out.flush() {
+            Err(e) if e.raw_os_error() != Some(libc::EBADF) => Err(Aborted),
+            _ => Ok(()),
+        }
+    }
+
+    /// The exit status a failed [`SapiModule::ub_write`] gives the
+    /// process, if any: the CLI's 255 (`sapi_cli_ub_write`:
+    /// `EG(exit_status) = 255`); the other SAPIs leave it.
+    fn exit_status_on_abort(&self) -> Option<i32> {
+        None
+    }
 }
 
 /// `sapi_cli_log_message()` / `sapi_cgi_log_message()`: the message and a

@@ -196,10 +196,6 @@ pub type ResponseHeaderFn = fn(&mut Vm, &[u8], bool, i64) -> VmResult<bool>;
 /// returns whether output may follow (`false` for a HEAD request).
 pub type SendHeadersFn = fn(&mut Vm) -> bool;
 
-/// A SAPI's `sapi_flush()`, run by the output layer after each write
-/// under `implicit_flush`.
-pub type SapiFlushFn = fn(&mut Vm);
-
 /// A SAPI's execution timer: (re)armed with `max_execution_time` seconds
 /// (0 = none) in place of the VM's wall-clock timer (`zend_set_timeout`).
 pub type TimerFn = fn(&mut Vm, i64);

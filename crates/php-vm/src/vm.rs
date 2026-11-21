@@ -2272,10 +2272,6 @@ pub struct Vm {
     /// `header_register_callback()` callable and sends its header list.
     /// Returning `false` disables output (a HEAD request).
     pub send_headers_hook: Option<crate::ext::SendHeadersFn>,
-    /// Active non-CLI SAPI's `sapi_flush()`, run by the output layer after
-    /// every write under `implicit_flush` / `ob_implicit_flush()`; the CLI
-    /// flushes its stdout instead.
-    pub sapi_flush_hook: Option<crate::ext::SapiFlushFn>,
     /// A SAPI running the execution timer itself (`zend_set_timeout` on a
     /// CPU-time clock, as `ITIMER_PROF` does): [`Vm::set_time_limit`] tells
     /// it the limit instead of arming the VM's wall-clock timer, and
@@ -2336,6 +2332,8 @@ pub struct Vm {
     /// the error log goes while `error_log` is unset. Stderr by default,
     /// as in the CLI; a SAPI sets its own with [`Vm::set_sapi_module`].
     pub(crate) sapi_module: std::rc::Rc<dyn php_sapi::SapiModule>,
+    /// `PG(connection_status)` ([`crate::connection`]).
+    pub(crate) connection_status: i64,
     /// The value the main script `return`ed (a router's `false`).
     pub main_return: Value,
     /// Native stack address at the first execution (stack-limit checks).
