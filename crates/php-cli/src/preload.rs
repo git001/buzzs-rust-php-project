@@ -19,7 +19,12 @@ fn enabled(cfg: &Config) -> bool {
         cfg.get(name)
             .map_or(default, |v| php_support::ini::parse_bool(v.as_bytes()))
     };
-    boolean("opcache.enable", true) && boolean("opcache.enable_cli", false)
+    // Runs for the CLI SAPI only: the built-in server does not preload yet.
+    php_vm::include::opcache_enabled_for(
+        b"cli",
+        boolean("opcache.enable", true),
+        boolean("opcache.enable_cli", false),
+    )
 }
 
 /// Run exactly once during CLI module startup, before selecting a request mode.

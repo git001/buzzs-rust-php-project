@@ -336,7 +336,7 @@ fn cache_in_memory(
 /// buffer or in file-cache-only mode (when opcache starts at all).
 fn jit_enabled_at_startup(vm: &Vm) -> bool {
     let configured = JitConfig::parse(&get_ini_string(vm, "opcache.jit")).is_ok_and(|c| c.enabled);
-    if !configured || !is_opcache_enabled(vm) {
+    if !configured || !vm.opcache_enabled() {
         return configured;
     }
     let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
@@ -369,7 +369,7 @@ fn on_update_jit(vm: &mut Vm, value: &[u8]) -> VmResult<bool> {
 /// file-cache-only and read-only mode need `opcache.file_cache`, and that
 /// must be an accessible directory.
 fn check_startup_shm(vm: &Vm) {
-    if !is_opcache_enabled(vm) {
+    if !vm.opcache_enabled() {
         return;
     }
     let file_cache = get_ini_string(vm, "opcache.file_cache");
@@ -839,12 +839,6 @@ fn ensure_system_id(vm: &Vm) {
     file_cache::set_system_id(file_cache::compute_system_id(names));
 }
 
-fn is_opcache_enabled(vm: &Vm) -> bool {
-    let enable = vm.ini_bool("opcache.enable");
-    let enable_cli = vm.ini_bool("opcache.enable_cli");
-    enable && enable_cli
-}
-
 fn get_ini_string(vm: &Vm, name: &str) -> String {
     vm.ini_string(name)
         .map(|v| String::from_utf8_lossy(&v).into_owned())
@@ -882,7 +876,7 @@ fn format_ctime(ts: i64) -> String {
 
 fn module_info(vm: &mut Vm) -> Vec<InfoItem> {
     let row = |a: &str, b: &str| InfoItem::Row(vec![a.to_string(), b.to_string()]);
-    let enabled = is_opcache_enabled(vm);
+    let enabled = vm.opcache_enabled();
     let file_cache_set = !get_ini_string(vm, "opcache.file_cache").is_empty();
     let raw_buf = vm.ini_string("opcache.jit_buffer_size").unwrap_or_default();
     let (raw_size, _) = php_support::ini::parse_quantity(&raw_buf);
@@ -1083,12 +1077,10 @@ fn script_key_path(filename: &ZStr) -> std::path::PathBuf {
 /// not stat'ed here; see [`Probe::mtime`].
 fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probed> {
     use std::os::unix::ffi::OsStrExt;
-    let enable = vm.ini_bool("opcache.enable");
-    let enable_cli = vm.ini_bool("opcache.enable_cli");
-    let file_cache_only = vm.ini_bool("opcache.file_cache_only");
-    if !enable || (!enable_cli && !file_cache_only) {
+    if !vm.opcache_enabled() {
         return None;
     }
+    let file_cache_only = vm.ini_bool("opcache.file_cache_only");
     ensure_system_id(vm);
     let realpath = script_key_path(filename);
     // A blacklisted script is compiled, never cached (`persistent_compile_file`).
@@ -1390,7 +1382,7 @@ fn load_cached_unit(
 /// was deleted (until `opcache_invalidate()`).
 fn opcache_cached_include(vm: &mut Vm, name: &[u8]) -> VmResult<Option<(ZStr, Rc<CompiledUnit>)>> {
     use std::os::unix::ffi::OsStrExt;
-    if !is_opcache_enabled(vm)
+    if !vm.opcache_enabled()
         || vm.ini_bool("opcache.file_cache_only")
         || vm.ini_bool("opcache.validate_timestamps")
     {
@@ -1465,7 +1457,7 @@ fn opcache_reset(vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     if api_restricted(vm)? {
         return Ok(Value::Bool(false));
     }
-    let enabled = is_opcache_enabled(vm);
+    let enabled = vm.opcache_enabled();
     if !enabled || vm.ini_bool("opcache.file_cache_only") {
         return Ok(Value::Bool(false));
     }
@@ -1484,7 +1476,7 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     sync_preload_stats();
     let include_scripts = if a.has(0) { a.bool(0) } else { true };
-    let enabled = is_opcache_enabled(vm);
+    let enabled = vm.opcache_enabled();
     let file_cache_only = vm.ini_bool("opcache.file_cache_only");
 
     if !enabled {
@@ -1841,8 +1833,7 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     sync_preload_stats();
     let filename_z = a.str(0);
 
-    let enabled = vm.ini_bool("opcache.enable")
-        && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
+    let enabled = vm.opcache_enabled();
     if !enabled {
         let (file, line) = vm.current_location();
         let file_s = file.to_string_lossy();
@@ -1878,7 +1869,7 @@ fn opcache_invalidate(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let filename_z = a.str(0);
     let force = if a.has(1) { a.bool(1) } else { false };
-    let enabled = is_opcache_enabled(vm);
+    let enabled = vm.opcache_enabled();
     if !enabled || vm.ini_bool("opcache.file_cache_only") {
         return Ok(Value::Bool(false));
     }
@@ -2191,7 +2182,7 @@ fn opcache_is_script_cached(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     sync_preload_stats();
     let filename_z = a.str(0);
-    let enabled = is_opcache_enabled(vm);
+    let enabled = vm.opcache_enabled();
     if !enabled || vm.ini_bool("opcache.file_cache_only") {
         return Ok(Value::Bool(false));
     }
@@ -2212,8 +2203,7 @@ fn opcache_is_script_cached_in_file_cache(vm: &mut Vm, a: &mut Args) -> VmResult
         return Ok(Value::Bool(false));
     }
     let filename_z = a.str(0);
-    let enabled = vm.ini_bool("opcache.enable")
-        && (vm.ini_bool("opcache.enable_cli") || vm.ini_bool("opcache.file_cache_only"));
+    let enabled = vm.opcache_enabled();
     let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
     ensure_system_id(vm);
     if !enabled || file_cache_dir.is_empty() {

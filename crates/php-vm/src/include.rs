@@ -78,6 +78,15 @@ fn is_uncacheable_stream_path(name: &[u8]) -> bool {
         && !name.starts_with(b"phar://")
 }
 
+/// `ZCG(enabled) && accel_startup_ok` for the SAPI `sapi`: `opcache.enable`,
+/// and for the command line SAPIs (`accel_sapi_is_cli`: `cli`, `phpdbg`)
+/// also `opcache.enable_cli`. Without it opcache does not start there at
+/// all, not even its file cache (`accel_startup`). The web SAPIs need only
+/// `opcache.enable`.
+pub fn opcache_enabled_for(sapi: &[u8], enable: bool, enable_cli: bool) -> bool {
+    enable && (enable_cli || !matches!(sapi, b"cli" | b"phpdbg"))
+}
+
 impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
@@ -171,14 +180,20 @@ impl Vm {
         Some(h.finish())
     }
 
+    /// `ZCG(enabled) && accel_startup_ok`: whether opcache handles the
+    /// scripts of this SAPI. See [`opcache_enabled_for`].
+    pub fn opcache_enabled(&self) -> bool {
+        opcache_enabled_for(
+            self.sapi_name().as_bytes(),
+            self.ini.get_bool("opcache.enable"),
+            self.ini.get_bool("opcache.enable_cli"),
+        )
+    }
+
     /// The optimizer passes a file is compiled with: opcache's
-    /// `opcache.optimization_level` when opcache optimizes (it is on for
-    /// this SAPI, or only the file cache is), else none.
+    /// `opcache.optimization_level` when opcache is on, else none.
     fn optimization_level(&self) -> u32 {
-        if self.ini.get_bool("opcache.enable")
-            && (self.ini.get_bool("opcache.enable_cli")
-                || self.ini.get_bool("opcache.file_cache_only"))
-        {
+        if self.opcache_enabled() {
             // A zend_long whose low 32 bits are the passes: `-1` is all.
             u32::try_from(self.ini.get_long("opcache.optimization_level") & 0xFFFF_FFFF)
                 .unwrap_or(0)
@@ -396,9 +411,7 @@ impl Vm {
         // dumps each script it compiles (`zend_optimize_script`); eval'd
         // code is not cached.
         let dump_src = (!is_eval
-            && self.ini.get_bool("opcache.enable")
-            && (self.ini.get_bool("opcache.enable_cli")
-                || self.ini.get_bool("opcache.file_cache_only"))
+            && self.opcache_enabled()
             && self.ini.get_long("opcache.opt_debug_level")
                 & (compiler::optimizer::dump::DUMP_AFTER_OPTIMIZER
                     | compiler::optimizer::dump::DUMP_BEFORE_DFA_PASS
