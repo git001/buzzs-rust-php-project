@@ -30,7 +30,9 @@ use crate::string::ZStr;
 use crate::value::{PhpRef, Value};
 use std::cell::Cell;
 use std::fmt;
+use std::hash::{BuildHasher, RandomState};
 use std::rc::Rc;
+use std::sync::LazyLock;
 
 /// `HT_MIN_SIZE`.
 const HT_MIN_SIZE: u32 = 8;
@@ -199,6 +201,10 @@ struct HashData {
     buckets: Vec<Bucket>,
     /// `nTableSize` hash slots (chain heads, `HT_HASH`).
     index: Box<[u32]>,
+    /// Whether keys are placed by [`flood_hash`] instead of their PHP hash
+    /// (a chain grew past [`MAX_CHAIN`]); copies and rebuilt indexes keep
+    /// it.
+    flooded: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -337,6 +343,32 @@ fn index_len(table_size: u32) -> usize {
 /// (`HT_INVALID_IDX` / `u32::MAX`).
 fn new_index(table_size: u32) -> Box<[u32]> {
     vec![INVALID; index_len(table_size)].into_boxed_slice()
+}
+
+/// The longest chain an index keeps placing keys by their PHP hash. php-src
+/// places integer keys by their value and string keys by an unseeded
+/// DJBX33A hash, so keys chosen to share a slot (multiples of a power of
+/// two, or strings built from blocks with equal hashes) turn every insertion
+/// into a walk over all the keys before it: 65536 such keys in a 1 MB JSON
+/// document cost seconds of CPU. A chain that grows past this length makes
+/// its table place its keys by [`flood_hash`] instead. With at most one key
+/// per two slots, ordinary keys rarely chain more than a few deep; keys
+/// that do keep their order and their PHP hash (iteration, `same_bytes`
+/// filtering), only their slots change.
+const MAX_CHAIN: u32 = 16;
+
+/// The per-process keys of [`flood_hash`], drawn from the operating
+/// system's random source once.
+static FLOOD_KEYS: LazyLock<RandomState> = LazyLock::new(RandomState::new);
+
+/// A key's slot hash in a table that left PHP's placement (see
+/// [`MAX_CHAIN`]): `SipHash`-1-3 under a secret per-process key, so slots
+/// cannot be predicted from the keys.
+fn flood_hash(key: &ArrayKey) -> u64 {
+    match key {
+        ArrayKey::Int(i) => FLOOD_KEYS.hash_one(i),
+        ArrayKey::Str(s) => FLOOD_KEYS.hash_one(s.as_bytes()),
+    }
 }
 
 /// The hash slot of `h` (`nIndex = h | nTableMask`: `h` modulo the
@@ -588,7 +620,42 @@ impl HashData {
         HashData {
             buckets: Vec::with_capacity(table_size as usize),
             index: new_index(table_size),
+            flooded: false,
         }
+    }
+
+    /// The hash that places `key` in the index.
+    #[inline]
+    fn place(&self, key: &ArrayKey) -> u64 {
+        if self.flooded {
+            flood_hash(key)
+        } else {
+            key.hash()
+        }
+    }
+
+    /// Whether the chain from `idx` on, plus one bucket in front of it, is
+    /// longer than [`MAX_CHAIN`].
+    #[inline]
+    fn chain_too_long(&self, mut idx: u32) -> bool {
+        let mut len = 1;
+        while idx != INVALID {
+            len += 1;
+            if len > MAX_CHAIN {
+                return true;
+            }
+            idx = self.buckets.get(idx as usize).map_or(INVALID, |b| b.next);
+        }
+        false
+    }
+
+    /// Switches the table to [`flood_hash`] placement and rebuilds its
+    /// index.
+    #[cold]
+    #[inline(never)]
+    fn flood(&mut self, ts: u32) {
+        self.flooded = true;
+        self.relink(ts);
     }
 
     /// Appends a bucket for `key` and links it at the head of its chain
@@ -598,12 +665,15 @@ impl HashData {
     #[inline]
     fn append(&mut self, ts: u32, key: ArrayKey, val: Value) -> u32 {
         let idx = to_u32(self.buckets.len());
-        let s = hash_slot(ts, key.hash());
+        let s = hash_slot(ts, self.place(&key));
         let head = match self.index.get_mut(s) {
             Some(slot) => std::mem::replace(slot, idx),
             None => INVALID,
         };
         self.buckets.push(Bucket::new(key, val, head));
+        if head != INVALID && !self.flooded && self.chain_too_long(head) {
+            self.flood(ts);
+        }
         idx
     }
 
@@ -631,8 +701,7 @@ impl HashData {
     /// `zend_hash_index_find_bucket`.
     #[inline]
     fn find_int(&self, ts: u32, h: i64) -> Option<u32> {
-        #[allow(clippy::cast_sign_loss)]
-        let mut idx = self.head(ts, h as u64);
+        let mut idx = self.head(ts, self.place(&ArrayKey::Int(h)));
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if matches!(b.key, ArrayKey::Int(k) if k == h) && b.val.is_some() {
@@ -646,7 +715,12 @@ impl HashData {
     /// `zend_hash_str_find_bucket`: equal hash, then equal bytes.
     #[inline]
     fn find_str(&self, ts: u32, s: &[u8], h: u64) -> Option<u32> {
-        let mut idx = self.head(ts, h);
+        let place = if self.flooded {
+            FLOOD_KEYS.hash_one(s)
+        } else {
+            h
+        };
+        let mut idx = self.head(ts, place);
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if let ArrayKey::Str(k) = &b.key {
@@ -664,7 +738,12 @@ impl HashData {
     #[inline]
     fn find_zstr(&self, ts: u32, key: &ZStr) -> Option<u32> {
         let h = key.hash_value();
-        let mut idx = self.head(ts, h);
+        let place = if self.flooded {
+            FLOOD_KEYS.hash_one(key.as_bytes())
+        } else {
+            h
+        };
+        let mut idx = self.head(ts, place);
         while idx != INVALID {
             let b = self.buckets.get(idx as usize)?;
             if let ArrayKey::Str(k) = &b.key {
@@ -698,12 +777,18 @@ impl HashData {
             self.index = new_index(ts);
         }
         let mask = index_len(ts) - 1;
+        let flooded = self.flooded;
         for (i, b) in self.buckets.iter_mut().enumerate() {
             if b.val.is_none() {
                 b.next = INVALID;
                 continue;
             }
-            let s = (b.key.hash() as usize) & mask;
+            let h = if flooded {
+                flood_hash(&b.key)
+            } else {
+                b.key.hash()
+            };
+            let s = (h as usize) & mask;
             b.next = self.index[s];
             self.index[s] = to_u32(i);
         }
@@ -714,7 +799,7 @@ impl HashData {
     fn unlink_take(&mut self, ts: u32, idx: u32) -> Option<Value> {
         let b = self.buckets.get(idx as usize)?;
         b.val.as_ref()?;
-        let s = hash_slot(ts, b.key.hash());
+        let s = hash_slot(ts, self.place(&b.key));
         let next = b.next;
         let head = self.index.get(s).copied().unwrap_or(INVALID);
         if head == idx {
@@ -1050,6 +1135,7 @@ impl HashTable {
         self.store = Store::Hash(HashData {
             buckets,
             index: new_index(self.table_size),
+            flooded: false,
         });
         self.rehash();
     }
@@ -2156,11 +2242,17 @@ impl HashTable {
 
     /// Port of `zend_hash_sort_internal`.
     fn sort_impl(&mut self, cmp: &mut SortCmp<'_>, renumber: bool) {
+        let flooded = self.is_flooded();
         let Some(mut items) = self.sort_begin(renumber) else {
             return;
         };
         zend_sort(&mut items, cmp);
-        self.sort_finish(items, renumber);
+        self.sort_finish(items, renumber, flooded);
+    }
+
+    /// Whether the index places keys by [`flood_hash`].
+    fn is_flooded(&self) -> bool {
+        matches!(&self.store, Store::Hash(d) if d.flooded)
     }
 
     /// The first half of `zend_hash_sort_internal`: the early exits for
@@ -2194,7 +2286,7 @@ impl HashTable {
     /// The second half of `zend_hash_sort_internal`: stores the sorted
     /// elements back, renumbering them (a packed list) or rebuilding the
     /// hash index.
-    fn sort_finish(&mut self, items: Vec<SortItem>, renumber: bool) {
+    fn sort_finish(&mut self, items: Vec<SortItem>, renumber: bool, flooded: bool) {
         self.internal_ptr = 0;
         let n = items.len();
         // Room for `nTableSize` elements, as php-src sorts `arData` in place
@@ -2215,6 +2307,7 @@ impl HashTable {
             self.store = Store::Hash(HashData {
                 buckets,
                 index: new_index(self.table_size),
+                flooded,
             });
             self.rehash_without_compaction();
         }
@@ -2292,6 +2385,7 @@ impl HashTable {
                 return None;
             }
         }
+        let flooded = self.is_flooded();
         let store = std::mem::replace(&mut self.store, Store::Uninit);
         let mut buckets: Vec<Bucket> = Vec::with_capacity(self.table_size as usize);
         buckets.extend(into_entries(store).map(|(k, v)| Bucket::new(k, v, INVALID)));
@@ -2299,6 +2393,7 @@ impl HashTable {
         self.store = Store::Hash(HashData {
             buckets,
             index: new_index(self.table_size),
+            flooded,
         });
         Some(n)
     }
@@ -2795,6 +2890,7 @@ impl Clone for HashTable {
                 out.store = Store::Hash(HashData {
                     buckets,
                     index: new_index(out.table_size),
+                    flooded: d.flooded,
                 });
                 out.rehash();
             }
@@ -3844,6 +3940,120 @@ mod tests {
             assert_eq!(c.get_int(k).and_then(Value::as_int), Some(k));
         }
         assert_eq!(keys(&c), keys(&t));
+    }
+
+    /// Whether `t`'s index places keys by `flood_hash`.
+    fn flooded(t: &HashTable) -> bool {
+        t.is_flooded()
+    }
+
+    /// `n` string keys with one DJBX33A hash: "AZ" and "B9" hash alike
+    /// (65 * 33 + 90 == 66 * 33 + 57), and so does every string of the
+    /// same number of such blocks.
+    fn djb_colliding(n: u32) -> Vec<ZStr> {
+        let bits = 32 - (n - 1).leading_zeros();
+        (0..n)
+            .map(|i| {
+                let s: String = (0..bits)
+                    .map(|b| if (i >> b) & 1 == 1 { "B9" } else { "AZ" })
+                    .collect();
+                ZStr::from(s.as_str())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn colliding_integer_keys_flood_the_index() {
+        // Multiples of 2^20 share slot 0 until the table has 2^20 slots.
+        let mut t = HashTable::new();
+        for i in 0..1000_i64 {
+            t.insert(i << 20, Value::Int(i));
+            assert_eq!(flooded(&t), i >= i64::from(MAX_CHAIN), "{i}");
+        }
+        for i in 0..1000_i64 {
+            assert_eq!(t.get_int(i << 20).and_then(Value::as_int), Some(i));
+        }
+        assert!(t.get_int(1).is_none());
+        // Order, removal and the next free key are PHP's.
+        assert_eq!(t.keys().next(), Some(&ArrayKey::Int(0)));
+        assert_eq!(
+            t.remove(&ArrayKey::Int(5 << 20))
+                .as_ref()
+                .and_then(Value::as_int),
+            Some(5)
+        );
+        assert!(t.get_int(5 << 20).is_none());
+        assert_eq!(t.len(), 999);
+        assert_eq!(t.next_index(), (999 << 20) + 1);
+    }
+
+    #[test]
+    fn colliding_string_keys_flood_the_index() {
+        let keys = djb_colliding(1024);
+        assert!(keys.iter().all(|k| k.hash_value() == keys[0].hash_value()));
+        let mut t = HashTable::new();
+        for (i, k) in keys.iter().enumerate() {
+            t.insert(
+                ArrayKey::Str(k.clone()),
+                Value::Int(i64::try_from(i).unwrap()),
+            );
+        }
+        assert!(flooded(&t));
+        for (i, k) in keys.iter().enumerate() {
+            let want = Some(i64::try_from(i).unwrap());
+            assert_eq!(t.get_str(k.as_bytes()).and_then(Value::as_int), want);
+            assert_eq!(t.get_zstr(k).and_then(Value::as_int), want);
+            assert_eq!(
+                t.get(&ArrayKey::Str(k.clone())).and_then(Value::as_int),
+                want
+            );
+        }
+        assert!(t.get_str(b"AZAZ").is_none());
+        let order: Vec<_> = t.keys().cloned().collect();
+        assert_eq!(
+            order,
+            keys.iter().cloned().map(ArrayKey::Str).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn flooded_index_survives_copies_sorts_and_growth() {
+        let mut t = HashTable::new();
+        for i in 0..64_i64 {
+            t.insert(i << 24, Value::Int(-i));
+        }
+        assert!(flooded(&t));
+        let c = t.clone();
+        assert!(flooded(&c));
+        let mut sorted = t.clone();
+        sorted.sort_by(|_, a, _, b| int_cmp(a, b), false);
+        assert!(flooded(&sorted));
+        assert_eq!(sorted.keys().next(), Some(&ArrayKey::Int(63 << 24)));
+        // Growth and holes rehash the flooded index.
+        for i in 0..32_i64 {
+            t.remove(&ArrayKey::Int(i << 24));
+        }
+        for i in 1000..1500_i64 {
+            t.insert(i, Value::Int(i));
+        }
+        assert!(flooded(&t));
+        for i in (32..64_i64).map(|i| i << 24).chain(1000..1500) {
+            assert!(t.get_int(i).is_some(), "{i}");
+            assert!(c.get_int(i).is_some() || i >= 1000, "{i}");
+            assert!(sorted.get_int(i).is_some() || i >= 1000, "{i}");
+        }
+    }
+
+    #[test]
+    fn ordinary_keys_keep_php_placement() {
+        let mut ints = HashTable::new();
+        let mut strs = HashTable::new();
+        for i in 0..100_000_i64 {
+            ints.insert(i * 7919, Value::Int(i));
+            strs.insert(format!("key_{i}").as_str(), Value::Int(i));
+        }
+        assert!(!flooded(&ints));
+        assert!(!flooded(&strs));
     }
 
     #[test]
