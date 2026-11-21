@@ -115,6 +115,10 @@ pub struct ScriptCache<T> {
     pub hits: u64,
     /// Global cache miss counter.
     pub misses: u64,
+    /// The misses that were compiled without the cache: blacklisted or
+    /// larger than `opcache.max_file_size` (`ZCSG(blacklist_misses)`).
+    /// They are counted in [`ScriptCache::misses`] too.
+    pub blacklist_misses: u64,
     /// Number of manual cache restarts (`opcache_reset()`).
     pub manual_restarts: u64,
     /// Maximum number of accelerated files.
@@ -555,6 +559,7 @@ impl<T> ScriptCache<T> {
             last_restart_time: 0,
             hits: 0,
             misses: 0,
+            blacklist_misses: 0,
             manual_restarts: 0,
             max_accelerated_files,
             max_cached_keys: accel_hash_size(max_accelerated_files),
@@ -598,6 +603,7 @@ impl<T> ScriptCache<T> {
         self.manual_restarts += 1;
         self.hits = 0;
         self.misses = 0;
+        self.blacklist_misses = 0;
     }
 
     /// Configures the JIT buffer and trace tracking.
@@ -808,11 +814,32 @@ impl<T> ScriptCache<T> {
 
     /// Returns the hit rate percentage (0.0 to 100.0).
     pub fn hit_rate(&self) -> f64 {
+        self.percent_of_requests(self.hits)
+    }
+
+    /// The share of requests compiled without the cache, in percent
+    /// (`blacklist_miss_ratio`).
+    pub fn blacklist_miss_ratio(&self) -> f64 {
+        self.percent_of_requests(self.blacklist_misses)
+    }
+
+    /// The misses `opcache_get_status()` reports: without the blacklist
+    /// misses, unless the cache is full (`accelerator_get_status`).
+    pub fn reported_misses(&self) -> u64 {
+        if self.full {
+            self.misses
+        } else {
+            self.misses.saturating_sub(self.blacklist_misses)
+        }
+    }
+
+    /// `count` as a percentage of all requests (hits and misses).
+    fn percent_of_requests(&self, count: u64) -> f64 {
         let total = self.hits + self.misses;
         if total == 0 {
             0.0
         } else {
-            (self.hits as f64 / total as f64) * 100.0
+            (count as f64 / total as f64) * 100.0
         }
     }
 

@@ -991,14 +991,21 @@ fn sync_preload_stats() {
     });
 }
 
+/// How `persistent_compile_file` handles a script opcache is enabled for.
+enum Probed {
+    /// Compiled without the cache and counted as a blacklist miss.
+    Blacklisted,
+    Cacheable(Probe),
+}
+
 /// What opcache found out about a script before compiling it.
 struct Probe {
     /// The script's key: its resolved path.
     realpath: std::path::PathBuf,
     real_str: String,
-    /// Modification time (`zend_get_file_handle_timestamp`), determined
-    /// on first use (see [`Probe::mtime`]).
-    mtime: std::cell::OnceCell<Option<i64>>,
+    /// Modification time and size (`zend_get_file_handle_timestamp`),
+    /// determined on first use (see [`Probe::mtime`]).
+    stat: std::cell::OnceCell<Option<ScriptStat>>,
     now_sec: i64,
     /// `opcache.file_cache`, empty when unset.
     file_cache_dir: String,
@@ -1014,7 +1021,18 @@ impl Probe {
     /// in-memory cache between revalidations (`opcache.revalidate_freq`)
     /// costs no `stat`, as in `validate_timestamp_and_record`.
     fn mtime(&self) -> Option<i64> {
-        *self.mtime.get_or_init(|| script_timestamp(&self.realpath))
+        self.stat().map(|st| st.mtime)
+    }
+
+    fn stat(&self) -> Option<ScriptStat> {
+        *self.stat.get_or_init(|| script_stat(&self.realpath))
+    }
+
+    /// Whether the script is larger than `opcache.max_file_size` (0: no
+    /// limit) and so compiled without the cache (`opcache_compile_file`).
+    fn too_large(&self, vm: &Vm) -> bool {
+        let max = vm.ini_long("opcache.max_file_size");
+        max > 0 && self.stat().is_some_and(|st| st.size > max.unsigned_abs())
     }
 
     /// The modification time to cache a freshly compiled script under,
@@ -1061,10 +1079,9 @@ fn script_key_path(filename: &ZStr) -> std::path::PathBuf {
 }
 
 /// `persistent_compile_file`'s checks: whether opcache handles `filename`
-/// at all, and under which key. `None` when it is compiled without the
-/// cache (opcache off or blacklisted). The script is not stat'ed here;
-/// see [`Probe::mtime`].
-fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
+/// at all, and under which key. `None` when opcache is off. The script is
+/// not stat'ed here; see [`Probe::mtime`].
+fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probed> {
     use std::os::unix::ffi::OsStrExt;
     let enable = vm.ini_bool("opcache.enable");
     let enable_cli = vm.ini_bool("opcache.enable_cli");
@@ -1076,22 +1093,36 @@ fn probe(vm: &mut Vm, filename: &ZStr) -> Option<Probe> {
     let realpath = script_key_path(filename);
     // A blacklisted script is compiled, never cached (`persistent_compile_file`).
     if blacklist(vm).is_some_and(|l| l.is_blacklisted(realpath.as_os_str().as_bytes())) {
-        return None;
+        return Some(Probed::Blacklisted);
     }
     let now_sec = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or(0);
-    Some(Probe {
+    Some(Probed::Cacheable(Probe {
         real_str: realpath.to_string_lossy().into_owned(),
         realpath,
-        mtime: std::cell::OnceCell::new(),
+        stat: std::cell::OnceCell::new(),
         now_sec,
         file_cache_dir: get_ini_string(vm, "opcache.file_cache"),
         file_cache_only,
         file_cache_read_only: vm.ini_bool("opcache.file_cache_read_only"),
-    })
+    }))
+}
+
+/// Counts a script compiled without the cache (`ZCSG(blacklist_misses)`).
+/// `persistent_compile_file` has counted the miss before
+/// `opcache_compile_file` turns it down; `looked_up` says whether the
+/// lookup here already did.
+fn count_blacklist_miss(looked_up: bool) {
+    GLOBAL_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if !looked_up {
+            cache.misses += 1;
+        }
+        cache.blacklist_misses += 1;
+    });
 }
 
 /// The cached unit of a probed script: from the in-memory cache, else
@@ -1194,7 +1225,7 @@ fn opcache_precompiled_hook(
     filename: &ZStr,
 ) -> VmResult<Option<Rc<php_vm::compiler::CompiledUnit>>> {
     sync_preload_stats();
-    let Some(p) = probe(vm, filename) else {
+    let Some(Probed::Cacheable(p)) = probe(vm, filename) else {
         return Ok(None);
     };
     let unit = lookup(vm, &p, filename)?;
@@ -1212,8 +1243,13 @@ fn opcache_compile_hook(
     skip_shebang: bool,
 ) -> VmResult<CompileOutcome> {
     sync_preload_stats();
-    let Some(p) = probe(vm, filename) else {
-        return vm.compile_source_default(src, filename, false, skip_shebang);
+    let p = match probe(vm, filename) {
+        None => return vm.compile_source_default(src, filename, false, skip_shebang),
+        Some(Probed::Blacklisted) => {
+            count_blacklist_miss(false);
+            return vm.compile_source_default(src, filename, false, skip_shebang);
+        }
+        Some(Probed::Cacheable(p)) => p,
     };
     let just_missed = LOOKUP_MISSED.with(|m| {
         m.borrow_mut()
@@ -1233,6 +1269,10 @@ fn opcache_compile_hook(
     let Some(mtime) = p.cacheable_mtime(vm) else {
         return vm.compile_source_default(src, filename, false, skip_shebang);
     };
+    if p.too_large(vm) {
+        count_blacklist_miss(!p.file_cache_only);
+        return vm.compile_source_default(src, filename, false, skip_shebang);
+    }
     // Like `persistent_compile_file`, compile with
     // `ZEND_COMPILE_IGNORE_OTHER_FILES`, so the cached code does not
     // depend on the functions other files happened to declare first.
@@ -1284,15 +1324,23 @@ fn store_in_file_cache(
         .map_err(|(msg, _)| msg)
 }
 
-/// `zend_get_file_handle_timestamp`: the script's modification time in
-/// seconds. A plain file is stat'ed; a stream path (`phar://...`) is
-/// stat'ed through its wrapper's `url_stat` (`zend_get_stream_timestamp`),
-/// and a wrapper without `url_stat` gives the constant 1, as in php-src
+/// A script's modification time in seconds and its size in bytes.
+#[derive(Clone, Copy)]
+struct ScriptStat {
+    mtime: i64,
+    size: u64,
+}
+
+/// `zend_get_file_handle_timestamp`: the script's modification time and
+/// size. A plain file is stat'ed; a stream path (`phar://...`) is stat'ed
+/// through its wrapper's `url_stat` (`zend_get_stream_timestamp`), and a
+/// wrapper without `url_stat` gives the time 1 and size 0, as in php-src
 /// ("anything other than 0 is considered to be a valid timestamp").
 /// `None` when the script cannot be stat'ed.
-fn script_timestamp(path: &std::path::Path) -> Option<i64> {
+fn script_stat(path: &std::path::Path) -> Option<ScriptStat> {
     use php_streams::wrapper::{locate, STREAM_LOCATE_WRAPPERS_ONLY, URL_STAT_QUIET};
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
     let bytes = path.as_os_str().as_bytes();
     let scheme = php_streams::wrapper::scheme_len(bytes);
     let is_url = scheme > 1 && bytes[scheme..].starts_with(b"://");
@@ -1302,21 +1350,20 @@ fn script_timestamp(path: &std::path::Path) -> Option<i64> {
             .wrapper
             .url_stat(&located.path, URL_STAT_QUIET, None)
         {
-            None => Some(1),
-            Some(Ok(stat)) => Some(stat.mtime),
+            None => Some(ScriptStat { mtime: 1, size: 0 }),
+            Some(Ok(stat)) => Some(ScriptStat {
+                mtime: stat.mtime,
+                size: u64::try_from(stat.size).unwrap_or(0),
+            }),
             Some(Err(())) => None,
         };
     }
     let plain = bytes.strip_prefix(b"file://").unwrap_or(bytes);
-    let modified = std::fs::metadata(std::ffi::OsStr::from_bytes(plain))
-        .ok()?
-        .modified()
-        .ok()?;
-    let secs = modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    i64::try_from(secs).ok()
+    let meta = std::fs::metadata(std::ffi::OsStr::from_bytes(plain)).ok()?;
+    Some(ScriptStat {
+        mtime: meta.mtime(),
+        size: meta.size(),
+    })
 }
 
 /// Decodes a file cache entry (compiler fingerprint, then the bytecode
@@ -1549,15 +1596,18 @@ fn opcache_get_status(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             ZStr::from("manual_restarts"),
             Value::Int(cache.manual_restarts as i64),
         );
-        stats
-            .make_mut()
-            .insert(ZStr::from("misses"), Value::Int(cache.misses as i64));
-        stats
-            .make_mut()
-            .insert(ZStr::from("blacklist_misses"), Value::Int(0));
-        stats
-            .make_mut()
-            .insert(ZStr::from("blacklist_miss_ratio"), Value::Float(0.0));
+        stats.make_mut().insert(
+            ZStr::from("misses"),
+            Value::Int(cache.reported_misses() as i64),
+        );
+        stats.make_mut().insert(
+            ZStr::from("blacklist_misses"),
+            Value::Int(cache.blacklist_misses as i64),
+        );
+        stats.make_mut().insert(
+            ZStr::from("blacklist_miss_ratio"),
+            Value::Float(cache.blacklist_miss_ratio()),
+        );
         stats.make_mut().insert(
             ZStr::from("opcache_hit_rate"),
             Value::Float(cache.hit_rate()),
