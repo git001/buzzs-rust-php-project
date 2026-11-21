@@ -9,26 +9,23 @@ use php_runtime::{Value, ZStr};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::BuildHasherDefault;
 use std::rc::Rc;
-
-pub use crate::builtins::fasthash::FxHasher;
 
 /// A member table of a class keyed by name: php-src's `zend_hash` of
 /// `function_table`, `properties_info` and `constants_table`, which hashes
 /// with the cheap `zend_inline_hash_func` (cached in the `zend_string`).
 /// The keys are declared names, not request data, so the unseeded
-/// [`FxHasher`] needs no protection against chosen-key collisions; the
+/// [`rustc_hash::FxHasher`] needs no protection against chosen-key collisions; the
 /// standard `SipHash` cost about 280 instructions per lookup of a short
 /// name. Iteration order is fixed per build and, as with any hash map,
 /// means nothing: declaration order lives in [`Class::consts`],
 /// [`Class::props`], [`Class::static_props`] and [`Class::method_order`].
-pub type NameMap<V> = HashMap<ZStr, V, BuildHasherDefault<FxHasher>>;
+pub type NameMap<V> = HashMap<ZStr, V, rustc_hash::FxBuildHasher>;
 
 /// An empty [`NameMap`] that holds `capacity` entries without regrowing.
 #[must_use]
 pub fn name_map_with_capacity<V>(capacity: usize) -> NameMap<V> {
-    HashMap::with_capacity_and_hasher(capacity, BuildHasherDefault::default())
+    HashMap::with_capacity_and_hasher(capacity, rustc_hash::FxBuildHasher)
 }
 
 /// Class flags (`ZEND_ACC_*` subset) stored in [`Class::flags`].

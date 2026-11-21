@@ -26,19 +26,15 @@
 // `ZStr` caches its hash in a `Cell`; `Hash`/`Eq` only use the bytes.
 #![allow(clippy::mutable_key_type)]
 
-use super::fasthash::{FastMap, FxHasher};
 use super::reg;
 use super::util::{b, s};
 use crate::func::{Args, Func};
 use crate::vm::{Vm, VmResult};
 use php_runtime::{ArrayKey, HashTable, Value, ZArray, ZStr};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
-use std::hash::BuildHasherDefault;
-
-/// A `HashSet` with [`FxHasher`].
-type FastSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
 
 /// `Zend/zend_builtin_functions.stub.php`.
 const CORE_FUNCTIONS: &[&str] = &[
@@ -126,7 +122,7 @@ struct Slot {
 #[derive(Default)]
 struct Attributed {
     list: Vec<(ZStr, &'static str)>,
-    index: FastMap<ZStr, Slot>,
+    index: FxHashMap<ZStr, Slot>,
 }
 
 impl Attributed {
@@ -191,7 +187,7 @@ struct Registry {
     /// Constant names.
     constants: Attributed,
     /// Lower-case class name → the extension whose `register` inserted it.
-    classes: FastMap<ZStr, &'static str>,
+    classes: FxHashMap<ZStr, &'static str>,
     /// The VM's own builtin functions, in registration order: what the
     /// builtin groups insert as new keys before any extension registers
     /// (closed by [`register`], which runs last among them).
@@ -487,7 +483,7 @@ pub(crate) fn internal_functions(vm: &Vm) -> Vec<ZStr> {
     let is_builtin = |n: &[u8]| matches!(vm.functions.get(n), Some(Func::Builtin(_)));
     // (module rank, place in the module, name)
     let mut keyed: Vec<(usize, usize, ZStr)> = Vec::with_capacity(vm.functions.len());
-    let mut seen: FastSet<ZStr> = FastSet::default();
+    let mut seen: FxHashSet<ZStr> = FxHashSet::default();
     seen.reserve(vm.functions.len());
     let mut take =
         |keyed: &mut Vec<(usize, usize, ZStr)>, rank: usize, place: usize, name: &ZStr| {
@@ -563,7 +559,7 @@ impl DeclarationLog {
 
     /// Each name once, at its last entry, in log order.
     fn last_entries(&self) -> Vec<ZStr> {
-        let mut seen: FastSet<&ZStr> = FastSet::default();
+        let mut seen: FxHashSet<&ZStr> = FxHashSet::default();
         let mut out: Vec<ZStr> = self
             .names
             .iter()
@@ -594,7 +590,7 @@ pub(crate) fn note_user_function(lc_name: &ZStr) {
 pub(crate) fn user_functions(vm: &Vm) -> Vec<ZStr> {
     let mut out: Vec<ZStr> = DECLARED.with(|d| d.borrow().last_entries());
     out.retain(|n| matches!(vm.functions.get(n), Some(Func::User(_))));
-    let listed: FastSet<&ZStr> = out.iter().collect();
+    let listed: FxHashSet<&ZStr> = out.iter().collect();
     let mut rest: Vec<ZStr> = vm
         .functions
         .iter()

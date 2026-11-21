@@ -7,7 +7,6 @@
 use crate::host::{rt_throw, spl_state_of, VmHost};
 use php_runtime::{Obj, Value, ZStr};
 use php_spl::classes::{ClassDef, ClassKind, MethodDef, MethodFlags};
-use php_vm::class::FxHasher;
 use php_vm::ext::{acc, class_flags, Args, ClassBuilder, VmResult};
 use php_vm::func::Func;
 use php_vm::opcode::{Op, Operand};
@@ -15,7 +14,6 @@ use php_vm::vm::FrameKind;
 use php_vm::{Throw, Vm};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
 use std::ops::BitOr;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -33,7 +31,7 @@ struct Target {
 
 /// A map keyed by `Builtin` addresses (no protection against chosen keys
 /// is needed: the keys are the VM's own pointers).
-type PtrMap<V> = HashMap<usize, V, BuildHasherDefault<FxHasher>>;
+type PtrMap<V> = HashMap<usize, V, rustc_hash::FxBuildHasher>;
 
 thread_local! {
     /// Native method handlers, keyed by the address of their `Builtin`.

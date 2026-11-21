@@ -11,43 +11,13 @@
 
 use crate::reference::{PhpRef, WeakRef};
 use crate::Value;
+use rustc_hash::FxBuildHasher;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
-
-/// Hashes a buffered reference's address (the [`Index`] key) with one
-/// multiply instead of SipHash: every release of a handle of a reference
-/// to an array or object looks the reference up. The product's high bits,
-/// rotated down, pick the bucket (an aligned address's low bits are zero).
-#[derive(Default)]
-struct AddrHasher(u64);
-
-impl AddrHasher {
-    const K: u64 = 0x9E37_79B9_7F4A_7C15;
-}
-
-impl Hasher for AddrHasher {
-    #[inline]
-    fn write_usize(&mut self, n: usize) {
-        self.0 = (self.0 ^ n as u64).wrapping_mul(Self::K);
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        // Not used by the `usize` keys; kept total.
-        for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::K);
-        }
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0.rotate_left(26)
-    }
-}
 
 /// Buffer position by reference address. Only looked up, never iterated,
 /// so the hasher changes nothing observable.
-type Index = HashMap<usize, usize, BuildHasherDefault<AddrHasher>>;
+type Index = HashMap<usize, usize, FxBuildHasher>;
 
 #[derive(Default)]
 struct Buf {
@@ -219,10 +189,7 @@ pub fn unstash(s: Stash) {
         if let Ok(mut b) = b.try_borrow_mut() {
             let newer = std::mem::take(&mut b.entries);
             let mut entries = Vec::with_capacity(s.0.len() + newer.len());
-            let mut index = Index::with_capacity_and_hasher(
-                s.0.len() + newer.len(),
-                BuildHasherDefault::default(),
-            );
+            let mut index = Index::with_capacity_and_hasher(s.0.len() + newer.len(), FxBuildHasher);
             for w in s.0.into_iter().chain(newer) {
                 if w.strong_count() == 0 {
                     continue;

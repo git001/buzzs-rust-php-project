@@ -194,43 +194,19 @@ pub fn class_table() -> &'static [ClassInfo] {
     table::CLASSES
 }
 
-/// FNV-1a: a cheap hasher for the short, trusted class/method names.
-#[derive(Default, Clone, Copy)]
-struct Fnv(u64);
-
-impl std::hash::Hasher for Fnv {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-    fn write(&mut self, bytes: &[u8]) {
-        let mut h = if self.0 == 0 {
-            0xcbf2_9ce4_8422_2325
-        } else {
-            self.0
-        };
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-        self.0 = h;
-    }
-}
-
-type FnvMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<Fnv>>;
-
 /// Name → index into the class table (exact spelling and lowercase), and
 /// the precomputed subclass relation.
 struct ClassIndex {
-    exact: FnvMap<&'static str, usize>,
-    lower: FnvMap<String, usize>,
+    exact: rustc_hash::FxHashMap<&'static str, usize>,
+    lower: rustc_hash::FxHashMap<String, usize>,
     subclass: Vec<Vec<bool>>,
 }
 
 fn class_index() -> &'static ClassIndex {
     static INDEX: std::sync::OnceLock<ClassIndex> = std::sync::OnceLock::new();
     INDEX.get_or_init(|| {
-        let mut exact = FnvMap::default();
-        let mut lower = FnvMap::default();
+        let mut exact = rustc_hash::FxHashMap::default();
+        let mut lower = rustc_hash::FxHashMap::default();
         for (i, c) in table::CLASSES.iter().enumerate() {
             exact.insert(c.name, i);
             lower.insert(c.name.to_ascii_lowercase(), i);
@@ -329,8 +305,8 @@ type MethodResult = Option<(&'static ClassInfo, &'static MethodInfo)>;
 
 thread_local! {
     /// Per class: method name (as spelled by the caller) → lookup result.
-    static METHOD_MEMO: std::cell::RefCell<Vec<FnvMap<Box<str>, MethodResult>>> =
-        std::cell::RefCell::new(vec![FnvMap::default(); table::CLASSES.len()]);
+    static METHOD_MEMO: std::cell::RefCell<Vec<rustc_hash::FxHashMap<Box<str>, MethodResult>>> =
+        std::cell::RefCell::new(vec![rustc_hash::FxHashMap::default(); table::CLASSES.len()]);
 }
 
 /// Finds a method on a class or its ancestors.

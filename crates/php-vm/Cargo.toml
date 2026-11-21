@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rustc-hash = "2"
 php-lexer = { path = "../php-lexer" }
 php-parser = { path = "../php-parser" }
 php-mbstring = { path = "../php-mbstring" }

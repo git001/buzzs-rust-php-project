@@ -468,6 +468,7 @@ dependencies = [
  "php-memlimit",
  "php-parser",
  "phpt-runner",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -880,6 +881,7 @@ dependencies = [
  "php-stdarr",
  "php-streams",
  "php-vm",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -1188,6 +1190,7 @@ name = "php-pcre"
 version = "0.1.0"
 dependencies = [
  "pcre2-sys",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -1228,6 +1231,9 @@ dependencies = [
 [[package]]
 name = "php-runtime"
 version = "0.1.0"
+dependencies = [
+ "rustc-hash",
+]
 
 [[package]]
 name = "php-sapi"
@@ -1409,6 +1415,7 @@ dependencies = [
  "php-stdarr",
  "php-stdstr",
  "php-support",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -1490,6 +1497,12 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "serde"

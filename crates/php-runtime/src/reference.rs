@@ -24,11 +24,11 @@
 //! alive, like php-src's root buffer holds them by address.
 
 use crate::value::Value;
+use rustc_hash::FxBuildHasher;
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
@@ -504,7 +504,7 @@ impl fmt::Debug for WeakRef {
 // ---------------------------------------------------------------------------
 
 /// VM metadata by reference address.
-type MetaMap = HashMap<usize, Rc<dyn Any>, BuildHasherDefault<AddrHasher>>;
+type MetaMap = HashMap<usize, Rc<dyn Any>, FxBuildHasher>;
 
 thread_local! {
     /// The metadata of the live references whose [`HAS_META`] bit is set,
@@ -518,9 +518,7 @@ thread_local! {
     /// holding those references, and leave the table unusable for their
     /// drops.
     static META: RefCell<ManuallyDrop<MetaMap>> = const {
-        RefCell::new(ManuallyDrop::new(HashMap::with_hasher(
-            BuildHasherDefault::new(),
-        )))
+        RefCell::new(ManuallyDrop::new(HashMap::with_hasher(FxBuildHasher)))
     };
 }
 
@@ -550,37 +548,6 @@ fn meta_remove(addr: usize) -> Option<Rc<dyn Any>> {
         }
         old
     })
-}
-
-/// Hashes [`META`]'s keys, reference addresses: Fibonacci hashing (a
-/// multiplication by 2^64/φ), then the rotation rustc-hash 2 uses, which
-/// brings the product's best-mixed high bits down to the low ones that pick
-/// the bucket. A bare product would keep an address's low bits, always zero
-/// for an aligned allocation, and leave most buckets unused.
-#[derive(Default)]
-struct AddrHasher(u64);
-
-impl AddrHasher {
-    const K: u64 = 0x9E37_79B9_7F4A_7C15;
-}
-
-impl Hasher for AddrHasher {
-    #[inline]
-    fn write_usize(&mut self, n: usize) {
-        self.0 = (self.0 ^ n as u64).wrapping_mul(Self::K);
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        // Not used by the `usize` keys; kept total.
-        for &b in bytes {
-            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::K);
-        }
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0.rotate_left(26)
-    }
 }
 
 #[cfg(test)]
@@ -946,7 +913,9 @@ mod tests {
 
     #[test]
     fn addresses_spread_over_buckets() {
-        let s = BuildHasherDefault::<AddrHasher>::default();
+        // `rustc-hash`'s FxHasher multiplies, then rotates the product's
+        // best-mixed high bits down to the low ones that pick the bucket.
+        let s = FxBuildHasher;
         // 64 allocations 32 bytes apart (one allocator bin), as indices into
         // a 64-bucket table: 57 distinct (a bare product gives 2, its low
         // five bits being zero).
@@ -954,11 +923,5 @@ mod tests {
             .map(|i| s.hash_one(0x7f12_3456_7000 + i * 32) & 63)
             .collect();
         assert!(buckets.len() >= 48, "{}", buckets.len());
-        // `write` (unused by `usize` keys) is deterministic too.
-        let mut a = AddrHasher::default();
-        let mut b = AddrHasher::default();
-        a.write(b"ab");
-        b.write(b"ab");
-        assert_eq!(a.finish(), b.finish());
     }
 }
