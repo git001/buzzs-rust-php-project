@@ -634,6 +634,34 @@ impl Vm {
     }
 
     pub(crate) fn declare_hoisted(&mut self, unit: &CompiledUnit) -> VmResult<()> {
+        self.declare_hoisted_functions(unit)?;
+        self.declare_hoisted_classes(unit)
+    }
+
+    /// `zend_accel_load_script` without running the script, as
+    /// `opcache_compile_file()` leaves it: a script loaded from the cache
+    /// declares its functions, then its compile-time classes; one that was
+    /// only compiled (not cached) its functions, which the compiler binds
+    /// (`ZEND_COMPILE_WITHOUT_EXECUTION` leaves the classes unbound).
+    pub fn load_script(&mut self, unit: &CompiledUnit, cached: bool) -> VmResult<()> {
+        self.declare_hoisted_functions(unit)?;
+        if cached {
+            self.bind_cached_classes(unit)?;
+            self.declare_hoisted_classes(unit)?;
+        }
+        Ok(())
+    }
+
+    /// A script from the cache is loaded as `zend_accel_load_script` does
+    /// it: functions first (a taken name is an error before the classes
+    /// are looked at), then the classes.
+    fn declare_cached(&mut self, unit: &CompiledUnit) -> VmResult<()> {
+        self.declare_hoisted_functions(unit)?;
+        self.bind_cached_classes(unit)?;
+        self.declare_hoisted_classes(unit)
+    }
+
+    fn declare_hoisted_functions(&mut self, unit: &CompiledUnit) -> VmResult<()> {
         for &i in &unit.hoisted_functions {
             let f = unit.decls.functions.borrow()[i as usize].clone();
             let lc = ZStr::from(f.name.to_ascii_lowercase());
@@ -659,6 +687,10 @@ impl Vm {
             crate::builtins::info::note_user_function(&lc);
             self.functions.insert(lc, crate::func::Func::User(f));
         }
+        Ok(())
+    }
+
+    fn declare_hoisted_classes(&mut self, unit: &CompiledUnit) -> VmResult<()> {
         let mut progress = true;
         while progress {
             progress = false;
@@ -1019,8 +1051,7 @@ impl Vm {
                         if self.included_set.insert(real_z.clone()) {
                             self.included.push(real_z);
                         }
-                        self.bind_cached_classes(&unit)?;
-                        self.declare_hoisted(&unit)?;
+                        self.declare_cached(&unit)?;
                         self.push_include_frame(&unit, FrameKind::Include, dst, Some(kind_name));
                         return Ok(true);
                     }
@@ -1075,8 +1106,7 @@ impl Vm {
         if self.included_set.insert(path.clone()) {
             self.included.push(path);
         }
-        self.bind_cached_classes(unit)?;
-        self.declare_hoisted(unit)?;
+        self.declare_cached(unit)?;
         self.push_include_frame(unit, FrameKind::Include, dst, Some(kind_name));
         Ok(true)
     }

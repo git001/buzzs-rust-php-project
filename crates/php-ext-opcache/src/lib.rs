@@ -2143,13 +2143,10 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
     let enabled = vm.opcache_enabled();
     if !enabled {
-        let (file, line) = vm.current_location();
-        let file_s = file.to_string_lossy();
+        // `zend_error(E_NOTICE, ...)`: no function-name prefix.
         vm.error(
             8,
-            &format!(
-                "Zend OPcache has not been properly started, can't compile file in {file_s} on line {line}"
-            ),
+            "Zend OPcache has not been properly started, can't compile file",
         )?;
         return Ok(Value::Bool(false));
     }
@@ -2164,10 +2161,30 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Ok(src) = std::fs::read(std::ffi::OsStr::from_bytes(&realpath)) else {
         return Ok(Value::Bool(false));
     };
-    match opcache_compile_hook(vm, Rc::from(src), &ZStr::from(realpath.as_slice()), true)? {
-        CompileOutcome::Ok(_) => Ok(Value::Bool(true)),
-        CompileOutcome::ParseError(e) => Err(Throw::Exception(e)),
-        CompileOutcome::Fatal => Ok(Value::Bool(false)),
+    let path = ZStr::from(realpath.as_slice());
+    let unit = match opcache_compile_hook(vm, Rc::from(src), &path, true)? {
+        CompileOutcome::Ok(unit) => unit,
+        CompileOutcome::ParseError(e) => return Err(Throw::Exception(e)),
+        CompileOutcome::Fatal => return Ok(Value::Bool(false)),
+    };
+    // `persistent_compile_file` loads the script it compiled
+    // (`zend_accel_load_script`); a fatal error while declaring its
+    // functions or classes is caught (`zend_try`), and the script goes on.
+    let cached = GLOBAL_CACHE.with(|c| c.borrow().is_cached(&path.to_string_lossy()));
+    match vm.load_script(&unit, cached) {
+        Ok(()) => Ok(Value::Bool(true)),
+        Err(Throw::Fatal) => {
+            // `zend_error(E_WARNING, ...)`: no function-name prefix.
+            vm.error(
+                2,
+                &format!(
+                    "Zend OPcache could not compile file {}",
+                    path.to_string_lossy()
+                ),
+            )?;
+            Ok(Value::Bool(false))
+        }
+        Err(e) => Err(e),
     }
 }
 
