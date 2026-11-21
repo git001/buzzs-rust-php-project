@@ -880,6 +880,12 @@ impl Resource {
         NEXT_RESOURCE_ID.with(|c| c.set(handle));
     }
 
+    /// The next handle number [`Resource::new`] allocates.
+    #[must_use]
+    pub fn next_handle() -> i64 {
+        NEXT_RESOURCE_ID.with(Cell::get)
+    }
+
     /// The resource handle number (`Resource id #N`).
     #[must_use]
     pub fn handle(&self) -> i64 {

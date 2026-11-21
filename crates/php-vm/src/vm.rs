@@ -2220,6 +2220,10 @@ pub struct Vm {
     pub depth: u32,
     /// Strings already reported by `E_DEPRECATED` once-only notices.
     pub once_flags: HashSet<String>,
+    /// The first resource number of a request: the next one after module
+    /// startup (`STDIN`/`STDOUT`/`STDERR` of the CLI), where each request
+    /// starts again (php-src builds `EG(regular_list)` per request).
+    pub first_request_resource: i64,
     /// Ticks functions.
     pub tick_functions: Vec<Value>,
     /// Extension interrupt handlers (run when the interrupt flag is set).

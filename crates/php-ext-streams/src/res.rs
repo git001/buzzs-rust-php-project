@@ -279,6 +279,12 @@ pub fn new_stream(stream: Stream, wrapper_data: Option<Value>) -> Value {
     new_stream_ex(stream, wrapper_data, false)
 }
 
+/// Request shutdown: `FG(default_context)` goes with the request's
+/// resources (`php_shutdown_file_globals`); the next one starts without.
+pub(crate) fn reset_default_context() {
+    DEFAULT_CONTEXT.with(|d| *d.borrow_mut() = None);
+}
+
 /// Whether `ctx` is `FG(default_context)`.
 pub fn is_default_context(ctx: &ContextRef) -> bool {
     DEFAULT_CONTEXT.with(|d| {

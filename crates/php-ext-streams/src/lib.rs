@@ -79,6 +79,9 @@ fn shutdown(vm: &mut Vm) {
     // `zend_close_rsrc_list()` closes the remaining streams.
     userfilter::shutdown();
     res::shutdown(vm);
+    res::reset_default_context();
+    dirs::reset_request();
+    io_poll::reset_request();
     http::shutdown();
     // filestat's RSHUTDOWN and `php_shutdown_stream_hashes()`: the stat
     // cache, `php://input` and the wrappers a script registered belong to

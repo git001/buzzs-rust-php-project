@@ -128,8 +128,9 @@ impl Vm {
             self.sync_ini(n);
         }
 
-        // 10. Handle counter & object store.
+        // 10. Handle counters & object store.
         crate::object::reset_store();
+        php_runtime::Resource::set_next_handle(self.first_request_resource);
 
         // 11. Extensions and runtime subsystems.
         crate::auto_globals::reset();
@@ -137,6 +138,8 @@ impl Vm {
         crate::lazy::reset();
         crate::typed_refs::reset();
         crate::builtins::dump::reset();
+        crate::builtins::info::reset_request();
+        crate::reflection::misc::reset_request();
         self.clear_interrupt();
         crate::gc::request_startup(self.ini.get_bool("zend.enable_gc"));
         crate::object::set_destructors_enabled(true);

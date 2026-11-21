@@ -28,6 +28,12 @@ fn set_default_dir(r: Option<Resource>) {
     DEFAULT_DIR.with(|d| *d.borrow_mut() = r);
 }
 
+/// Request shutdown: no directory is the default any more (php-src sets
+/// `DIRG(default_dir)` to NULL in `PHP_RINIT(dir)`).
+pub(crate) fn reset_request() {
+    set_default_dir(None);
+}
+
 fn is_default_dir(r: &Resource) -> bool {
     DEFAULT_DIR.with(|d| {
         d.borrow()

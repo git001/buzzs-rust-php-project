@@ -576,6 +576,11 @@ thread_local! {
     static DECLARED: RefCell<DeclarationLog> = RefCell::new(DeclarationLog::default());
 }
 
+/// Request reset: the log of the previous request's declarations goes.
+pub(crate) fn reset_request() {
+    DECLARED.with(|d| *d.borrow_mut() = DeclarationLog::default());
+}
+
 /// Records that the user function `lc_name` was just inserted into the
 /// function table (`do_bind_function()` / early binding), so
 /// `get_defined_functions()` lists it in declaration order. Stale entries

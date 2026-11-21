@@ -1599,9 +1599,6 @@ fn clone_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn ret_zero(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(0))
 }
-fn ret_true(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    Ok(Value::Bool(true))
-}
 fn ret_false(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
     Ok(Value::Bool(false))
 }
@@ -2375,34 +2372,6 @@ fn hrtime(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     ])))
 }
 
-thread_local! {
-    /// Request start, for `gc_status()['application_time']`.
-    static REQUEST_START: std::time::Instant = std::time::Instant::now();
-}
-
-fn gc_status(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
-    let elapsed = REQUEST_START
-        .with(std::time::Instant::elapsed)
-        .as_secs_f64();
-    let mut t = HashTable::new();
-    let mut put = |k: &str, v: Value| {
-        t.insert(ArrayKey::Str(ZStr::from(k)), v);
-    };
-    put("running", Value::Bool(false));
-    put("protected", Value::Bool(false));
-    put("full", Value::Bool(false));
-    put("runs", Value::Int(0));
-    put("collected", Value::Int(0));
-    put("threshold", Value::Int(10001));
-    put("buffer_size", Value::Int(16384));
-    put("roots", Value::Int(0));
-    put("application_time", Value::Float(elapsed));
-    put("collector_time", Value::Float(0.0));
-    put("destructor_time", Value::Float(0.0));
-    put("free_time", Value::Float(0.0));
-    Ok(Value::Array(ZArray::from_table(t)))
-}
-
 fn version_compare(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v1 = s(a, 0);
     let v2 = s(a, 1);
@@ -2770,12 +2739,9 @@ pub(crate) fn register(vm: &mut Vm) {
         "debug_print_backtrace(int $options = 0, int $limit = 0): void",
         debug_print_backtrace,
     );
-    reg(vm, "gc_collect_cycles(): int", ret_zero);
-    reg(vm, "gc_enabled(): bool", ret_true);
-    reg(vm, "gc_enable(): void", ret_null);
-    reg(vm, "gc_disable(): void", ret_null);
+    // gc_collect_cycles/gc_enabled/gc_enable/gc_disable/gc_status: the
+    // collector (crate::gc::register).
     reg(vm, "gc_mem_caches(): int", gc_mem_caches);
-    reg(vm, "gc_status(): array", gc_status);
     reg(
         vm,
         "memory_get_usage(bool $real_usage = false): int",

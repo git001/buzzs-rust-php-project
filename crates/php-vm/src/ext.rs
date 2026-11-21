@@ -809,6 +809,7 @@ impl Vm {
             hook(&mut vm);
         }
         vm.disable_functions();
+        vm.first_request_resource = php_runtime::Resource::next_handle();
         vm
     }
 

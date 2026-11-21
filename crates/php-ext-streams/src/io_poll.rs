@@ -94,6 +94,12 @@ thread_local! {
     static WATCHER_CLASS: RefCell<Option<Rc<Class>>> = const { RefCell::new(None) };
 }
 
+/// Request shutdown: forgets the watchers (the streams they watch are the
+/// request's).
+pub(crate) fn reset_request() {
+    STREAM_WATCHERS.with(|m| m.borrow_mut().clear());
+}
+
 fn watcher_of(o: &Obj) -> Option<Rc<RefCell<WatcherState>>> {
     object::internal::<Rc<RefCell<WatcherState>>, _>(o, |w| Rc::clone(w))
 }

@@ -258,6 +258,7 @@ impl Vm {
             anon_counter: 0,
             depth: 0,
             once_flags: HashSet::new(),
+            first_request_resource: 1,
             tick_functions: Vec::new(),
             interrupt_handlers: Vec::new(),
             tick_hooks: Vec::new(),

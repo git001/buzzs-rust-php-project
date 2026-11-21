@@ -350,6 +350,12 @@ thread_local! {
     static GEN_FUNCS: RefCell<HashMap<u32, Func>> = RefCell::new(HashMap::new());
 }
 
+/// Request reset: object handles start again at 1, so the remembered
+/// generators' functions would be found for other generators.
+pub(crate) fn reset_request() {
+    GEN_FUNCS.with(|m| m.borrow_mut().clear());
+}
+
 fn gen_frame(vm: &Vm, g: &Obj) -> Option<GenFrame> {
     let suspended = object::internal::<crate::generator::GenData, _>(g, |d| {
         if d.state == crate::generator::GenState::Finished {

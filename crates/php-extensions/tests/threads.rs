@@ -83,6 +83,30 @@ $data = ['k' => [1, 2.5, 'x', null, true], 'u' => "\u{e9}"];
 echo json_encode($data), ' ', preg_replace('/(\d)/', '<$1>', 'a1b22'), ' ', sprintf('%.2f|%05d', 3.14159, 42), "\n";
 echo str_pad(dechex(crc32('buzz')), 8, '0', STR_PAD_LEFT), ' ', md5('buzz'), "\n";
 "#,
+    // `DIRG(default_dir)`: readdir() without a handle uses the last
+    // opendir() of this request only.
+    r#"
+try { var_dump(readdir()); } catch (\Throwable $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+$d = opendir('/');
+echo readdir() !== false ? "reads\n" : "empty\n";
+"#,
+    // `FG(default_context)` belongs to the request.
+    r#"
+echo json_encode(stream_context_get_options(stream_context_get_default())), "\n";
+stream_context_set_default(['http' => ['user_agent' => 'left-over']]);
+"#,
+    // Resource numbers start afresh with each request.
+    r#"
+$f = fopen('php://memory', 'r');
+$g = fopen('php://memory', 'r');
+echo (int)$f, ' ', (int)$g, "\n";
+"#,
+    // get_defined_functions() lists this request's functions in order.
+    r#"
+function zz_second() {}
+function zz_first() {}
+echo implode(',', get_defined_functions()['user']), "\n";
+"#,
 ];
 
 /// A `Write` sink shared with the test.
