@@ -1805,63 +1805,18 @@ fn opcache_compile_file(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Ok(Value::Bool(false));
     }
 
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(filename_z.as_bytes()));
-    let realpath = match std::fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(_) => return Ok(Value::Bool(false)),
-    };
-    let src = match std::fs::read(&realpath) {
-        Ok(s) => s,
-        Err(_) => return Ok(Value::Bool(false)),
-    };
-
-    let mtime_sec = std::fs::metadata(&realpath)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let now_sec = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let update_prot = vm.ini_long("opcache.file_update_protection");
-    if update_prot > 0 && (now_sec - mtime_sec) < update_prot {
+    // `persistent_compile_file()`, the path every include takes: the
+    // script is cached unless it is too new (`file_update_protection`), and
+    // compiled either way; it is not executed.
+    let Some(realpath) = php_streams::paths::realpath(filename_z.as_bytes()) else {
         return Ok(Value::Bool(false));
-    }
-
-    let real_z = ZStr::from(realpath.as_os_str().as_bytes());
-    let strip = !vm.ini_bool("opcache.save_comments");
-    let res = vm.with_ignore_other_files(|vm| {
-        vm.with_doc_comments_stripped(strip, |vm| {
-            vm.compile_source_default(Rc::from(src.clone()), &real_z, false, true)
-        })
-    })?;
-    match res {
-        CompileOutcome::Ok(unit) => {
-            let file_cache_dir = get_ini_string(vm, "opcache.file_cache");
-            ensure_system_id(vm);
-            if !file_cache_dir.is_empty() && !vm.ini_bool("opcache.file_cache_read_only") {
-                if let Some(fingerprint) = vm.compile_fingerprint() {
-                    // The write error is not reported here, as before.
-                    let _ = store_in_file_cache(
-                        std::path::Path::new(&file_cache_dir),
-                        &realpath,
-                        mtime_sec,
-                        fingerprint,
-                        &unit,
-                    );
-                }
-            }
-            let file_cache_only = vm.ini_bool("opcache.file_cache_only");
-            if !file_cache_only {
-                let real_str = realpath.to_string_lossy().into_owned();
-                cache_in_memory(vm, &real_str, mtime_sec, src.len() + 1024, now_sec, &unit);
-            }
-            Ok(Value::Bool(true))
-        }
+    };
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(src) = std::fs::read(std::ffi::OsStr::from_bytes(&realpath)) else {
+        return Ok(Value::Bool(false));
+    };
+    match opcache_compile_hook(vm, Rc::from(src), &ZStr::from(realpath.as_slice()), true)? {
+        CompileOutcome::Ok(_) => Ok(Value::Bool(true)),
         CompileOutcome::ParseError(e) => Err(Throw::Exception(e)),
         CompileOutcome::Fatal => Ok(Value::Bool(false)),
     }
