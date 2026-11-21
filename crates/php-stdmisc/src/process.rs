@@ -21,6 +21,7 @@ use php_runtime::{
     ErrorLevel, Resource, RtResult, RuntimeContext, RuntimeError, Value, ZArray, ZStr,
 };
 
+use crate::reaper;
 use crate::sys::{self, FileAction, SpawnError};
 
 /// What the VM's stream layer provides to `proc_open()`.
@@ -463,7 +464,10 @@ pub fn proc_open(
         )?;
     }
     let pid = match result {
-        Ok(pid) => pid,
+        Ok(pid) => {
+            reaper::forget(pid);
+            pid
+        }
         Err(SpawnError::Spawn(e)) => {
             warn(ctx, &format!("posix_spawn() failed: {}", sys::strerror(e)))?;
             return Ok(None);
@@ -581,7 +585,9 @@ impl Process {
     /// The resource destructor (`proc_open_rsrc_dtor`): with `wait`
     /// (`proc_close()`) blocks until the child exits; returns the
     /// `pclose_ret` value (exit code, raw status if signaled, -1 if not
-    /// available). The VM must close the pipe streams first.
+    /// available). The VM must close the pipe streams first. Without
+    /// `wait` a child that still runs is left to run and collected by
+    /// [`reaper`] once it ends, instead of staying a zombie.
     pub fn close(&mut self, wait: bool) -> i64 {
         if self.closed {
             return -1;
@@ -595,6 +601,11 @@ impl Process {
             }
         };
         match r {
+            // Still running, and nobody will wait for it: see `reaper`.
+            Ok((0, _)) => {
+                reaper::adopt(self.pid);
+                -1
+            }
             Ok((p, st)) if p > 0 => {
                 if libc::WIFEXITED(st) {
                     i64::from(libc::WEXITSTATUS(st))

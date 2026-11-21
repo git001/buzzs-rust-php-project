@@ -56,5 +56,6 @@ pub mod misc;
 pub mod net;
 pub mod process;
 pub mod query;
+pub mod reaper;
 pub mod sys;
 pub mod system;

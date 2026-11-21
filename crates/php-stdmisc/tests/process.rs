@@ -133,6 +133,42 @@ fn status_and_exit_code_caching() {
     assert_eq!(proc.close(true), 3);
 }
 
+/// The state letter of `/proc/<pid>/stat` (`S`, `R`, `Z`, ...), `None`
+/// once the pid is gone.
+fn proc_state(pid: i64) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat[stat.rfind(')')? + 1..].trim_start().chars().next()
+}
+
+/// A resource freed without `proc_close()` leaves its child running (as
+/// in php-src) but does not leave it a zombie once it ends: the reaper
+/// collects it. Without the reaper it stays `Z` until this process exits.
+#[test]
+fn unclosed_child_runs_on_and_is_collected() {
+    let mut ctx = CollectingContext::new();
+    let (mut proc, _) = open(
+        CommandArg::Shell(b"exec sleep 1"),
+        &ZArray::new(),
+        None,
+        None,
+        &mut ctx,
+    )
+    .unwrap()
+    .unwrap();
+    let pid = proc.pid();
+    assert_eq!(proc.close(false), -1);
+    assert!(
+        matches!(proc_state(pid), Some(s) if s != 'Z'),
+        "{:?}",
+        proc_state(pid)
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while proc_state(pid).is_some() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(proc_state(pid), None, "pid {pid} not collected");
+}
+
 #[test]
 fn terminate_reports_signal() {
     let mut ctx = CollectingContext::new();

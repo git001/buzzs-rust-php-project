@@ -12,6 +12,7 @@ php-lexer = { path = "../php-lexer" }
 php-hash = { path = "../php-hash" }
 php-random = { path = "../php-random" }
 php-log = { path = "../php-log" }
+php-timer = { path = "../php-timer" }
 libc = "0.2"
 
 [lints]
