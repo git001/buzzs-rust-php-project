@@ -1,7 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The native extensions linked into the module: a subset of the `php`
-//! CLI's (`crates/php-cli/src/extensions.rs`) in the same order, including
+//! CLI's (`crates/php-extensions/src/lib.rs`) in the same order, including
 //! the stream/file functions (needed for `php://input`) and ext/session
 //! (whose `php_rfc1867_callback` the multipart parser reports to), plus
 //! the SAPI's own `apache2handler` module, registered last so its

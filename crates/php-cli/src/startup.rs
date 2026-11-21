@@ -204,9 +204,7 @@ fn builtin_modules() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    crate::extensions::with_all_extensions(|exts| {
-        v.extend(exts.iter().map(|e| e.name().to_string()));
-    });
+    v.extend(php_extensions::ALL.iter().map(|e| e.name().to_string()));
     v
 }
 
@@ -228,9 +226,9 @@ fn is_builtin_fast(value: &str, zend: bool) -> bool {
     {
         return true;
     }
-    crate::extensions::with_all_extensions(|exts| {
-        exts.iter().any(|e| e.name().eq_ignore_ascii_case(base))
-    })
+    php_extensions::ALL
+        .iter()
+        .any(|e| e.name().eq_ignore_ascii_case(base))
 }
 
 /// Whether an `extension=`/`zend_extension=` value names something

@@ -22,9 +22,6 @@
 mod config;
 mod env;
 #[allow(dead_code)]
-#[path = "../extensions.rs"]
-mod extensions;
-#[allow(dead_code)]
 #[path = "../getopt.rs"]
 mod getopt;
 #[allow(dead_code)]
@@ -549,7 +546,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         port: 0,
         router: None,
         ini: ini.clone(),
-        extensions: extensions::all,
+        extensions: php_extensions::all,
     };
     let prepared = new_prepared_vm(&cfg, ini);
     let (_, vm) = php_cli_server::sapi::run_request(prepared, &ctx, &server_cfg, false);
@@ -679,9 +676,9 @@ fn php_ini_scanned_files(_vm: &mut Vm, _a: &mut Args) -> VmResult<Value> {
 /// context's output.
 fn new_prepared_vm(cfg: &Config, ini: Vec<(String, String)>) -> PreparedVm {
     let opts = VmOptions { ini };
-    let mut exts = extensions::all();
-    exts.push(Box::new(CliServerModule { cgi: true }));
-    let refs: Vec<&dyn Extension> = exts.iter().map(AsRef::as_ref).collect();
+    let module = CliServerModule { cgi: true };
+    let mut refs: Vec<&dyn Extension> = php_extensions::ALL.to_vec();
+    refs.push(&module);
     let slot = Rc::new(RefCell::new(None));
     let mut vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
     configure(&mut vm, cfg);
@@ -706,9 +703,9 @@ fn configure(vm: &mut Vm, cfg: &Config) {
 fn new_vm(cfg: &Config) -> Vm {
     let opts = VmOptions { ini: sapi_ini(cfg) };
     let stdout: Box<dyn Write> = Box::new(std::io::stdout());
-    let mut exts = extensions::all();
-    exts.push(Box::new(CliServerModule { cgi: true }));
-    let refs: Vec<&dyn Extension> = exts.iter().map(AsRef::as_ref).collect();
+    let module = CliServerModule { cgi: true };
+    let mut refs: Vec<&dyn Extension> = php_extensions::ALL.to_vec();
+    refs.push(&module);
     let mut vm = Vm::with_extensions(&opts, stdout, &refs);
     configure(&mut vm, cfg);
     vm

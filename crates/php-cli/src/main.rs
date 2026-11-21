@@ -3,7 +3,6 @@
 //! The `php` command line interface (`sapi/cli/php_cli.c`).
 
 mod config;
-mod extensions;
 mod getopt;
 mod memcap;
 mod preload;
@@ -375,7 +374,7 @@ fn err(bytes: &[u8]) {
 fn do_php_cli(argv: &[Vec<u8>]) -> i32 {
     // `-S <addr>:<port> [-t docroot] [router]`: the built-in web server.
     if let Some(status) =
-        php_cli_server::maybe_run(argv.get(1..).unwrap_or_default(), extensions::all)
+        php_cli_server::maybe_run(argv.get(1..).unwrap_or_default(), php_extensions::all)
     {
         return status;
     }
@@ -727,7 +726,7 @@ fn new_vm(cfg: &Config) -> Vm {
     };
     let stdout: Box<dyn Write> =
         Box::new(std::io::BufWriter::with_capacity(1 << 16, sapi::RawStdout));
-    let mut vm = extensions::with_all_extensions(|refs| Vm::with_extensions(&opts, stdout, refs));
+    let mut vm = Vm::with_extensions(&opts, stdout, php_extensions::ALL);
     startup::report_module_diagnostics(cfg, &std::mem::take(&mut vm.module_diagnostics));
     vm.set_configuration(cfg.configuration.values.clone());
     vm.set_native_stack_size(usize::try_from(VM_STACK).unwrap_or(usize::MAX));

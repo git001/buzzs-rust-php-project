@@ -25,9 +25,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// `E_WARNING`.
 const E_WARNING: i64 = 2;
 
-/// Factory for the extensions linked into the binary (a fresh set per
-/// request, as each request gets a fresh VM).
-pub type ExtensionFactory = fn() -> Vec<Box<dyn Extension>>;
+/// The extensions linked into the binary (stateless, so one set serves
+/// every request's VM).
+pub type ExtensionFactory = fn() -> &'static [&'static dyn Extension];
 
 /// The server-wide configuration a request needs.
 #[derive(Clone)]
@@ -855,9 +855,9 @@ pub fn prepare_vm(cfg: &ServerConfig) -> PreparedVm {
     let opts = VmOptions {
         ini: cfg.ini.clone(),
     };
-    let mut exts = (cfg.extensions)();
-    exts.push(Box::new(CliServerModule::default()));
-    let refs: Vec<&dyn Extension> = exts.iter().map(AsRef::as_ref).collect();
+    let module = CliServerModule::default();
+    let mut refs: Vec<&dyn Extension> = (cfg.extensions)().to_vec();
+    refs.push(&module);
     let slot = Rc::new(RefCell::new(None));
     let vm = Vm::with_extensions(&opts, Box::new(ServerOutput(slot.clone())), &refs);
     PreparedVm { vm, slot }

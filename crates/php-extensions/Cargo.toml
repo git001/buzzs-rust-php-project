@@ -1,0 +1,58 @@
+[package]
+name = "php-extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-vm = { path = "../php-vm" }
+php-ext-stdmisc = { path = "../php-ext-stdmisc" }
+php-ext-stdstr = { path = "../php-ext-stdstr" }
+php-ext-streams = { path = "../php-ext-streams" }
+php-ext-stdarr = { path = "../php-ext-stdarr" }
+php-ext-pcre = { path = "../php-ext-pcre" }
+php-ext-json = { path = "../php-ext-json" }
+php-ext-spl = { path = "../php-ext-spl" }
+php-ext-hash = { path = "../php-ext-hash" }
+php-ext-random = { path = "../php-ext-random" }
+php-ext-mbstring = { path = "../php-ext-mbstring" }
+php-ext-filter = { path = "../php-ext-filter" }
+php-ext-pdo = { path = "../php-ext-pdo" }
+php-ext-date = { path = "../php-ext-date" }
+php-ext-session = { path = "../php-ext-session" }
+php-ext-openssl = { path = "../php-ext-openssl" }
+php-ext-sodium = { path = "../php-ext-sodium" }
+php-ext-fileinfo = { path = "../php-ext-fileinfo" }
+php-ext-posix = { path = "../php-ext-posix" }
+php-ext-iconv = { path = "../php-ext-iconv" }
+php-ext-intl = { path = "../php-ext-intl" }
+php-ext-exif = { path = "../php-ext-exif" }
+php-ext-uri = { path = "../php-ext-uri" }
+php-ext-zlib = { path = "../php-ext-zlib" }
+php-ext-zip = { path = "../php-ext-zip" }
+php-ext-ctype = { path = "../php-ext-ctype" }
+php-ext-phar = { path = "../php-ext-phar" }
+php-ext-gettext = { path = "../php-ext-gettext" }
+php-ext-sysv = { path = "../php-ext-sysv" }
+php-ext-pcntl = { path = "../php-ext-pcntl" }
+php-ext-sockets = { path = "../php-ext-sockets" }
+php-ext-calendar = { path = "../php-ext-calendar" }
+php-ext-bcmath = { path = "../php-ext-bcmath" }
+php-ext-mysqli = { path = "../php-ext-mysqli" }
+php-ext-gmp = { path = "../php-ext-gmp" }
+php-ext-xml = { path = "../php-ext-xml" }
+php-ext-soap = { path = "../php-ext-soap" }
+php-ext-xmlreader = { path = "../php-ext-xmlreader" }
+php-ext-simplexml = { path = "../php-ext-simplexml" }
+php-ext-dom = { path = "../php-ext-dom" }
+php-ext-xsl = { path = "../php-ext-xsl" }
+php-ext-tokenizer = { path = "../php-ext-tokenizer" }
+php-ext-ftp = { path = "../php-ext-ftp" }
+php-ext-curl = { path = "../php-ext-curl" }
+php-ext-gd = { path = "../php-ext-gd" }
+php-ext-zendtest = { path = "../php-ext-zendtest", features = ["observer"] }
+php-ext-opcache = { path = "../php-ext-opcache" }
+
+[lints]
+workspace = true

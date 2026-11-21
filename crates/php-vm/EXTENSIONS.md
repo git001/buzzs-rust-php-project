@@ -27,12 +27,12 @@ workspace = true
 ```
 
 The crate must be listed in the workspace `members` (ask the coordinator)
-and then linked into the CLI by adding **one line** to
-`crates/php-cli/src/extensions.rs` plus the dependency in
-`crates/php-cli/Cargo.toml`:
+and then linked into the CLI, CGI and servers by adding **one line** to
+`crates/php-extensions/src/lib.rs` plus the dependency in
+`crates/php-extensions/Cargo.toml`:
 
 ```rust
-Box::new(php_ext_ctype::Ctype),
+&php_ext_ctype::Ctype,
 ```
 
 ## 2. The extension

@@ -6,6 +6,7 @@ members = [
     "crates/php-runtime",
     "crates/php-vm",
     "crates/php-cli",
+    "crates/php-extensions",
     "crates/phpt-runner",
     "crates/php-support",
     "crates/php-sapi",

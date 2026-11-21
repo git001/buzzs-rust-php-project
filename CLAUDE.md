@@ -45,7 +45,7 @@ The workspace has ~100 crates in strict layers:
    - `php-<name>` holds the pure logic. It is VM-independent and has its own oracle-driven test suite.
    - `php-ext-<name>` is a thin binding through `php_vm::ext` (`Extension`, `ModuleBuilder`, `ClassBuilder`, `Args`/ZPP). Native functions are registered from PHP stub signatures. The library calls back into the VM through a host trait that the ext crate implements; `crates/php-ext-json/src/host.rs` is the reference example, including how VM throws and runtime errors convert both ways.
    - Per-request extension state lives in thread-locals reset at request shutdown.
-   - `crates/php-cli/src/extensions.rs` lists every extension; `startup.rs` registers them. A new ext crate is not live until it is added there.
+   - `crates/php-extensions/src/lib.rs` lists every extension `php`, `php-cgi`, `php -S` and the servers load (`crates/php-sapi-apache2/src/extensions.rs` a subset); `Vm::with_extensions` registers them. A new ext crate is not live until it is added there.
 4. **`phpt-runner`** ports `run-tests.php`: all `.phpt` sections, parallel scheduling, baseline and scope handling.
 
 Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/zend_hash.c`); match that C source's observable behaviour.
