@@ -36,7 +36,8 @@ pub enum Unit {
 
 impl Unit {
     /// Nanoseconds per unit.
-    const fn nanos(self) -> u128 {
+    #[must_use]
+    pub const fn nanos(self) -> u128 {
         match self {
             Unit::Micros => 1_000,
             Unit::Millis => 1_000_000,
@@ -61,7 +62,8 @@ impl Unit {
     }
 
     /// The unit a suffix names (ASCII case-insensitive).
-    fn from_suffix(s: &str) -> Option<Unit> {
+    #[must_use]
+    pub fn from_suffix(s: &str) -> Option<Unit> {
         Some(match s.to_ascii_lowercase().as_str() {
             "us" | "µs" => Unit::Micros,
             "ms" => Unit::Millis,

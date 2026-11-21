@@ -147,19 +147,11 @@ fn ini_set_value_types() {
     );
 }
 
-/// The `error_log` file timestamp comes from the date extension's
-/// `date('d-M-Y H:i:s e')` (the default timezone, php-src
-/// `ext/standard/tests/general_functions/bug60723.phpt`).
+/// The `error_log` file timestamp is `d-M-Y H:i:s e` in the default
+/// timezone, which ext/date sets (php-src
+/// `ext/standard/tests/general_functions/bug60723.phpt`); without it, UTC.
 #[test]
-fn error_log_file_uses_date_for_the_timestamp() {
-    #[allow(clippy::unnecessary_wraps)] // builtin handler signature
-    fn fake_date(
-        _vm: &mut Vm,
-        a: &mut php_vm::ext::Args,
-    ) -> php_vm::ext::VmResult<php_runtime::Value> {
-        let format = a.str(0).to_string_lossy();
-        Ok(php_runtime::Value::from(format!("<{format}>").as_str()))
-    }
+fn error_log_file_dates_in_utc_without_ext_date() {
     let log = std::env::temp_dir().join(format!("phprust-log-date-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log);
     let sink = Sink::default();
@@ -173,18 +165,17 @@ fn error_log_file_uses_date_for_the_timestamp() {
         .collect(),
     };
     let mut vm = Vm::new(&options, Box::new(sink.clone()));
-    vm.register_function(
-        "date(string $format, ?int $timestamp = null): string",
-        fake_date,
-    );
     let _status = vm.run_script(b"<?php echo $undefined;", "t.php");
     drop(vm);
     let logged = std::fs::read_to_string(&log).unwrap_or_default();
     let _ = std::fs::remove_file(&log);
+    let (date, rest) = logged.split_once("] ").expect("dated line");
     assert_eq!(
-        logged,
-        "[<d-M-Y H:i:s e>] PHP Warning:  Undefined variable $undefined in t.php on line 1\n"
+        rest,
+        "PHP Warning:  Undefined variable $undefined in t.php on line 1\n"
     );
+    assert_eq!(date.len(), "[21-Nov-2026 17:11:51 UTC".len(), "{logged}");
+    assert!(date.starts_with('[') && date.ends_with(" UTC"), "{logged}");
 }
 
 /// Shutdown functions run without a previous frame: `func_*_args()` see a

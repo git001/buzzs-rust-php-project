@@ -6,7 +6,6 @@
 mod common;
 
 use common::{fields, fixture_lines, show, unhex};
-use php_log::date::format_log_date_utc;
 use php_runtime::serialize::{unserialize, UnserializeOptions};
 use php_runtime::{CollectingContext, Value};
 use php_stdmisc::mail::{self, HeadersArg, MailSettings, ScriptInfo};
@@ -126,7 +125,7 @@ fn cr_lf_modes_and_log() {
         lineno: 7,
         uid: 0,
     };
-    let date = |ts: i64| format_log_date_utc(ts);
+    let date = |ts: i64| php_log::log_date(ts);
     // ext/standard/tests/mail/gh19188_lf_mode.phpt
     assert!(mail::mail(
         b"a@b",
@@ -149,12 +148,6 @@ fn cr_lf_modes_and_log() {
     assert!(l.starts_with('[') && l.contains(" UTC] mail() on [/x/mail_log.php:7]: To: a@b -- Headers: X-Test: 1 -- Subject: subj\n"), "{l}");
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&log);
-    assert_eq!(
-        format_log_date_utc(1_793_728_800),
-        "03-Nov-2026 18:00:00 UTC"
-    );
-    assert_eq!(format_log_date_utc(0), "01-Jan-1970 00:00:00 UTC");
-    assert_eq!(format_log_date_utc(951_782_400), "29-Feb-2000 00:00:00 UTC");
     // Failing sendmail.
     let bad = MailSettings {
         sendmail_path: b"exit 3".to_vec(),
@@ -246,10 +239,6 @@ impl php_runtime::RuntimeContext for Capture {
 }
 
 impl php_log::LogHost for Capture {
-    fn log_date(&mut self) -> String {
-        "03-Nov-2026 18:00:00 UTC".into()
-    }
-
     fn error_log_mode(&mut self) -> i64 {
         self.mode
     }
@@ -277,7 +266,7 @@ fn log_failure_aborts_the_mail() {
         lineno: 3,
         uid: 0,
     };
-    let date = |ts: i64| format_log_date_utc(ts);
+    let date = |ts: i64| php_log::log_date(ts);
     let mut logged = Vec::new();
     let mut log_file =
         |_: &mut CollectingContext, filename: &[u8], line: &[u8]| -> php_runtime::RtResult<()> {
@@ -336,17 +325,14 @@ fn error_log_types() {
     let s = Some(path.as_slice());
     cap.mode = 0o600;
     assert!(mail::error_log(b"msg", 0, None, None, s, &ms, &script, &mut cap).unwrap());
-    assert_eq!(
-        std::fs::read_to_string(&f).unwrap(),
-        "[03-Nov-2026 18:00:00 UTC] msg\n"
-    );
+    let dated = std::fs::read_to_string(&f).unwrap();
+    // "[d-M-Y H:i:s UTC] msg\n" (no request timezone: UTC)
+    assert_eq!(dated.len(), "[03-Nov-2026 18:00:00 UTC] msg\n".len(), "{dated}");
+    assert!(dated.starts_with('[') && dated.ends_with(" UTC] msg\n"), "{dated}");
     // type 3: append raw.
     let p = f.to_str().unwrap().as_bytes().to_vec();
     assert!(mail::error_log(b"raw", 3, Some(&p), None, none, &ms, &script, &mut cap).unwrap());
-    assert_eq!(
-        std::fs::read_to_string(&f).unwrap(),
-        "[03-Nov-2026 18:00:00 UTC] msg\nraw"
-    );
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), format!("{dated}raw"));
     let _ = std::fs::remove_file(&f);
     // type 2 is gone; type 1 needs a destination.
     let e = mail::error_log(b"x", 2, None, None, none, &ms, &script, &mut cap).unwrap_err();

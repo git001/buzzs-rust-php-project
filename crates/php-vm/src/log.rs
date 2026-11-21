@@ -5,9 +5,6 @@
 //! Where a message goes is decided in one place,
 //! [`php_log::php_log_err_with_severity`].
 
-use php_runtime::{Value, ZStr};
-
-use crate::func::Func;
 use crate::Vm;
 
 impl Vm {
@@ -27,20 +24,11 @@ impl Vm {
         self.ini.get("error_log").map(<[u8]>::to_vec)
     }
 
-    /// `php_format_date("d-M-Y H:i:s e", ts, 1)`: the date extension's
-    /// `date()` in the default timezone, or UTC without it.
-    #[cold]
-    pub fn log_date(&mut self, ts: i64) -> String {
-        let date = ZStr::from("date");
-        if matches!(self.functions.get(&date), Some(Func::Builtin(_))) {
-            if let Ok(Value::Str(s)) = self.call_value(
-                &Value::Str(date),
-                vec![Value::from("d-M-Y H:i:s e"), Value::Int(ts)],
-            ) {
-                return s.to_string_lossy();
-            }
-        }
-        php_log::date::format_log_date_utc(ts)
+    /// `php_format_date("d-M-Y H:i:s e", ts, 1)`: `ts` as a log date in
+    /// the default timezone, or UTC without ext/date.
+    #[must_use]
+    pub fn log_date(&self, ts: i64) -> String {
+        php_log::log_date(ts)
     }
 
     /// Installs the running SAPI's callbacks (`sapi_module`).
@@ -57,10 +45,6 @@ impl Vm {
 }
 
 impl php_log::LogHost for Vm {
-    fn log_date(&mut self) -> String {
-        Vm::log_date(self, php_support::time::now())
-    }
-
     fn error_log_mode(&mut self) -> i64 {
         self.ini.get_long("error_log_mode")
     }

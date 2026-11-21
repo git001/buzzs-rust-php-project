@@ -1141,6 +1141,9 @@ name = "php-log"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-date",
+ "php-observability",
+ "php-streams",
  "php-support",
 ]
 
@@ -1162,6 +1165,15 @@ dependencies = [
  "openssl",
  "php-hash",
  "php-runtime",
+]
+
+[[package]]
+name = "php-observability"
+version = "0.1.0"
+dependencies = [
+ "php-date",
+ "php-support",
+ "php-timer",
 ]
 
 [[package]]

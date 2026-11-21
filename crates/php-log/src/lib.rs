@@ -10,6 +10,12 @@
 //!   `syslog.filter`);
 //! * a file name → `"[d-M-Y H:i:s e] message\n"` appended to that file,
 //!   created with `error_log_mode`;
+//!
+//! Every line is a [`LogEvent`] rendered through a [`Format`]
+//! (`php-observability`, FPM's `access.format` language): the file with
+//! [`constants::PHP_ERROR_LOG_FMT`], the SAPI logger with
+//! [`constants::PHP_SAPI_LOG_FMT`], which give php-src's lines byte for
+//! byte.
 //! * unset, or a file that cannot be opened → the SAPI's own logger
 //!   (`sapi_module.log_message`): stderr in the CLI, the error log in
 //!   Apache, the console of the built-in server, …
@@ -20,7 +26,6 @@
 //! destination needs (asked for only then, as php-src reads them), the
 //! date in the request's timezone and the SAPI logger.
 
-pub mod date;
 pub mod syslog;
 
 use std::borrow::Cow;
@@ -28,6 +33,9 @@ use std::cell::Cell;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
+use std::sync::OnceLock;
+
+use php_observability::{constants, Format, Level, LogEvent, LogKind, RequestFields};
 
 pub use syslog::{SyslogFilter, SyslogSettings};
 
@@ -67,10 +75,16 @@ pub fn file_mode(error_log_mode: i64) -> u32 {
 
 /// What the caller of [`php_log_err_with_severity`] provides.
 pub trait LogHost {
-    /// `php_format_date("d-M-Y H:i:s e", time(), localtime)`: the date in
-    /// the default timezone while a request runs, else in UTC.
+    /// `php_format_date("d-M-Y H:i:s e", time(), localtime)`: now as a
+    /// log date ([`log_date`]).
     fn log_date(&mut self) -> String {
-        date::format_log_date_utc(php_support::time::now())
+        log_date(php_support::time::now())
+    }
+
+    /// The request being served, for the request fields of log formats
+    /// (`None`: no request, the fields print as `-`).
+    fn request_fields(&self) -> Option<&dyn RequestFields> {
+        None
     }
 
     /// `error_log_mode` (for a log file).
@@ -92,6 +106,29 @@ thread_local! {
     static IN_ERROR_LOG: Cell<bool> = const { Cell::new(false) };
 }
 
+/// A named format, parsed once.
+fn named(cell: &'static OnceLock<Format>, src: &'static str) -> &'static Format {
+    cell.get_or_init(|| Format::parse(src.as_bytes(), "error_log").expect("built-in format"))
+}
+
+/// `ts` as a log date (`d-M-Y H:i:s e`, [`constants::PHP_LOG_DATE_FMT`])
+/// in the thread's default timezone (UTC until ext/date sets one).
+#[must_use]
+pub fn log_date(ts: i64) -> String {
+    static FORMAT: OnceLock<Format> = OnceLock::new();
+    let mut event = LogEvent::new(LogKind::Error, None);
+    event.time = ts;
+    let line = named(&FORMAT, constants::PHP_LOG_DATE_FMT)
+        .render(&event, None, None, None)
+        .line;
+    String::from_utf8_lossy(&line).into_owned()
+}
+
+/// Renders `event` with `format` for `host`'s request.
+fn render(format: &Format, event: &LogEvent<'_>, host: &mut dyn LogHost) -> Vec<u8> {
+    format.render(event, host.request_fields(), None, None).line
+}
+
 /// `php_log_err_with_severity(log_message, syslog_type_int)`: logs
 /// `message` (cut at a NUL, as the C string is) to `error_log` (`None` =
 /// unset) or, failing that, to the SAPI logger. A message logged while
@@ -106,21 +143,34 @@ pub fn php_log_err_with_severity(
         return;
     }
     let message = message.split(|&c| c == 0).next().unwrap_or_default();
+    let mut event = LogEvent::new(LogKind::Error, Some(message));
+    event.level = Level::from_syslog(severity);
     match Destination::of(error_log) {
         Destination::Syslog => syslog::php_syslog(severity, message, &host.syslog_settings()),
         Destination::File(path) => {
             let mode = file_mode(host.error_log_mode());
-            if !append_to_file(path, mode, message, host) {
-                host.sapi_log_message(message, severity);
+            if !append_to_file(path, mode, &event, host) {
+                sapi_log(&event, severity, host);
             }
         }
-        Destination::Sapi => host.sapi_log_message(message, severity),
+        Destination::Sapi => sapi_log(&event, severity, host),
     }
     IN_ERROR_LOG.with(|c| c.set(false));
 }
 
-/// Appends `"[date] message\n"` to `path`; `false` if it cannot be opened.
-fn append_to_file(path: &[u8], mode: u32, message: &[u8], host: &mut dyn LogHost) -> bool {
+/// Hands `event`, rendered with [`constants::PHP_SAPI_LOG_FMT`], to the
+/// SAPI logger.
+fn sapi_log(event: &LogEvent<'_>, severity: i32, host: &mut dyn LogHost) {
+    static FORMAT: OnceLock<Format> = OnceLock::new();
+    let line = render(named(&FORMAT, constants::PHP_SAPI_LOG_FMT), event, host);
+    host.sapi_log_message(&line, severity);
+}
+
+/// Appends `event`, rendered with [`constants::PHP_ERROR_LOG_FMT`]
+/// (`"[date] message"`), and a newline to `path`; `false` if it cannot be
+/// opened.
+fn append_to_file(path: &[u8], mode: u32, event: &LogEvent<'_>, host: &mut dyn LogHost) -> bool {
+    static FORMAT: OnceLock<Format> = OnceLock::new();
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -129,12 +179,7 @@ fn append_to_file(path: &[u8], mode: u32, message: &[u8], host: &mut dyn LogHost
     else {
         return false;
     };
-    let date = host.log_date();
-    let mut line = Vec::with_capacity(date.len() + message.len() + 4);
-    line.push(b'[');
-    line.extend_from_slice(date.as_bytes());
-    line.extend_from_slice(b"] ");
-    line.extend_from_slice(message);
+    let mut line = render(named(&FORMAT, constants::PHP_ERROR_LOG_FMT), event, host);
     line.push(b'\n');
     // One write, so that lines of concurrent writers stay whole (O_APPEND).
     let _ = f.write_all(&line);
@@ -191,10 +236,6 @@ mod tests {
     }
 
     impl LogHost for Host {
-        fn log_date(&mut self) -> String {
-            "21-Nov-2026 10:00:00 Europe/Vienna".into()
-        }
-
         fn error_log_mode(&mut self) -> i64 {
             self.mode.unwrap_or(0o644)
         }
@@ -204,10 +245,30 @@ mod tests {
         }
     }
 
+    /// A fresh path in the temporary directory (the file itself removed).
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("php-log-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_file(&dir);
-        dir
+        let dir = php_streams::temp::temp_dir();
+        let path = php_streams::temp::tempnam(&dir, name.as_bytes()).expect("tempnam");
+        let path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&path));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn log_dates() {
+        std::thread::spawn(|| {
+            assert_eq!(log_date(0), "01-Jan-1970 00:00:00 UTC");
+            assert_eq!(log_date(951_782_400), "29-Feb-2000 00:00:00 UTC");
+            assert_eq!(log_date(1_793_728_800), "03-Nov-2026 18:00:00 UTC");
+            assert_eq!(log_date(-1), "31-Dec-1969 23:59:59 UTC");
+            php_date::tz::set_default_configured(php_date::tz::get("Europe/Vienna"));
+            assert_eq!(
+                log_date(1_793_728_800),
+                "03-Nov-2026 19:00:00 Europe/Vienna"
+            );
+        })
+        .join()
+        .expect("thread");
     }
 
     #[test]
@@ -231,6 +292,7 @@ mod tests {
     #[test]
     fn files_get_dated_lines_with_the_configured_mode() {
         use std::os::unix::fs::PermissionsExt;
+        php_date::tz::set_default_configured(php_date::tz::get("Europe/Vienna"));
         let path = scratch("file.log");
         let error_log = Some(path.as_os_str().as_bytes());
         let mut h = Host {
@@ -242,10 +304,22 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         let _ = std::fs::remove_file(&path);
-        assert_eq!(
-            text,
-            "[21-Nov-2026 10:00:00 Europe/Vienna] one\n[21-Nov-2026 10:00:00 Europe/Vienna] two\n"
-        );
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        for (line, message) in lines.iter().zip(["one", "two"]) {
+            // `[d-M-Y H:i:s e] message`
+            let (date, rest) = line.split_once("] ").expect("date");
+            assert_eq!(rest, message);
+            assert_eq!(
+                date.len(),
+                "[21-Nov-2026 10:00:00 Europe/Vienna".len(),
+                "{line}"
+            );
+            assert!(
+                date.starts_with('[') && date.ends_with(" Europe/Vienna"),
+                "{line}"
+            );
+        }
         assert_eq!(mode, 0o600);
         assert_eq!(h.sapi, Vec::<(Vec<u8>, i32)>::new());
     }

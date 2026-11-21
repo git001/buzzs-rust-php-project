@@ -1,0 +1,15 @@
+[package]
+name = "php-observability"
+description = "Log events and FPM-style log formats (access.format, fpm_log.c) for every log of the engine and the SAPIs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+php-date = { path = "../php-date" }
+php-support = { path = "../php-support" }
+php-timer = { path = "../php-timer" }
+
+[lints]
+workspace = true

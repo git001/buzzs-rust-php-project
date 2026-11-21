@@ -8,7 +8,12 @@ rust-version.workspace = true
 
 [dependencies]
 php-support = { path = "../php-support" }
+php-observability = { path = "../php-observability" }
 libc = "0.2"
+
+[dev-dependencies]
+php-streams = { path = "../php-streams" }
+php-date = { path = "../php-date" }
 
 [lints]
 workspace = true

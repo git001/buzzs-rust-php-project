@@ -12,6 +12,7 @@ members = [
     "crates/php-support",
     "crates/php-sapi",
     "crates/php-log",
+    "crates/php-observability",
     "crates/php-sapi-input",
     "crates/php-hash",
     "crates/php-random",
