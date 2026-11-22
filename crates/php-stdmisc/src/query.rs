@@ -311,22 +311,11 @@ pub fn http_build_query(
 
 // ---------------------------------------------------------------- variables
 
-/// `ZEND_HAS_OOM()` as the embedding SAPI reports it (see
-/// [`set_oom_pending_hook`]); without a hook nothing is ever pending.
-static OOM_PENDING: std::sync::OnceLock<fn() -> bool> = std::sync::OnceLock::new();
-
-/// Installs the `ZEND_HAS_OOM()` check of the registration loops: the
-/// SAPI that links the `memory_limit` allocator passes its "a violation is
-/// pending" query, so that parsing a request stops as soon as the soft
-/// limit is crossed (`main/php_variables.c`), long before the hard one.
-/// Only the first call takes effect.
-pub fn set_oom_pending_hook(hook: fn() -> bool) {
-    let _ = OOM_PENDING.set(hook);
-}
-
-/// `ZEND_HAS_OOM()`.
+/// `ZEND_HAS_OOM()` of the registration loops: parsing a request stops as
+/// soon as the soft limit is crossed (`main/php_variables.c`), long before
+/// the hard one.
 fn oom_pending() -> bool {
-    OOM_PENDING.get().is_some_and(|pending| pending())
+    php_memlimit::is_pending()
 }
 
 /// Settings for variable registration (`PG(...)` INI values).

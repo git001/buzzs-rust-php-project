@@ -163,9 +163,10 @@ let out = input.repeat(mult);
   `try_reserve_n` counts as `usize::MAX` bytes.
 - Use PHP's own size formula (e.g. `HT_PACKED_SIZE_EX`, `zend_string` header
   24 + len + 1) where tests print exact numbers; most use `%d`.
-- For Rust collections, `php_memlimit::fallible(|| vec.try_reserve_exact(n))`
-  makes allocations over the soft limit return `Err` (and records the
-  violation). Only `try_*` APIs may run inside `fallible`.
+- For Rust collections, `php_memlimit::TryGrow` (`vec.try_grow(n)`,
+  `try_grow_exact(n)`) checks the growth first and returns `Err(OverLimit)`
+  (recorded) instead of growing. In a builtin, `?` turns it into the fatal,
+  which the VM reports as the error leaves the builtin.
 - Incremental builders (json_encode, preg_replace, implode, unserialize…)
   need nothing: the allocator records the violation as soon as the buffer
   crosses the limit and the VM raises it after the builtin returns. Call

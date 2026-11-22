@@ -67,7 +67,7 @@ fn raise(vm: &mut Vm, a: &Args, d: Diagnostic) -> VmResult<()> {
         Diagnostic::ValueError(m) => Err(vm.throw("ValueError", &format!("{}(): {m}", fname(a)))),
         // A fallible allocation recorded the violation: the VM raises the
         // delayed fatal right after this call.
-        Diagnostic::OutOfMemory { .. } if php_vm::oom_pending() => Ok(()),
+        Diagnostic::OutOfMemory { .. } if php_memlimit::is_pending() => Ok(()),
         Diagnostic::OutOfMemory { requested } => {
             let limit = ini::configured_memory_limit(vm);
             Err(vm.fatal(&format!(
@@ -91,7 +91,7 @@ fn finish<T>(
     // `RETURN_OOM()`: an allocation crossed `memory_limit` and the library
     // stopped early (`ZEND_HAS_OOM()`); the VM raises the delayed fatal
     // right after this call, so the partial result is dropped unbuilt.
-    if php_vm::oom_pending() {
+    if php_memlimit::is_pending() {
         return Ok(Value::Null);
     }
     if let Some(d) = out.diagnostic {

@@ -3562,23 +3562,6 @@ impl Vm {
     }
 }
 
-/// `ZEND_HAS_OOM()`: a delayed `memory_limit` fatal is pending. Builtins
-/// that loop over script-sized input check it to stop early (the VM raises
-/// the fatal right after the call returns).
-#[must_use]
-#[inline]
-pub fn oom_pending() -> bool {
-    php_memlimit::is_pending()
-}
-
-/// A fallible allocation of `bytes` (`safe_femalloc(..., fallible)`):
-/// `false` when it would exceed `memory_limit`, in which case the violation
-/// is recorded and the caller returns without allocating (`RETURN_OOM()`).
-#[must_use]
-pub fn try_reserve_memory(bytes: usize) -> bool {
-    php_memlimit::try_reserve(bytes).is_ok()
-}
-
 impl Vm {
     /// Whether the native stack used since the first execution exceeds the
     /// usable budget (`zend.max_allowed_stack_size` minus

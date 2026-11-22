@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-memlimit = { path = "../php-memlimit" }
 php-runtime = { path = "../php-runtime" }
 php-lexer = { path = "../php-lexer" }
 php-hash = { path = "../php-hash" }

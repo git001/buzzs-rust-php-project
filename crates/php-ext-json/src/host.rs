@@ -187,10 +187,6 @@ impl JsonHost for VmJsonHost<'_> {
         self.vm.native_stack_exhausted()
     }
 
-    fn json_oom_pending(&mut self) -> bool {
-        php_vm::oom_pending()
-    }
-
     fn json_exception(&mut self, message: &str, code: i64) -> RuntimeError {
         match self
             .vm

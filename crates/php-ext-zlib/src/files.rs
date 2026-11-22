@@ -105,7 +105,7 @@ fn readgzfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut count = 0usize;
     // `php_stream_passthru()`: PHPWRITE each chunk as it is read.
     while let Ok(n @ 1..) = bridge::run_stream(vm, || s.read(&mut buf))? {
-        if php_vm::oom_pending() {
+        if php_memlimit::is_pending() {
             break;
         }
         vm.output(&buf[..n]);
@@ -123,7 +123,7 @@ fn gzpassthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut count = 0usize;
     while let Some(Ok(n @ 1..)) = res::with_stream(vm, &cell, |s| s.read(&mut buf))? {
-        if php_vm::oom_pending() {
+        if php_memlimit::is_pending() {
             break;
         }
         vm.output(&buf[..n]);

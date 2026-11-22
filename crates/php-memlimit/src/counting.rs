@@ -106,35 +106,16 @@ const SLOT_FREE: usize = 0;
 const SLOT_CLAIMED: usize = usize::MAX;
 
 thread_local! {
-    /// Nesting depth of [`crate::fallible`] on this thread. Const-initialised
-    /// and without a destructor, so reading it from inside the allocator
-    /// never allocates.
-    static FALLIBLE_DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// A per-thread slot whose address is the thread's [`thread_token`].
+    /// Const-initialised and without a destructor, so reading it from
+    /// inside the allocator never allocates.
+    static TOKEN: Cell<u8> = const { Cell::new(0) };
     /// Nesting depth of [`crate::uncounted`] on this thread (same
-    /// constraints as `FALLIBLE_DEPTH`).
+    /// constraints as `TOKEN`).
     static UNCOUNTED_DEPTH: Cell<u32> = const { Cell::new(0) };
     /// Whether the [heap observer](CountingAlloc::set_observer) is running
     /// on this thread (its own allocations are not reported).
     static IN_OBSERVER: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Runs `f` with soft-limit-exceeding allocations made *fallible*: instead
-/// of being granted (and flagged), they return null, which Rust's
-/// `try_reserve`/`try_with_capacity` APIs turn into an `Err`. The violation
-/// is still recorded, exactly like PHP's `zend_*_falloc` + `RETURN_OOM()`.
-///
-/// Only use fallible collection APIs inside `f`: any other allocation that
-/// fails there aborts the process (`handle_alloc_error`).
-pub fn fallible<R>(f: impl FnOnce() -> R) -> R {
-    struct Guard;
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            FALLIBLE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
-        }
-    }
-    FALLIBLE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
-    let _guard = Guard;
-    f()
 }
 
 /// Runs `f` with *huge* allocations (above `ZEND_MM_MAX_LARGE_SIZE`,
@@ -172,7 +153,7 @@ fn in_uncounted_scope() -> bool {
 enum Admit {
     /// Counted; proceed.
     Counted,
-    /// Must fail (hard ceiling, or a fallible soft overrun).
+    /// Must fail (the hard ceiling).
     Refused,
     /// Huge and [uncounted](uncounted): not accounted; the registry slot
     /// reserved for it.
@@ -194,14 +175,10 @@ enum Bind {
 }
 
 /// A non-zero value unique to each live thread: the address of this
-/// thread's (destructor-free, const-initialised) `FALLIBLE_DEPTH` slot.
+/// thread's (destructor-free, const-initialised) `TOKEN` slot.
 #[inline]
 fn thread_token() -> usize {
-    FALLIBLE_DEPTH.with(|d| ptr::from_ref(d).addr())
-}
-
-fn in_fallible_scope() -> bool {
-    FALLIBLE_DEPTH.try_with(|d| d.get() > 0).unwrap_or(false)
+    TOKEN.with(|d| ptr::from_ref(d).addr())
 }
 
 /// Raw counter snapshot of a [`CountingAlloc`] (bytes are requested
@@ -889,8 +866,10 @@ impl<A> CountingAlloc<A> {
 
     /// Makes the `n`-th allocation from now fail as if it crossed the soft
     /// limit (`zend_mm_set_max_allocs`, the `ZEND_MM_MAX_ALLOCS` test mode):
-    /// the violation is recorded, and the allocation itself is granted,
-    /// except in a [fallible](crate::fallible) scope. Later allocations are
+    /// the violation is recorded and the allocation itself granted; loops
+    /// see it through [`crate::poll`], the VM at its next delivery point,
+    /// so every allocation of a request can be made the failing one.
+    /// Later allocations are
     /// not affected. `0` turns it off; [`request_end`](Self::request_end)
     /// does too.
     pub fn set_max_allocs(&self, n: u64) {
@@ -926,13 +905,14 @@ impl<A> CountingAlloc<A> {
 
     /// The chosen allocation of [`max_allocs`](Self::set_max_allocs):
     /// recorded as a violation (unless one is already pending), granted
-    /// unless fallible (`tracked_max_allocs_error`).
+    /// all the same, as php-src grants it to an infallible allocation
+    /// (`tracked_max_allocs_error`).
     fn fail_as_over_limit(&self, size: usize) -> bool {
         self.record(OverLimit {
             limit: self.limit().unwrap_or(LIMIT_MAX),
             tried: size,
         });
-        !in_fallible_scope()
+        true
     }
 
     /// Installs the function called (once) when an allocation would cross
@@ -1192,9 +1172,7 @@ impl<A> CountingAlloc<A> {
         if self.limit_allows(before, size, huge, limit) {
             return true;
         }
-        let recorded = self.record(OverLimit { limit, tried: size });
-        let granted = !in_fallible_scope();
-        if recorded && granted {
+        if self.record(OverLimit { limit, tried: size }) {
             // Zend's failing allocation never happens; ours does, so leave
             // it out of the checks for the rest of the request (shutdown
             // functions and destructors still run under the limit).
@@ -1204,7 +1182,7 @@ impl<A> CountingAlloc<A> {
             }
             self.update_thresholds();
         }
-        granted
+        true
     }
 
     /// Bookkeeping for huge blocks (cold: they are 2 MiB or more): `add`

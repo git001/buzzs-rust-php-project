@@ -180,14 +180,6 @@ pub trait JsonHost: RuntimeContext {
         nesting >= DEFAULT_MAX_NESTING
     }
 
-    /// Whether the host has a delayed out-of-memory fatal pending
-    /// (`ZEND_HAS_OOM()`, set once an allocation crossed `memory_limit`):
-    /// the decoder then stops before the next value instead of building a
-    /// structure the host could not hold. The default never aborts.
-    fn json_oom_pending(&mut self) -> bool {
-        false
-    }
-
     /// Creates the `JsonException` thrown with `JSON_THROW_ON_ERROR`
     /// (`zend_throw_exception(php_json_exception_ce, message, code)`).
     fn json_exception(&mut self, message: &str, code: i64) -> RuntimeError {

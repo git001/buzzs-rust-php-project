@@ -404,32 +404,6 @@ fn try_reserve_semantics() {
 }
 
 #[test]
-fn fallible_scope_fails_soft_overruns() {
-    let a = CountingAlloc::new(System);
-    a.request_start(Some(4 * M)).expect("limit");
-    let b = fallible(|| alloc(&a, 5 * M));
-    assert!(
-        b.p.is_null(),
-        "fallible allocations fail over the soft limit"
-    );
-    assert_eq!(
-        a.check(),
-        Some(OverLimit {
-            limit: 4 * M,
-            tried: 5 * M
-        })
-    );
-    a.clear();
-    let ok = fallible(|| alloc(&a, M));
-    assert!(!ok.p.is_null(), "allocations under the limit still succeed");
-    let c = alloc(&a, 5 * M);
-    assert!(
-        !c.p.is_null(),
-        "outside the scope the soft limit only flags"
-    );
-}
-
-#[test]
 fn request_lifecycle() {
     let a = CountingAlloc::new(System);
     let _vm = alloc(&a, 3 * M);
@@ -1038,7 +1012,10 @@ fn max_allocs_fails_the_nth_allocation_like_the_limit() {
     let _b2 = alloc(&a, 100);
     assert!(!a.is_pending() && !a.max_allocs_hit());
     let b3 = alloc(&a, 200);
-    assert!(!b3.p.is_null(), "granted outside a fallible scope");
+    assert!(
+        !b3.p.is_null(),
+        "granted, like an infallible Zend allocation"
+    );
     assert!(a.max_allocs_hit());
     assert_eq!(
         a.check(),
@@ -1054,9 +1031,8 @@ fn max_allocs_fails_the_nth_allocation_like_the_limit() {
 
     a.set_max_allocs(1);
     assert!(!a.max_allocs_hit(), "re-arming forgets the hit");
-    let f = fallible(|| alloc(&a, 64));
-    assert!(f.p.is_null(), "refused in a fallible scope");
-    assert!(a.is_pending());
+    let f = alloc(&a, 64);
+    assert!(!f.p.is_null() && a.is_pending() && a.max_allocs_hit());
     a.clear();
 
     a.set_max_allocs(2);

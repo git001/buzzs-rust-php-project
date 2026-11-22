@@ -10,6 +10,7 @@ use crate::constants::{
 };
 use crate::error::{arg_value_error, Error, Result};
 use crate::ffi::ZStream;
+use php_memlimit::TryGrow;
 
 const Z_OK: i32 = 0;
 const Z_STREAM_END: i32 = 1;
@@ -121,7 +122,7 @@ pub fn gzcompress(data: &[u8], level: i64, encoding: i64) -> Result<Vec<u8>> {
 /// own warnings meanwhile).
 pub(crate) fn fallible_resize(buf: &mut Vec<u8>, new_len: usize) -> bool {
     let additional = new_len.saturating_sub(buf.len());
-    if php_memlimit::fallible(|| buf.try_reserve(additional)).is_err() {
+    if buf.try_grow(additional).is_err() {
         return false;
     }
     buf.resize(new_len, 0);

@@ -163,24 +163,21 @@ fn cookies_and_post() {
     );
 }
 
-thread_local! {
-    /// The `ZEND_HAS_OOM()` state the hook below reports, per test thread.
-    static OOM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn oom_flag() -> bool {
-    OOM.with(std::cell::Cell::get)
-}
-
-/// `main/php_variables.c`: once a `memory_limit` violation is pending,
-/// `add_post_var()` stops before registering anything and
-/// `php_register_variable_ex()` drops a variable at its first nesting level.
 #[test]
 fn a_pending_oom_stops_registration() {
-    query::set_oom_pending_hook(oom_flag);
+    // A real pending violation, on a thread with its own allocator so that
+    // the limit is this test's alone.
+    std::thread::spawn(pending_oom_stops_registration)
+        .join()
+        .expect("test thread");
+}
+
+fn pending_oom_stops_registration() {
+    php_memlimit::attach_thread();
+    php_memlimit::request_start(Some(16 << 20)).expect("limit");
     let mut ctx = CollectingContext::new();
     let settings = InputSettings::default();
-    OOM.with(|f| f.set(true));
+    assert!(php_memlimit::try_reserve(usize::MAX).is_err());
     let mut track = ZArray::new();
     query::treat_data(
         ParseKind::Post,
@@ -198,7 +195,7 @@ fn a_pending_oom_stops_registration() {
         show(&serialize(&Value::Array(r), &mut ctx).unwrap()),
         r#"a:1:{s:1:"c";s:1:"2";}"#
     );
-    OOM.with(|f| f.set(false));
+    php_memlimit::request_end();
     let r = query::parse_str(b"a[b]=1&c=2", &settings, &mut ctx).unwrap();
     assert_eq!(r.len(), 2);
     assert!(ctx.messages().is_empty(), "{:?}", ctx.messages());

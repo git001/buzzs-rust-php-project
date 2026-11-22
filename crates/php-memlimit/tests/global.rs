@@ -72,13 +72,13 @@ fn global_allocator_lifecycle() {
     php_memlimit::clear();
     assert_eq!(php_memlimit::check(), None);
 
-    // Fallible scope: Rust's try_reserve reports the overrun as an Err.
+    // A checked growth reports the overrun as an Err.
     let mut buf: Vec<u8> = Vec::new();
-    let r = php_memlimit::fallible(|| buf.try_reserve_exact(15 * M));
-    assert!(r.is_err());
+    assert!(php_memlimit::TryGrow::try_grow_exact(&mut buf, 15 * M).is_err());
     assert!(php_memlimit::check().is_some());
     php_memlimit::clear();
-    assert!(php_memlimit::fallible(|| buf.try_reserve_exact(M)).is_ok());
+    assert!(php_memlimit::TryGrow::try_grow_exact(&mut buf, M).is_ok());
+    assert_eq!(buf.capacity(), M, "exactly");
     drop(buf);
 
     // Request end lifts the limit and gives ownership up (this thread was

@@ -886,10 +886,6 @@ impl SplHost for VmHost<'_> {
         self.vm_rt(r)
     }
 
-    fn spl_try_reserve(&mut self, bytes: usize) -> bool {
-        php_vm::try_reserve_memory(bytes)
-    }
-
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {
         self.vm.output(bytes);
         Ok(())
@@ -1133,9 +1129,6 @@ impl SplHost for BridgedHost {
     }
     fn run_pending_destructors(&mut self) -> RtResult<()> {
         lent_rt(|h| h.run_pending_destructors())
-    }
-    fn spl_try_reserve(&mut self, bytes: usize) -> bool {
-        php_vm::try_reserve_memory(bytes)
     }
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()> {
         lent_rt(|h| h.write_output(bytes))

@@ -29,6 +29,14 @@ pub trait TryGrow {
     ///
     /// The recorded [`OverLimit`].
     fn try_grow(&mut self, additional: usize) -> Result<(), OverLimit>;
+
+    /// [`try_grow`](Self::try_grow) to exactly `additional` more elements,
+    /// like the collection's `try_reserve_exact`.
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`OverLimit`].
+    fn try_grow_exact(&mut self, additional: usize) -> Result<(), OverLimit>;
 }
 
 impl<T> TryGrow for Vec<T> {
@@ -38,38 +46,78 @@ impl<T> TryGrow for Vec<T> {
             self.capacity(),
             additional,
             size_of::<T>(),
+            Growth::Amortized,
             |n| self.try_reserve(n),
+        )
+    }
+
+    fn try_grow_exact(&mut self, additional: usize) -> Result<(), OverLimit> {
+        grow(
+            self.len(),
+            self.capacity(),
+            additional,
+            size_of::<T>(),
+            Growth::Exact,
+            |n| self.try_reserve_exact(n),
         )
     }
 }
 
 impl TryGrow for String {
     fn try_grow(&mut self, additional: usize) -> Result<(), OverLimit> {
-        grow(self.len(), self.capacity(), additional, 1, |n| {
+        let (len, cap) = (self.len(), self.capacity());
+        grow(len, cap, additional, 1, Growth::Amortized, |n| {
             self.try_reserve(n)
+        })
+    }
+
+    fn try_grow_exact(&mut self, additional: usize) -> Result<(), OverLimit> {
+        let (len, cap) = (self.len(), self.capacity());
+        grow(len, cap, additional, 1, Growth::Exact, |n| {
+            self.try_reserve_exact(n)
         })
     }
 }
 
 impl<T> TryGrow for VecDeque<T> {
     fn try_grow(&mut self, additional: usize) -> Result<(), OverLimit> {
+        let (len, cap) = (self.len(), self.capacity());
         grow(
-            self.len(),
-            self.capacity(),
+            len,
+            cap,
             additional,
             size_of::<T>(),
+            Growth::Amortized,
             |n| self.try_reserve(n),
         )
     }
+
+    fn try_grow_exact(&mut self, additional: usize) -> Result<(), OverLimit> {
+        let (len, cap) = (self.len(), self.capacity());
+        grow(len, cap, additional, size_of::<T>(), Growth::Exact, |n| {
+            self.try_reserve_exact(n)
+        })
+    }
+}
+
+/// How a collection picks its new capacity.
+#[derive(Clone, Copy)]
+enum Growth {
+    /// `try_reserve`: std's amortized doubling.
+    Amortized,
+    /// `try_reserve_exact`: exactly what is asked for.
+    Exact,
 }
 
 /// The checked growth of a collection with `len` of `cap` elements of
-/// `elem` bytes by `additional`; `reserve` is its `try_reserve`.
+/// `elem` bytes by `additional`; `reserve` is its `try_reserve` or
+/// `try_reserve_exact`, as `growth` says.
 fn grow(
     len: usize,
     cap: usize,
     additional: usize,
     elem: usize,
+    growth: Growth,
     reserve: impl FnOnce(usize) -> Result<(), TryReserveError>,
 ) -> Result<(), OverLimit> {
     if cap - len >= additional {
@@ -79,7 +127,10 @@ fn grow(
         let Some(required) = len.checked_add(additional) else {
             return Err(crate::refused(usize::MAX));
         };
-        let new_cap = amortized_capacity(cap, required, elem);
+        let new_cap = match growth {
+            Growth::Amortized => amortized_capacity(cap, required, elem),
+            Growth::Exact => required,
+        };
         crate::try_reserve_n(new_cap - cap, elem, 0)?;
     }
     reserve(additional).map_err(|_| crate::refused(additional.saturating_mul(elem)))

@@ -10,6 +10,7 @@
 
 use crate::error::IconvErr;
 use crate::ffi::Cd;
+use php_memlimit::TryGrow;
 
 /// `GENERIC_SUPERSET_NAME` (`ICONV_UCS4_ENCODING` with glibc).
 pub const UCS4: &[u8] = b"UCS-4LE";
@@ -36,18 +37,13 @@ impl Limit {
 /// delayed fatal right after the builtin returns, `ZEND_HAS_OOM()`) and
 /// [`IconvErr::Alloc`] is returned without allocating.
 pub(crate) fn reserve(buf: &mut Vec<u8>, extra: usize) -> Result<(), IconvErr> {
-    if buf.capacity() - buf.len() >= extra {
-        return Ok(());
-    }
-    php_memlimit::fallible(|| buf.try_reserve(extra)).map_err(|_| IconvErr::Alloc(extra))
+    buf.try_grow(extra).map_err(|_| IconvErr::Alloc(extra))
 }
 
 /// [`reserve`] for an exactly sized buffer (`safe_femalloc`/`erealloc`).
 pub(crate) fn reserve_exact(buf: &mut Vec<u8>, extra: usize) -> Result<(), IconvErr> {
-    if buf.capacity() - buf.len() >= extra {
-        return Ok(());
-    }
-    php_memlimit::fallible(|| buf.try_reserve_exact(extra)).map_err(|_| IconvErr::Alloc(extra))
+    buf.try_grow_exact(extra)
+        .map_err(|_| IconvErr::Alloc(extra))
 }
 
 /// `ZEND_HAS_OOM()`: a `memory_limit` violation is pending; loops over

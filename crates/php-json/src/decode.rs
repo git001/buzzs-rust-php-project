@@ -106,7 +106,7 @@ impl Sink for DecodeSink<'_> {
     }
 
     fn aborted(&mut self) -> bool {
-        self.host.json_oom_pending()
+        php_memlimit::is_pending()
     }
 }
 

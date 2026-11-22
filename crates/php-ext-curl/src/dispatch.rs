@@ -12,6 +12,7 @@ use php_curl::consts::{
     CURL_WRITEFUNC_ERROR,
 };
 use php_curl::{Easy, Handler};
+use php_memlimit::TryGrow;
 use php_runtime::{Obj, Value, ZArray};
 use php_vm::ext::{Throw, VmResult};
 use php_vm::Vm;
@@ -176,7 +177,7 @@ impl Handler for Dispatch<'_> {
                     // `smart_str_fappendl_ex(..., fallible)`: over the memory
                     // limit the transfer fails (the VM raises the delayed
                     // fatal once curl_exec() returns).
-                    if php_memlimit::fallible(|| buf.try_reserve(data.len())).is_err() {
+                    if buf.try_grow(data.len()).is_err() {
                         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         return CURL_WRITEFUNC_ERROR as usize;
                     }

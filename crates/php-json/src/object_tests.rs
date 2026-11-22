@@ -371,17 +371,25 @@ fn handles(s: &str) -> Vec<String> {
 /// stops before building anything more (the host raises the fatal).
 #[test]
 fn pending_oom_stops_decoding() {
-    let mut h = TestHost::new();
-    h.oom_pending = true;
-    let r = decode(br#"[{}, {"x": [1, 2]}]"#, None, 512, 0, &mut h);
-    assert!(
-        matches!(&r, Err(crate::DecodeError::Json(e)) if e.code == ErrorCode::Syntax),
-        "{r:?}"
-    );
-    // No object was created before the stop.
-    h.oom_pending = false;
-    let v = decode(b"{}", None, 512, 0, &mut h).expect("decode");
-    assert_eq!(handles(&dump(&mut h, &v)), ["#1"]);
+    // A real pending violation, on a thread with its own allocator so that
+    // the limit is this test's alone.
+    std::thread::spawn(|| {
+        php_memlimit::attach_thread();
+        php_memlimit::request_start(Some(16 << 20)).expect("limit");
+        let mut h = TestHost::new();
+        assert!(php_memlimit::try_reserve(usize::MAX).is_err());
+        let r = decode(br#"[{}, {"x": [1, 2]}]"#, None, 512, 0, &mut h);
+        assert!(
+            matches!(&r, Err(crate::DecodeError::Json(e)) if e.code == ErrorCode::Syntax),
+            "{r:?}"
+        );
+        // No object was created before the stop.
+        php_memlimit::request_end();
+        let v = decode(b"{}", None, 512, 0, &mut h).expect("decode");
+        assert_eq!(handles(&dump(&mut h, &v)), ["#1"]);
+    })
+    .join()
+    .expect("test thread");
 }
 
 #[test]

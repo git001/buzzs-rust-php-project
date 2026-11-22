@@ -5,6 +5,7 @@
 use crate::error::{arg_value_error, Result};
 use crate::ffi::RawStream;
 use crate::{BZ_FINISH, BZ_FINISH_OK, BZ_OK, BZ_OUTBUFF_FULL, BZ_STREAM_END};
+use php_memlimit::TryGrow;
 
 /// What a bz2 function returns on "success": PHP returns either a string
 /// or an `int` libbz2 error code (or `false`).
@@ -47,7 +48,7 @@ fn buff_to_buff_compress(
 /// returns.
 fn fallible_resize(buf: &mut Vec<u8>, new_len: usize) -> bool {
     let additional = new_len.saturating_sub(buf.len());
-    if php_memlimit::fallible(|| buf.try_reserve(additional)).is_err() {
+    if buf.try_grow(additional).is_err() {
         return false;
     }
     buf.resize(new_len, 0);

@@ -232,16 +232,6 @@ pub trait SplHost: ArrayContext {
 
     /// Writes to the output (`fpassthru`).
     fn write_output(&mut self, bytes: &[u8]) -> RtResult<()>;
-
-    /// A fallible allocation of `bytes` (`safe_femalloc(..., /* fallible */
-    /// true)`): `false` when it would cross `memory_limit`, in which case
-    /// the host has recorded the violation and the caller returns without
-    /// allocating (`RETURN_OOM()`; the fatal follows the call). The default
-    /// always succeeds.
-    fn spl_try_reserve(&mut self, bytes: usize) -> bool {
-        let _ = bytes;
-        true
-    }
 }
 
 /// The `zend_object_iterator` protocol used by `foreach`, `IteratorIterator`

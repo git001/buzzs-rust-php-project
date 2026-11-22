@@ -543,8 +543,6 @@ pub fn populate<S: SapiVariables + ?Sized>(vm: &mut Vm, s: &S) {
     };
     let has = |c: u8| order.iter().any(|x| x.eq_ignore_ascii_case(&c));
     let settings = input_settings(vm);
-    // `ZEND_HAS_OOM()` for the registration loops of `main/php_variables.c`.
-    query::set_oom_pending_hook(php_memlimit::is_pending);
 
     // sapi_activate() → sapi_read_post_data(): the POST reader. Startup
     // problems are warnings only: the results are dropped.

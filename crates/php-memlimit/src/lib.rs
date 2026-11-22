@@ -56,8 +56,7 @@ use std::sync::{Mutex, PoisonError};
 pub use mimalloc::MiMalloc;
 
 pub use counting::{
-    fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
-    Stats,
+    uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook, Stats,
 };
 pub use grow::TryGrow;
 pub use limit::{

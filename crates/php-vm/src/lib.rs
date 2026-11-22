@@ -62,7 +62,6 @@ pub mod vm;
 mod weakref;
 
 pub use auto_globals::{AutoGlobalCallback, AUTO_GLOBAL_NAMES};
-pub use exec::{oom_pending, try_reserve_memory};
 pub use persistence::{PersistentDeclarations, PreloadInfo};
 pub use vm::{ClassLoader, Throw, Vm, VmResult};
 

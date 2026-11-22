@@ -10,6 +10,7 @@
 //! the warnings PHP would raise.  Registering the variables is left to the
 //! caller (it needs the VM for `php_register_variable_ex`).
 
+use php_memlimit::TryGrow;
 use php_vm::ext::{Rfc1867Event, Rfc1867Translation};
 use std::collections::HashSet;
 use std::io::Write;
@@ -157,7 +158,7 @@ fn oom() -> bool {
 /// fallible)` / a smart string's growth): growth past `memory_limit` fails,
 /// leaving the violation pending, and returns `false`.
 fn try_append(v: &mut Vec<u8>, extra: &[u8]) -> bool {
-    if php_memlimit::fallible(|| v.try_reserve(extra.len())).is_err() {
+    if v.try_grow(extra.len()).is_err() {
         return false;
     }
     v.extend_from_slice(extra);
