@@ -49,7 +49,10 @@ fn rawurldecode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 }
 
 fn base64_encode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(base64::base64_encode(a.str(0).as_bytes())))
+    let s = a.str(0);
+    // `zend_string_safe_alloc(((len + 2) / 3), 4, 0, 0)`
+    crate::mem::check(crate::mem::zstr(s.len().div_ceil(3).saturating_mul(4)))?;
+    Ok(bytes(base64::base64_encode(s.as_bytes())))
 }
 
 fn base64_decode(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

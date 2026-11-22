@@ -1428,6 +1428,9 @@ dependencies = [
 [[package]]
 name = "php-support"
 version = "0.1.0"
+dependencies = [
+ "php-memlimit",
+]
 
 [[package]]
 name = "php-sysv"

@@ -113,6 +113,7 @@ fn do_format(vm: &mut Vm, fmt: &[u8], vals: &[Value], source: ArgSource) -> VmRe
         Err(FormatError::ValueError(m)) => Err(vm.make_throw("ValueError", &m)),
         Err(FormatError::ArgumentCountError(m)) => Err(vm.make_throw("ArgumentCountError", &m)),
         Err(FormatError::Fatal(m)) => Err(vm.fatal(&m)),
+        Err(FormatError::MemoryLimit(over)) => Err(over.into()),
     }
 }
 

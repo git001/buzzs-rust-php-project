@@ -154,6 +154,7 @@ fn finish(
         Err(FormatError::ValueError(m)) => Err(vm.throw("ValueError", &m)),
         Err(FormatError::ArgumentCountError(m)) => Err(vm.throw("ArgumentCountError", &m)),
         Err(FormatError::Fatal(m)) => Err(vm.fatal(&m)),
+        Err(FormatError::MemoryLimit(over)) => Err(over.into()),
     }
 }
 

@@ -43,13 +43,29 @@ Details: [crates/php-memlimit/INTEGRATION.md](crates/php-memlimit/INTEGRATION.md
   iteration and before each growth step: the same "Allowed memory size"
   fatal with a lower peak, exit status 255, shutdown functions run, the
   worker serves the next request. Why: many requests share one process in
-  the threaded servers. Paths: string and array builtins, `json_*`,
+  the threaded servers. Paths: string and array builtins (also `sprintf`
+  field widths, `base64_encode`, `bin2hex`), `json_*`,
   `serialize`/`unserialize`, `var_dump`/`print_r`, `http_build_query`,
   `PDOStatement::fetchAll`, `SQLite3Result::fetchAll`, `mysqli_fetch_all`,
   buffered mysqlnd results (the rows read so far are dropped and the rest
-  of the set is read without keeping it, so the connection stays in step).
+  of the set is read without keeping it, so the connection stays in step),
+  and single mysqlnd rows, which grow by up to 16 MiB per packet (a row
+  past the limit is read and dropped; php-src reports mysqlnd's "Out of
+  memory" client error there, Buzz gives the memory fatal only). With the
+  compressed protocol one envelope (at most 16 MiB) is still buffered
+  unchecked.
   Test: `crates/php-extensions/tests/memlimit_p0.rs` (at most 2 MiB over
   the limit; the MySQL cases need `MYSQL_TEST_HOST`).
+- **Room for shutdown after the memory fatal.** Once the "Allowed memory
+  size" fatal is delivered, the request may use 2 MiB (one php-src chunk)
+  past the limit until it ends, so shutdown functions and the teardown can
+  run; the limit and its messages stay as they were. php-src gets this
+  room from what is left free in its last chunk, which varies with
+  fragmentation (often more than 1 MiB); Buzz counts the bytes in use and
+  would otherwise stand exactly at the limit. Test:
+  `crates/php-memlimit/tests/shutdown_grace.rs`, memlimit_p0's
+  `fgets_loop_into_array`. Where: `crates/php-memlimit/src/counting.rs`
+  (`SHUTDOWN_GRACE`).
 - **Hard ceiling without a handler.** It defaults to twice the limit;
   where no SAPI handler is installed, Rust's "memory allocation of N bytes
   failed" ends the process (SIGABRT). Where: `crates/php-memlimit/src/lib.rs`.

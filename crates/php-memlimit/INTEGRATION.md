@@ -236,6 +236,10 @@ count.
   chunk/huge-block size.
 - On clamping to `max_memory_limit` we apply the max as the limit (PHP
   leaves the heap limit unchanged).
+- After the memory fatal is taken, the request gets `SHUTDOWN_GRACE`
+  (2 MiB) past the limit until `request_end`, standing in for the free
+  part of php-src's last chunk, so shutdown functions can run; messages
+  keep naming the limit.
 
 ## Stricter than php-src (intentional)
 
@@ -270,7 +274,8 @@ What a script observes:
 - `tried to allocate` names the growth step that was refused, not the
   allocation php-src happened to be in.
 
-Paths (branch `memlimit-fallible`): string and array builtins, `json_*`,
+Paths (branch `memlimit-fallible`): string and array builtins (also
+`sprintf` field widths, `base64_encode`, `bin2hex`), `json_*`,
 `serialize`/`unserialize`, `var_dump`/`print_r` (which also stream like
 php-src), `http_build_query`, `PDOStatement::fetchAll` (all modes),
 `SQLite3Result::fetchAll`, `mysqli_fetch_all`, and buffered mysqlnd
@@ -278,3 +283,11 @@ results (`mysqli_query`, `mysqli_stmt::store_result`, PDO MySQL). A
 buffered mysqlnd result that hits the limit drops the rows read so far and
 reads the rest of the set from the server without keeping it, so the
 connection stays in step with the server (persistent connections, pools).
+A single row is checked before each packet (up to 16 MiB) is appended;
+past the limit the rest of the row is read and dropped
+(`RowPacket::OverLimit`), with no mysqlnd client error. Reads of a chunk
+or more go straight into the caller's buffer, as php-src's stream layer
+grows its read buffer one chunk at a time. Test:
+`crates/php-mysqlnd/tests/live_memlimit.rs` (the connection answers the
+next query). Not covered: with the compressed protocol one envelope (at
+most 16 MiB) is buffered and inflated unchecked.

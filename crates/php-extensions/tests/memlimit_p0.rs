@@ -132,6 +132,142 @@ const CASES: &[(&str, &str, &str)] = &[
         "$s = str_repeat('a', 3000000);",
         "$r = str_replace('a', 'abcdefgh', $s);",
     ),
+    // Stage 4 probes.
+    (
+        "file_get_contents",
+        "$p = tempnam(sys_get_temp_dir(), 'p0'); register_shutdown_function(fn () => unlink($p)); \
+         $f = fopen($p, 'w'); for ($i = 0; $i < 640; $i++) { fwrite($f, str_repeat(\"abcdefgh\\n\", 6554)); } fclose($f);",
+        "$r = file_get_contents($p);",
+    ),
+    (
+        "file_lines",
+        "$p = tempnam(sys_get_temp_dir(), 'p0'); register_shutdown_function(fn () => unlink($p)); \
+         $f = fopen($p, 'w'); for ($i = 0; $i < 640; $i++) { fwrite($f, str_repeat(\"abcdefgh\\n\", 6554)); } fclose($f);",
+        "$r = file($p);",
+    ),
+    (
+        "fread_large",
+        "$p = tempnam(sys_get_temp_dir(), 'p0'); register_shutdown_function(fn () => unlink($p)); \
+         $f = fopen($p, 'w'); for ($i = 0; $i < 640; $i++) { fwrite($f, str_repeat(\"abcdefgh\\n\", 6554)); } fclose($f);",
+        "$f = fopen($p, 'r'); $r = fread($f, 100000000);",
+    ),
+    (
+        "stream_get_contents",
+        "$p = tempnam(sys_get_temp_dir(), 'p0'); register_shutdown_function(fn () => unlink($p)); \
+         $f = fopen($p, 'w'); for ($i = 0; $i < 640; $i++) { fwrite($f, str_repeat(\"abcdefgh\\n\", 6554)); } fclose($f);",
+        "$f = fopen($p, 'r'); $r = stream_get_contents($f);",
+    ),
+    (
+        "stream_get_contents_pipe",
+        "",
+        "$f = popen('head -c 60000000 /dev/zero', 'r'); $r = stream_get_contents($f);",
+    ),
+    (
+        "fgets_loop_into_array",
+        "$p = tempnam(sys_get_temp_dir(), 'p0'); register_shutdown_function(fn () => unlink($p)); \
+         $f = fopen($p, 'w'); for ($i = 0; $i < 640; $i++) { fwrite($f, str_repeat(\"abcdefgh\\n\", 6554)); } fclose($f);",
+        "$f = fopen($p, 'r'); $r = []; while (($l = fgets($f)) !== false) { $r[] = $l; }",
+    ),
+    (
+        "gzuncompress",
+        "$s = gzcompress(str_repeat('a', 60000000));",
+        "$r = gzuncompress($s);",
+    ),
+    (
+        "gzdecode",
+        "$s = gzencode(str_repeat('a', 60000000));",
+        "$r = gzdecode($s);",
+    ),
+    (
+        "bzdecompress",
+        "$s = bzcompress(str_repeat('a', 60000000));",
+        "$r = bzdecompress($s);",
+    ),
+    (
+        "mb_convert_encoding",
+        "$s = str_repeat('a', 6000000);",
+        "$r = mb_convert_encoding($s, 'UTF-16');",
+    ),
+    (
+        "mb_strtoupper",
+        "$s = str_repeat('a', 9000000);",
+        "$r = mb_strtoupper($s);",
+    ),
+    (
+        "iconv",
+        "$s = str_repeat('a', 6000000);",
+        "$r = iconv('UTF-8', 'UTF-32', $s);",
+    ),
+    (
+        "preg_replace",
+        "$s = str_repeat('a', 3000000);",
+        "$r = preg_replace('/a/', 'abcdefgh', $s);",
+    ),
+    (
+        "sprintf_pad",
+        "",
+        "$r = sprintf('%100000000s', 'x');",
+    ),
+    (
+        "base64_encode",
+        "$s = str_repeat('a', 14000000);",
+        "$r = base64_encode($s);",
+    ),
+    (
+        "bin2hex",
+        "$s = str_repeat('a', 9000000);",
+        "$r = bin2hex($s);",
+    ),
+    (
+        "strtr_array",
+        "$s = str_repeat('a', 3000000);",
+        "$r = strtr($s, ['a' => 'abcdefgh']);",
+    ),
+    (
+        "array_pad",
+        "",
+        "$r = array_pad([], 5000000, 0);",
+    ),
+    (
+        "array_fill_keys",
+        "$k = range(1, 300000);",
+        "$r = array_fill_keys($k, 'abcdefgh'); $r2 = array_fill_keys($k, 1); $r3 = array_fill_keys($k, 2); $r4 = array_fill_keys($k, 3);",
+    ),
+    (
+        "iterator_to_array_generator",
+        "function g() { for (;;) { yield 1; } }",
+        "$r = iterator_to_array(g(), false);",
+    ),
+    (
+        "session_decode",
+        "session_start(); $s = 'a|' . serialize(array_fill(0, 300000, 'abcdefghij'));",
+        "session_decode($s);",
+    ),
+    (
+        "simplexml_load_string",
+        "$s = '<r>' . str_repeat('<a>x</a>', 400000) . '</r>';",
+        "$r = simplexml_load_string($s); $all = []; foreach ($r->a as $a) { $all[] = $a; }",
+    ),
+    (
+        "dom_load_html",
+        "$s = '<p>' . str_repeat('<b>x</b>', 400000);",
+        "$d = new DOMDocument(); $d->loadHTML($s);",
+    ),
+    (
+        "str_word_count",
+        "$s = str_repeat('ab ', 3000000);",
+        "$r = str_word_count($s, 1);",
+    ),
+    (
+        "array_chunk",
+        "$a = range(1, 300000);",
+        "$r = array_chunk($a, 1);",
+    ),
+    (
+        "array_combine",
+        "$a = range(1, 300000);",
+        "$r = array_combine($a, $a); $r2 = array_combine($a, $a);",
+    ),
     (
         "pdo_sqlite_fetch_all",
         "$db = new PDO('sqlite::memory:'); \
@@ -175,6 +311,15 @@ const MYSQLI_SETUP: &str = "$m = new mysqli(getenv('MYSQL_TEST_HOST'), getenv('M
      $m->query(\"INSERT INTO t WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000) \
                 SELECT x, 'abcdefgh' FROM c\");";
 
+/// Opens `$m` (mysqli) without a table, for single big rows.
+const MYSQLI_CONNECT: &str =
+    "$m = new mysqli(getenv('MYSQL_TEST_HOST'), getenv('MYSQL_TEST_USER'), \
+         getenv('MYSQL_TEST_PASSWD'), getenv('MYSQL_TEST_DB'));";
+
+/// [`MYSQLI_CONNECT`] for PDO.
+const PDO_MYSQL_CONNECT: &str = "$db = new PDO('mysql:host=' . getenv('MYSQL_TEST_HOST') . ';dbname=' . getenv('MYSQL_TEST_DB'), \
+         getenv('MYSQL_TEST_USER'), getenv('MYSQL_TEST_PASSWD'));";
+
 /// [`MYSQLI_SETUP`] for PDO: `$db` on the same server.
 const PDO_MYSQL_SETUP: &str = "$db = new PDO('mysql:host=' . getenv('MYSQL_TEST_HOST') . ';dbname=' . getenv('MYSQL_TEST_DB'), \
          getenv('MYSQL_TEST_USER'), getenv('MYSQL_TEST_PASSWD')); \
@@ -209,6 +354,27 @@ const MYSQL_CASES: &[(&str, &str, &str)] = &[
         PDO_MYSQL_SETUP,
         "$r = $db->query('SELECT * FROM t');",
     ),
+    // One row of 30 MB: two packets, the first 16 MiB.
+    (
+        "mysqli_big_row_store",
+        MYSQLI_CONNECT,
+        "$r = $m->query(\"SELECT REPEAT('x', 30000000)\");",
+    ),
+    (
+        "mysqli_big_row_unbuffered",
+        MYSQLI_CONNECT,
+        "$r = $m->query(\"SELECT REPEAT('x', 30000000)\", MYSQLI_USE_RESULT); $row = $r->fetch_row();",
+    ),
+    (
+        "mysqli_big_row_stmt",
+        MYSQLI_CONNECT,
+        "$s = $m->prepare(\"SELECT REPEAT('x', 30000000)\"); $s->execute(); $s->store_result();",
+    ),
+    (
+        "pdo_mysql_big_row",
+        PDO_MYSQL_CONNECT,
+        "$r = $db->query(\"SELECT REPEAT('x', 30000000)\")->fetch();",
+    ),
     (
         "pdo_mysql_fetch_all",
         PDO_MYSQL_SETUP,
@@ -219,7 +385,13 @@ const MYSQL_CASES: &[(&str, &str, &str)] = &[
 
 /// Cases that do not meet the contract yet, with what goes wrong. Keep in
 /// sync with the run (the test prints every result).
-const KNOWN_GAPS: &[(&str, &str)] = &[];
+const KNOWN_GAPS: &[(&str, &str)] = &[
+    // Stage 6 (C library hooks): libxml2 allocates outside the counter.
+    (
+        "dom_load_html",
+        "libxml2's parser memory is not counted: no fatal",
+    ),
+];
 
 /// Output sink of a VM.
 #[derive(Clone, Default)]
@@ -332,10 +504,12 @@ fn verdict(report: &str, code: Option<i32>) -> (Option<String>, String) {
             summary,
         );
     }
-    assert!(
-        !report.contains("Failed to set memory limit"),
-        "the case's setup needs more than the limit, so the limit never applied:\n{report}"
-    );
+    if report.contains("Failed to set memory limit") {
+        return (
+            Some("the setup needs more than the limit, so the limit never applied".into()),
+            summary,
+        );
+    }
     if code != Some(0) {
         return (Some(format!("child exited with {code:?}")), summary);
     }

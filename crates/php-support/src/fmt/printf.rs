@@ -205,6 +205,9 @@ pub enum FormatError {
     ArgumentCountError(String),
     /// A fatal `E_ERROR` ("Field width %zd is too long").
     Fatal(String),
+    /// The result would pass `memory_limit` (php-src: `zend_string_extend`
+    /// in `php_sprintf_appendstring()` fails in `emalloc`).
+    MemoryLimit(php_memlimit::OverLimit),
 }
 
 impl FormatError {
@@ -212,6 +215,7 @@ impl FormatError {
     pub fn message(&self) -> &str {
         match self {
             Self::ValueError(m) | Self::ArgumentCountError(m) | Self::Fatal(m) => m,
+            Self::MemoryLimit(_) => "",
         }
     }
 }
@@ -222,6 +226,7 @@ impl fmt::Display for FormatError {
             Self::ValueError(_) => "ValueError",
             Self::ArgumentCountError(_) => "ArgumentCountError",
             Self::Fatal(_) => "Fatal error",
+            Self::MemoryLimit(over) => return write!(f, "Fatal error: {over}"),
         };
         write!(f, "{kind}: {}", self.message())
     }
@@ -312,7 +317,8 @@ impl Out {
                 "Field width {m_width} is too long"
             )));
         }
-        self.buf.reserve(m_width);
+        php_memlimit::TryGrow::try_grow(&mut self.buf, m_width)
+            .map_err(FormatError::MemoryLimit)?;
         let mut add = add;
         if alignment == Align::Right {
             if (neg || always_sign) && padding == b'0' {

@@ -78,6 +78,10 @@ pub enum HeapEvent {
 pub type HeapObserver = fn(HeapEvent);
 
 /// `over_state` values.
+/// The headroom a request gets once its memory fatal is delivered (see
+/// [`CountingAlloc::take`]): one php-src chunk.
+pub const SHUTDOWN_GRACE: usize = crate::limit::CHUNK_SIZE;
+
 const NONE: u8 = 0;
 const RECORDING: u8 = 1;
 const PENDING: u8 = 2;
@@ -300,6 +304,10 @@ pub struct CountingAlloc<A> {
     /// violation. Zend never makes that allocation (the fatal unwinds
     /// first); we must grant it, so it is left out of later limit checks.
     forgiven: AtomicUsize,
+    /// Headroom granted once the request's memory fatal is delivered
+    /// ([`SHUTDOWN_GRACE`]), so shutdown functions and the teardown can
+    /// run; counts against neither the soft limit nor the hard ceiling.
+    grace: AtomicUsize,
     /// Of [`forgiven`](Self::forgiven), the part that was a huge block.
     forgiven_huge: AtomicUsize,
     /// Live counted bytes in huge blocks (requests over
@@ -368,6 +376,7 @@ impl<A> CountingAlloc<A> {
             over_limit: AtomicUsize::new(0),
             over_tried: AtomicUsize::new(0),
             forgiven: AtomicUsize::new(0),
+            grace: AtomicUsize::new(0),
             forgiven_huge: AtomicUsize::new(0),
             huge: AtomicUsize::new(0),
             huge_base: AtomicUsize::new(0),
@@ -675,7 +684,10 @@ impl<A> CountingAlloc<A> {
                 // to the slow path by size in `admit`.
                 // The forgiven block does not exist for Zend: it counts
                 // against neither the soft limit nor the hard ceiling.
-                let forgiven = self.forgiven.load(Relaxed);
+                let forgiven = self
+                    .forgiven
+                    .load(Relaxed)
+                    .saturating_add(self.grace.load(Relaxed));
                 let soft = if self.is_tracked() {
                     l.saturating_add(forgiven)
                 } else {
@@ -757,12 +769,21 @@ impl<A> CountingAlloc<A> {
     /// memory-limit fatal per request phase, so the unwinding that follows
     /// the fatal cannot trigger another. [`clear`](Self::clear) (at the
     /// start of request shutdown) re-arms recording.
+    ///
+    /// Taking it also grants the request [`SHUTDOWN_GRACE`] above the limit,
+    /// once: php-src fails when the next 2 MiB chunk would pass the limit,
+    /// so its shutdown functions run in what is left of the last chunk;
+    /// byte-exact counting leaves none. The limit itself and its messages
+    /// stay as they were.
     pub fn take(&self) -> Option<OverLimit> {
         let over = self.check()?;
         self.over_state
             .compare_exchange(PENDING, HANDLED, Relaxed, Relaxed)
-            .ok()
-            .map(|_| over)
+            .ok()?;
+        if self.grace.swap(SHUTDOWN_GRACE, Relaxed) == 0 {
+            self.update_thresholds();
+        }
+        Some(over)
     }
 
     /// Whether a violation was taken and recording is suspended until
@@ -792,7 +813,9 @@ impl<A> CountingAlloc<A> {
     /// them) pass `zend_mm_check_limit` under `limit` (see
     /// [`zend_limit_allows`]; exact bytes in [tracked mode](Self::set_tracked)).
     fn limit_allows(&self, usage: usize, size: usize, huge_request: bool, limit: usize) -> bool {
-        let usage = usage.saturating_sub(self.forgiven.load(Relaxed));
+        let usage = usage
+            .saturating_sub(self.forgiven.load(Relaxed))
+            .saturating_sub(self.grace.load(Relaxed));
         if self.is_tracked() {
             return usage.saturating_add(size) <= limit;
         }
@@ -1060,6 +1083,7 @@ impl<A> CountingAlloc<A> {
         }
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
+        self.grace.store(0, Relaxed);
         self.force_limit(None);
         self.set_baseline();
         self.clear();
@@ -1596,6 +1620,7 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
         self.max_allocs.store(0, Relaxed);
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
+        self.grace.store(0, Relaxed);
         self.force_limit(None);
         self.clear();
         self.baseline.store(0, Relaxed);

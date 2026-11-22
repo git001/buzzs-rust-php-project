@@ -99,7 +99,7 @@ mod oracle_tests {
                     let class = match e {
                         FormatError::ValueError(_) => "ValueError",
                         FormatError::ArgumentCountError(_) => "ArgumentCountError",
-                        FormatError::Fatal(_) => "Fatal",
+                        FormatError::Fatal(_) | FormatError::MemoryLimit(_) => "Fatal",
                     };
                     format!("E:{class}:{}", e.message())
                 }

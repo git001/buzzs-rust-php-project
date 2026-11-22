@@ -57,6 +57,7 @@ pub use mimalloc::MiMalloc;
 
 pub use counting::{
     uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook, Stats,
+    SHUTDOWN_GRACE,
 };
 pub use grow::{ByteSink, CheckedBuf, TryGrow};
 pub use limit::{

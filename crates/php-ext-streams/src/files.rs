@@ -877,6 +877,7 @@ fn format(vm: &mut Vm, fmt: &[u8], vals: &[Value], variadic: bool) -> VmResult<V
             vm.raise(1, &m)?;
             Ok(Vec::new())
         }
+        Err(FormatError::MemoryLimit(over)) => Err(over.into()),
     }
 }
 

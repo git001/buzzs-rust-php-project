@@ -32,7 +32,10 @@ fn opt_int(a: &Args, n: usize) -> Option<i64> {
 }
 
 fn bin2hex(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
-    Ok(bytes(transform::bin2hex(a.zstr(0).as_bytes())))
+    let s = a.zstr(0);
+    // `zend_string_safe_alloc(len, 2, 0, 0)`
+    crate::mem::check(mem::zstr(s.len().saturating_mul(2)))?;
+    Ok(bytes(transform::bin2hex(s.as_bytes())))
 }
 
 fn hex2bin(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
