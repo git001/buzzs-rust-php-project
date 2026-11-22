@@ -536,13 +536,44 @@ fn html_escape(s: &[u8]) -> Vec<u8> {
 
 /// `php_url_scanner_add_var_impl()`: returns `true` when the output
 /// handler must be started.
+///
+/// Past `memory_limit` nothing is added (the VM raises the fatal):
+/// `php_raw_url_encode()` and `php_escape_html_entities_ex()` take three and
+/// two times their input up front, and the two buffers grow by the encoded
+/// parts; both are checked before anything changes.
 pub(crate) fn add_var(kind: Kind, name: &[u8], value: &[u8], encode: bool) -> bool {
+    let input = name.len().saturating_add(value.len());
+    if encode && php_memlimit::try_reserve_n(input, 5, 0).is_err() {
+        return false;
+    }
+    let (sname, svalue, hname, hvalue) = if encode {
+        (
+            rawurlencode(name),
+            rawurlencode(value),
+            html_escape(name),
+            html_escape(value),
+        )
+    } else {
+        (name.to_vec(), value.to_vec(), name.to_vec(), value.to_vec())
+    };
     with(|s| {
         let sep = s.env.separator.clone();
         let ctx = match kind {
             Kind::Session => &mut s.session,
             Kind::Output => &mut s.output,
         };
+        let url_grows = sep.len() + sname.len() + 1 + svalue.len();
+        let form_grows = hname.len() + hvalue.len() + 40;
+        let fits = if ctx.active {
+            php_memlimit::TryGrow::try_grow(&mut ctx.url_app, url_grows).is_ok()
+                && php_memlimit::TryGrow::try_grow(&mut ctx.form_app, form_grows).is_ok()
+        } else {
+            // A fresh context starts with empty buffers.
+            php_memlimit::try_reserve(url_grows.saturating_add(form_grows)).is_ok()
+        };
+        if !fits {
+            return false;
+        }
         let mut start = false;
         if !ctx.active {
             *ctx = Ctx::default();
@@ -552,16 +583,6 @@ pub(crate) fn add_var(kind: Kind, name: &[u8], value: &[u8], encode: bool) -> bo
         if !ctx.url_app.is_empty() {
             ctx.url_app.extend_from_slice(&sep);
         }
-        let (sname, svalue, hname, hvalue) = if encode {
-            (
-                rawurlencode(name),
-                rawurlencode(value),
-                html_escape(name),
-                html_escape(value),
-            )
-        } else {
-            (name.to_vec(), value.to_vec(), name.to_vec(), value.to_vec())
-        };
         ctx.url_app.extend_from_slice(&sname);
         ctx.url_app.push(b'=');
         ctx.url_app.extend_from_slice(&svalue);

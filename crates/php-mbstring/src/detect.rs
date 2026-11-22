@@ -42,7 +42,12 @@ fn init_candidates<'a>(
     order_significant: bool,
 ) -> Vec<Candidate<'a>> {
     let length = encodings.len();
-    let mut out = Vec::with_capacity(length);
+    // `emalloc(sizeof(conversion_data) * length)`: past `memory_limit` there
+    // are no candidates (no encoding found) and the VM raises the fatal.
+    let mut out = Vec::new();
+    if php_memlimit::TryGrow::try_grow_exact(&mut out, length).is_err() {
+        return out;
+    }
     'next: for (i, &enc) in encodings.iter().enumerate() {
         let mut demerits = 0u64;
         if let Some(check) = enc.check {

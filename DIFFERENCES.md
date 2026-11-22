@@ -44,7 +44,9 @@ Details: [crates/php-memlimit/INTEGRATION.md](crates/php-memlimit/INTEGRATION.md
   fatal with a lower peak, exit status 255, shutdown functions run, the
   worker serves the next request. Why: many requests share one process in
   the threaded servers. Paths: string and array builtins (also `sprintf`
-  field widths, `base64_encode`, `bin2hex`), `json_*`,
+  field widths, `base64_encode`, `bin2hex`, `mb_detect_encoding` with a
+  long list, `output_add_rewrite_var`, deeply nested `http_build_query`),
+  `json_*`,
   `serialize`/`unserialize`, `var_dump`/`print_r`, `http_build_query`,
   `PDOStatement::fetchAll`, `SQLite3Result::fetchAll`, `mysqli_fetch_all`,
   buffered mysqlnd results (the rows read so far are dropped and the rest

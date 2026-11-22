@@ -30,8 +30,11 @@ impl OwnedList {
         match v {
             Value::Array(arr) => {
                 let all = state::is_all_encodings(arr);
-                let mut items = Vec::with_capacity(arr.len());
+                // Checked per element: the list may be script-sized.
+                let mut items = Vec::new();
                 for (_, item) in arr.iter() {
+                    php_memlimit::poll()?;
+                    php_memlimit::TryGrow::try_grow(&mut items, 1)?;
                     let name = vm.value_to_string(&item.deref())?.as_bytes().to_vec();
                     // php_mb_parse_encoding_array stops at the first
                     // invalid name (before converting later elements).

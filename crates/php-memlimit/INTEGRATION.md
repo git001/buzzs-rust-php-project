@@ -275,7 +275,9 @@ What a script observes:
   allocation php-src happened to be in.
 
 Paths (branch `memlimit-fallible`): string and array builtins (also
-`sprintf` field widths, `base64_encode`, `bin2hex`), `json_*`,
+`sprintf` field widths, `base64_encode`, `bin2hex`, `mb_detect_encoding`
+with a long list, `output_add_rewrite_var`, deeply nested
+`http_build_query`), `json_*`,
 `serialize`/`unserialize`, `var_dump`/`print_r` (which also stream like
 php-src), `http_build_query`, `PDOStatement::fetchAll` (all modes),
 `SQLite3Result::fetchAll`, `mysqli_fetch_all`, and buffered mysqlnd

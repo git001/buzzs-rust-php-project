@@ -171,6 +171,10 @@ impl Builder<'_> {
                 "Maximum call stack size reached.".into(),
             ));
         }
+        // Each level keeps its key prefix while the next one builds a longer
+        // one: deep nesting grows quadratically, so every level checks
+        // `memory_limit`.
+        php_memlimit::poll()?;
         self.active.push(id);
         let r = match container {
             // A shared handle, not a copy of every entry: changes made by

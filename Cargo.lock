@@ -779,6 +779,7 @@ version = "0.1.0"
 dependencies = [
  "php-ext-stdstr",
  "php-ext-streams",
+ "php-memlimit",
  "php-runtime",
  "php-session",
  "php-stdstr",
@@ -1181,6 +1182,9 @@ dependencies = [
 [[package]]
 name = "php-mbstring"
 version = "0.1.0"
+dependencies = [
+ "php-memlimit",
+]
 
 [[package]]
 name = "php-memlimit"

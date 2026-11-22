@@ -268,6 +268,22 @@ const CASES: &[(&str, &str, &str)] = &[
         "$a = range(1, 300000);",
         "$r = array_combine($a, $a); $r2 = array_combine($a, $a);",
     ),
+    // Found by the trap-mode suite run (plan 3e, V5).
+    (
+        "mb_detect_encoding_list",
+        "$list = array_fill(0, 500000, 'UTF-8');",
+        "$r = mb_detect_encoding('hello', $list, false);",
+    ),
+    (
+        "output_add_rewrite_var",
+        "$v = str_repeat('a', 3000000);",
+        "output_add_rewrite_var($v, $v);",
+    ),
+    (
+        "http_build_query_deep",
+        "$a = null; for ($i = 0; $i < 3000; $i++) { $a = [$i => $a]; }",
+        "$r = http_build_query($a, 'p');",
+    ),
     (
         "pdo_sqlite_fetch_all",
         "$db = new PDO('sqlite::memory:'); \
