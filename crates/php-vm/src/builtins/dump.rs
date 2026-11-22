@@ -99,6 +99,9 @@ pub(crate) fn take_deferred_throw() -> VmResult<()> {
 
 /// Output of a dump: streamed through the output layer, or collected
 /// (`print_r($v, true)`, `var_export($v, true)`).
+/// Bytes a streamed `var_dump()` collects before it writes them.
+const STREAM_CHUNK: usize = 8192;
+
 pub(crate) struct Out {
     /// Never grows past `memory_limit`: a refused growth is recorded and
     /// the rest of the dump dropped ([`Out::check`], [`Out::finish`]).
@@ -142,6 +145,24 @@ impl Out {
     /// Whether the output stopped at `memory_limit`: the walk stops then.
     pub(crate) fn check(&self) -> VmResult<()> {
         Ok(self.buf.check()?)
+    }
+
+    /// Per element of `var_dump()`, `debug_zval_dump()` and `print_r()`: a
+    /// streamed dump writes what it has, so the output never collects in
+    /// memory (in chunks of [`STREAM_CHUNK`] bytes, to keep the writes few;
+    /// only earlier, so the order with warnings and user code stays).
+    /// php-src's `php_printf` writes each piece of `var_dump()` at once;
+    /// its `print_r()` builds the whole string first and fails at
+    /// `memory_limit` only after printing it (the over-limit allocation is
+    /// granted), so streaming prints the same bytes without the fatal.
+    /// `var_export()` stays buffered: php-src prints its warnings before
+    /// the export, and the export stops at the limit with the fatal
+    /// ([`check`](Self::check)).
+    pub(crate) fn step(&mut self, vm: &mut Vm) -> VmResult<()> {
+        if self.stream && self.buf.len() >= STREAM_CHUNK {
+            self.flush(vm);
+        }
+        self.check()
     }
 
     /// The collected bytes (streamed output is flushed instead), or the
@@ -686,7 +707,7 @@ pub(crate) fn var_dump(
             }
             let a = a.clone();
             for (k, v) in a.iter() {
-                out.check()?;
+                out.step(vm)?;
                 let Some(_depth) = Depth::enter(vm) else {
                     out.spaces(level + 1);
                     out.put(b"nesting level too deep");
@@ -817,7 +838,7 @@ fn var_dump_object(
         }
     }
     for (k, slot) in properties.iter().flatten() {
-        out.check()?;
+        out.step(vm)?;
         let Some(_depth) = Depth::enter(vm) else {
             out.spaces(level + 1);
             out.put(b"nesting level too deep");
@@ -883,11 +904,13 @@ pub(crate) fn print_r(vm: &mut Vm, out: &mut Out, value: &Value, indent: usize) 
                 out.put(b" *RECURSION*");
                 return Ok(());
             };
-            let entries: Vec<(ArrayKey, PropertySlot)> = a
+            // A shared handle, not a copy of every entry (changes made by
+            // user code meanwhile copy the array).
+            let a = a.clone();
+            let entries = a
                 .iter()
-                .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())))
-                .collect();
-            print_hash(vm, out, &entries, indent, false)
+                .map(|(k, v)| (k.clone(), PropertySlot::Value(v.clone())));
+            print_hash(vm, out, entries, indent, false)
         }
         Value::Object(o) => {
             let cls = crate::object::class_of(o).clone();
@@ -914,7 +937,7 @@ pub(crate) fn print_r(vm: &mut Vm, out: &mut Out, value: &Value, indent: usize) 
                 (ObjectKind::Enum { .. }, None) => enum_props(vm, o)?,
                 (_, p) => p.unwrap_or_default(),
             };
-            print_hash(vm, out, &entries, indent, true)
+            print_hash(vm, out, entries, indent, true)
         }
         Value::Float(f) => {
             out.put(format_double(*f, vm.precision(), false).as_bytes());
@@ -935,7 +958,7 @@ pub(crate) fn print_r(vm: &mut Vm, out: &mut Out, value: &Value, indent: usize) 
 fn print_hash(
     vm: &mut Vm,
     out: &mut Out,
-    entries: &[(ArrayKey, PropertySlot)],
+    entries: impl IntoIterator<Item = (ArrayKey, PropertySlot)>,
     indent: usize,
     is_object: bool,
 ) -> VmResult<()> {
@@ -943,13 +966,13 @@ fn print_hash(
     out.put(b"(\n");
     let inner = indent + 4;
     for (k, slot) in entries {
-        out.check()?;
+        out.step(vm)?;
         let PropertySlot::Value(v) = slot else {
             continue;
         };
         out.spaces(inner);
         out.put(b"[");
-        match k {
+        match &k {
             ArrayKey::Int(i) => out.put(i.to_string().as_bytes()),
             ArrayKey::Str(s) if is_object => match unmangle_property_name(s.as_bytes()) {
                 (Some(class), prop) => {
@@ -967,7 +990,7 @@ fn print_hash(
             ArrayKey::Str(s) => out.put(s.as_bytes()),
         }
         out.put(b"] => ");
-        print_r(vm, out, v, inner + 4)?;
+        print_r(vm, out, &v, inner + 4)?;
         out.put(b"\n");
     }
     out.spaces(indent);
