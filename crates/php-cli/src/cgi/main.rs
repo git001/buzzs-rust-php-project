@@ -497,18 +497,9 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         _ => {}
     }
 
-    // The request body: CONTENT_LENGTH bytes of standard input
-    // (`sapi_cgi_read_post`).
-    let content = if info.content_length > 0 {
-        let mut body = Vec::new();
-        let n = u64::try_from(info.content_length).unwrap_or(0);
-        let _ = std::io::stdin().lock().take(n).read_to_end(&mut body);
-        Some(body)
-    } else {
-        None
-    };
-
-    let request = build_request(&info, content);
+    // The request body stays on standard input until PHP reads it
+    // (`sapi_cgi_read_post`, `CgiInfo::content_length`).
+    let request = build_request(&info);
     let php_self = env::php_self(
         info.request_uri.as_deref(),
         std::env::var_os("PATH_INFO")
@@ -522,6 +513,7 @@ fn run(argv: &[Vec<u8>]) -> i32 {
         php_self,
         source,
         argv: script_argv,
+        content_length: info.content_length.max(0),
         ..CgiInfo::default()
     };
     let ctx = Rc::new(RequestCtx::new_cgi(request, cgi_info));
@@ -562,14 +554,13 @@ fn sapi_ini(cfg: &Config) -> Vec<(String, String)> {
 }
 
 /// The request as the built-in server's machinery sees it.
-fn build_request(info: &env::RequestInfo, content: Option<Vec<u8>>) -> Request {
+fn build_request(info: &env::RequestInfo) -> Request {
     let method_name = info.request_method.clone().unwrap_or_default();
     let mut request = Request {
         method: method_from(&method_name),
         protocol_version: 100,
         query_string: info.query_string.clone(),
         path_translated: info.path_translated.clone(),
-        content,
         ..Request::default()
     };
     if !info.content_type.is_empty() {
@@ -824,13 +815,13 @@ mod tests {
             path_translated: Some(b"/t/x.php".to_vec()),
             ..env::RequestInfo::default()
         };
-        let r = build_request(&info, Some(b"b=2".to_vec()));
+        let r = build_request(&info);
         assert_eq!(r.method, Method::Post);
         assert_eq!(
             r.header(b"content-type"),
             Some(&b"application/x-www-form-urlencoded"[..])
         );
-        assert_eq!(r.content.as_deref(), Some(&b"b=2"[..]));
+        assert_eq!(r.content, None, "the body stays on standard input");
         assert_eq!(r.path_translated.as_deref(), Some(&b"/t/x.php"[..]));
     }
 }

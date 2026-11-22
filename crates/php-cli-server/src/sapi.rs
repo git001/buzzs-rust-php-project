@@ -116,6 +116,9 @@ pub struct CgiInfo {
     pub rfc2616_headers: Cell<bool>,
     /// `cgi.nph`.
     pub nph: Cell<bool>,
+    /// `CONTENT_LENGTH`: the body `sapi_cgi_read_post()` reads from
+    /// standard input when PHP asks for it (0 when there is none).
+    pub content_length: i64,
 }
 
 thread_local! {
@@ -961,7 +964,10 @@ fn run_request_inner(
         request_method: Some(method),
         query_string: req.query_string.clone(),
         cookie_data: req.header(b"cookie").map(<[u8]>::to_vec),
-        content_length: i64::try_from(req.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX),
+        content_length: match &ctx.cgi {
+            Some(cgi) => cgi.content_length,
+            None => i64::try_from(req.content.as_ref().map_or(0, Vec::len)).unwrap_or(i64::MAX),
+        },
         path_translated: req.path_translated.clone(),
         request_uri: req.request_uri.clone(),
         content_type: req.header(b"content-type").map(<[u8]>::to_vec),

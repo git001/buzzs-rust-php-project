@@ -131,10 +131,37 @@ impl SapiInput for RequestCtx {
 }
 
 impl php_sapi::SapiPost for RequestCtx {
-    /// `sapi_cli_server_read_post()` / `sapi_cgi_read_post()` read the
-    /// body the server received whole.
+    /// `sapi_cli_server_read_post()` reads the body the server received
+    /// whole; CGI streams it instead ([`php_sapi::SapiPost::read_post`]).
     fn content(&self) -> Option<&[u8]> {
+        if self.cgi.is_some() {
+            return None;
+        }
         Some(self.request.content.as_deref().unwrap_or_default())
+    }
+
+    /// `sapi_cgi_read_post()`: up to `CONTENT_LENGTH` bytes of standard
+    /// input, read when PHP asks for them, so a body PHP does not read (or
+    /// that passes `post_max_size`) is not held in memory.
+    fn read_post(&self, offset: u64, buf: &mut [u8]) -> usize {
+        use std::io::Read;
+        let Some(cgi) = &self.cgi else {
+            return 0;
+        };
+        let length = u64::try_from(cgi.content_length).unwrap_or(0);
+        let remaining = usize::try_from(length.saturating_sub(offset)).unwrap_or(usize::MAX);
+        let want = buf.len().min(remaining);
+        let mut stdin = std::io::stdin().lock();
+        let mut done = 0;
+        while done < want {
+            match stdin.read(&mut buf[done..want]) {
+                Ok(0) => break,
+                Ok(n) => done += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        done
     }
 }
 

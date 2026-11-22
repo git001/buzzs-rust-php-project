@@ -200,6 +200,12 @@ differs.
   rewritten to call `\__cli_server_router_return()`, a function that
   exists only there; lines and traces are unchanged.
   Where: `crates/php-cli-server/src/router.rs`.
+- **Silent fallback for `php://input`'s buffer.** When `php://input` is
+  what first moves a streamed request body to a temporary file and
+  `upload_tmp_dir` is unusable, the file goes to the system's temporary
+  directory without php-src's notice ("file created in the system's
+  temporary directory"); when the POST handlers buffer the body, the
+  notice is given as in php-src. Where: `crates/php-sapi-input/src/body.rs`.
 - **Orphaned uploads are deleted.** Temporary files of uploads that a later
   `request_parse_body()` drops are deleted at request end; php-src leaks
   them. Where: `crates/php-sapi-input/src/body.rs`.

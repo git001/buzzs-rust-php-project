@@ -309,6 +309,8 @@ fn read_standard_form_data<S: SapiInput + ?Sized>(
             true,
         );
     }
+    // The buffer may move to a file in upload_tmp_dir as it is read.
+    php_ext_streams::bridge::sync_settings(vm);
     if body::buffer_rest(s, post_max_size) {
         warn(
             vm,
@@ -319,8 +321,18 @@ fn read_standard_form_data<S: SapiInput + ?Sized>(
             true,
         )?;
     }
-    let buffered = body::request_body(s).map_or(0, |b| b.len());
-    if buffered >= SAPI_POST_BLOCK_SIZE && !body_spill_possible(vm, phase)? {
+    // A streamed body moved to a temporary file as it was read; content the
+    // SAPI holds in memory is only viewed, so whether it could move is
+    // checked instead.
+    let spill_failed = if s.post().content().is_some() {
+        body::request_body_len(s) >= SAPI_POST_BLOCK_SIZE && !body_spill_possible(vm, phase)?
+    } else {
+        if s.body().take_spill_fell_back() {
+            notice(vm, phase, php_streams::temp::FALLBACK_NOTICE)?;
+        }
+        s.body().spill_failed()
+    };
+    if spill_failed {
         // php_stream_temp_write() failed: the stream is truncated.
         body::discard_request_body(s);
         warn(
