@@ -31,6 +31,9 @@ fn run(code: &str) -> String {
 }
 
 fn run_configured(code: &str, configure: impl FnOnce(&mut Vm)) -> String {
+    // Its own counter: the tests run in parallel and set different
+    // `memory_limit`s.
+    php_memlimit::attach_thread();
     let sink = Sink::default();
     let ext = php_ext_json::Json;
     let exts: [&dyn Extension; 2] = [&php_ext_stdstr::StdStr, &ext];
