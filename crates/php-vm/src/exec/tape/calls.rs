@@ -245,6 +245,7 @@ pub(super) fn prepare(vm: &mut Vm, name: u32) -> Option<Prepared> {
 
 /// Readies the pooled frame `frame` for a call of `uf`, as
 /// `Vm::push_simple_ucall` readies it at `DoCall` (`FrameStack::push_in_place`).
+#[link_section = ".text.hot.php_vm"]
 fn ready_frame(frame: &mut crate::vm::Frame, uf: &Rc<UserFunction>) {
     debug_assert!(
         frame.this.is_none()
@@ -638,6 +639,7 @@ fn cv_value(frame: &crate::vm::Frame, cv: u32) -> Option<Value> {
 /// not the caller's newest: the caller materializes it and the generic
 /// `DoCall` runs. A builtin's call is given back as well, for
 /// [`call_native`].
+#[link_section = ".text.hot.php_vm"]
 pub(super) fn enter(
     vm: &mut Vm,
     prep: Prepared,

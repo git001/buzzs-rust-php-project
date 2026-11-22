@@ -2467,6 +2467,7 @@ impl Vm {
     /// tests for it (the operand shape is dispatched before this
     /// function's prologue, so the common fallbacks do not pay it twice).
     #[inline(never)]
+    #[link_section = ".text.hot.php_vm"]
     pub(crate) fn return_simple(
         &mut self,
         val: Operand,
@@ -2567,6 +2568,7 @@ impl Vm {
     /// (`set_tmp` releasing the result slot after the frame) it keeps.
     #[inline(never)]
     #[allow(clippy::too_many_lines)] // the direct path's shape, in full
+    #[link_section = ".text.hot.php_vm"]
     fn return_generic(
         &mut self,
         val: Operand,

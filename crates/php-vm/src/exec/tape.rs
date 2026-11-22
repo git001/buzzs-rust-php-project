@@ -1488,6 +1488,15 @@ fn usable(f: &Frame, code: &OpArray) -> bool {
 /// in its own registers, which is also why it is one function.
 #[inline(never)]
 #[allow(clippy::too_many_lines)]
+// The hot functions of the interpreter (this one, `run_call`,
+// `calls::ready_frame`, `calls::enter`, `hot::run_steps`,
+// `Vm::return_simple`, `Vm::return_generic`) share one section: the linker
+// puts `.text.hot.*` together at the start of `.text`, so code added
+// elsewhere no longer moves them relative to each other. Byte-identical,
+// 64-byte aligned functions otherwise land in other L1i and branch
+// predictor sets: calls_bench took 8 % longer with fetch latency 3.5 % ->
+// 8.2 % (TopdownL2) after an unrelated change (22 Nov 2026).
+#[link_section = ".text.hot.php_vm"]
 pub(super) fn run_tape(vm: &mut Vm, base: usize, code: &OpArray, ip: usize) -> (usize, usize) {
     let mut switched = 0;
     let mut code: *const OpArray = code;
@@ -1746,6 +1755,7 @@ fn flush_cold(vm: &mut Vm, prep: &mut Option<calls::Prepared>) {
 /// (`hot::step_ext`: `init_fcall_in`, `send_in`). Returns where execution
 /// continues, or [`DECLINED`].
 #[inline(never)]
+#[link_section = ".text.hot.php_vm"]
 fn run_call(
     vm: &mut Vm,
     prep: &mut Option<calls::Prepared>,

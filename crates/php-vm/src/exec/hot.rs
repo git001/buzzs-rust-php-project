@@ -226,6 +226,7 @@ pub(super) fn is_core(op: &Op) -> bool {
 /// `lits` and `ip` out of the caller's stack frame. It inlines only
 /// `step`'s core ops; the others are one call each ([`step_ext`]).
 #[inline(never)]
+#[link_section = ".text.hot.php_vm"]
 pub(super) fn run_steps(
     f: &mut Frame,
     ops: &[Op],
