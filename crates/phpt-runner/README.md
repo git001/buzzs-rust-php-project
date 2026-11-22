@@ -63,9 +63,10 @@ php-src clone). Without a baseline the exit code is 1 if anything FAILs or BORKs
 ## Scope
 
 `phpt-scope.txt` at the repository root lists php-src path prefixes that are out of scope by
-project decision (FEATURE_GAP.md rows with Pri `out`: opcache/JIT, ffi, server-backed DB and
-protocol clients except mysqli, readline/tidy/enchant/com_dotnet/imap, php-src's test-helper
-extensions, non-CLI SAPIs except apache2handler). Tests under those prefixes are not run; they
+project decision (FEATURE_GAP.md rows with Pri `out`: ffi, server-backed DB and protocol
+clients except mysqli and pdo_mysql, readline/tidy/enchant/com_dotnet/imap, php-src's
+test-helper extensions, non-CLI SAPIs except php-cgi, and a few Zend tests that need the opcache
+optimizer; opcache itself is in scope). Tests under those prefixes are not run; they
 are reported as `OUT` (a separate count in the table, summary and JSON), excluded from every
 pass-rate denominator and never written to the baseline. `--no-scope` disables this.
 

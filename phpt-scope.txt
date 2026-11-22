@@ -1,6 +1,7 @@
 # Out-of-scope php-src test directories (paths relative to modules/php-src).
 # Project decision of 3 Nov 2026, recorded in FEATURE_GAP.md (Pri = `out`):
-# non-CLI SAPIs except apache2handler and php-cgi, server-backed DB/protocol clients except
+# non-CLI SAPIs except php-cgi (apache2handler was dropped on 21 Nov 2026; it has no
+# .phpt tests; FastCGI/FPM are planned), server-backed DB/protocol clients except
 # mysqli and pdo_mysql (sqlite3/pdo_sqlite are in scope too), ffi,
 # readline, tidy/enchant/com_dotnet/imap, and php-src's internal test-helper extensions.
 # NOTE: opcache IS in scope (previously out of scope; the optimizer/JIT parts are tracked
@@ -60,7 +61,7 @@ ext/dl_test
 ext/skeleton
 ext/lexbor
 
-# Non-CLI SAPIs (apache2handler and php-cgi are IN scope)
+# Non-CLI SAPIs (php-cgi is IN scope; apache2handler was dropped and has no tests)
 sapi/fpm
 sapi/phpdbg
 sapi/embed

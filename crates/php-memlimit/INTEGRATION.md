@@ -53,8 +53,8 @@ after the built-in server check). A thread bound this way keeps the
 ownership across `request_end`, so the teardown that follows (the `Vm`'s
 drop or discard, TLS destructors at exit) stays on the owner path; it
 gives it up with `php_memlimit::unbind_current_thread()` if another thread
-is to take it. Multi-threaded SAPIs (`php -S` request threads, mod_php)
-leave the binding to `request_start`/`request_end`.
+is to take it. Multi-threaded SAPIs (`php -S` request threads, later the
+FastCGI and HTTP workers) leave the binding to `request_start`/`request_end`.
 
 ## 1. php-cli: install the allocator (once)
 

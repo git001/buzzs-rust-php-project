@@ -2,8 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! What every server API shares (`main/SAPI.h`), independent of the VM and
 //! the value model: the request as the SAPI describes it
-//! (`SG(request_info)`). Each SAPI (CLI, CGI, the built-in server, Apache,
-//! later `FastCGI` and an HTTP server) fills one [`RequestInfo`] per request;
+//! (`SG(request_info)`). Each SAPI (CLI, CGI, the built-in server, later
+//! `FastCGI` and an HTTP server) fills one [`RequestInfo`] per request;
 //! the VM keeps it, and extensions read it instead of asking a particular
 //! SAPI.
 
