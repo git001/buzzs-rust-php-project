@@ -4,9 +4,9 @@
 
 use crate::context::ContextRef;
 use crate::diag::StreamErrorCode;
-use crate::memory::{memory_create, memory_open, temp_create, MAX_MEM};
+use crate::memory::{memory_create, temp_create, MAX_MEM};
 use crate::mode::TempMode;
-use crate::stream::{OpFailed, Stream, StreamOps, StreamState, WrapperInfo, SEEK_SET};
+use crate::stream::{OpFailed, Stream, StreamOps, StreamState, WrapperInfo};
 use crate::util::{starts_with_ci, strtol};
 use crate::value::Value;
 use crate::wrapper::{wrapper_warn, OpenError, Wrapper, STREAM_OPEN_FOR_INCLUDE};
@@ -52,11 +52,26 @@ impl StreamOps for OutputOps {
     }
 }
 
-/// `php://input` (`php_stream_input_ops`).
-#[derive(Debug)]
+/// `php://input` (`php_stream_input_ops`): reads the SAPI's request body at
+/// its own position, without a copy of the body.
 pub struct InputOps {
-    body: Box<Stream>,
-    position: i64,
+    body: Option<state::BodyHook>,
+    position: usize,
+}
+
+impl std::fmt::Debug for InputOps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InputOps")
+            .field("len", &self.len())
+            .field("position", &self.position)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InputOps {
+    fn len(&self) -> usize {
+        self.body.as_ref().map_or(0, |b| b.len())
+    }
 }
 
 impl StreamOps for InputOps {
@@ -65,26 +80,42 @@ impl StreamOps for InputOps {
     }
 
     fn read(&mut self, st: &mut StreamState, buf: &mut [u8]) -> Result<usize, OpFailed> {
-        if self.body.read_filters.is_empty() {
-            self.body.seek(self.position, SEEK_SET);
+        let n = self
+            .body
+            .as_ref()
+            .map_or(0, |b| b.read_at(self.position, buf));
+        if n == 0 {
+            st.eof = true;
         }
-        let r = self.body.read(buf);
-        match r {
-            Ok(0) | Err(_) => st.eof = true,
-            Ok(n) => self.position += i64::try_from(n).unwrap_or(0),
-        }
-        r
+        self.position += n;
+        Ok(n)
     }
 
     fn can_seek(&self) -> bool {
         true
     }
 
-    fn seek(&mut self, _st: &mut StreamState, offset: i64, whence: i32, newpos: &mut i64) -> bool {
-        let r = self.body.seek(offset, whence);
-        self.position = self.body.tell();
-        *newpos = self.position;
-        r == 0
+    /// `php_stream_input_seek()`: seeks the request body buffer (a memory
+    /// stream in php-src) and takes its position.
+    fn seek(&mut self, st: &mut StreamState, offset: i64, whence: i32, newpos: &mut i64) -> bool {
+        use crate::memory::{seek_target, SeekTarget};
+        match seek_target(self.len(), self.position, offset, whence) {
+            SeekTarget::At(t) => {
+                self.position = usize::try_from(t).unwrap_or(usize::MAX);
+                *newpos = i64::try_from(t).unwrap_or(i64::MAX);
+                st.eof = false;
+                true
+            }
+            SeekTarget::BeforeStart => {
+                self.position = 0;
+                *newpos = 0;
+                false
+            }
+            SeekTarget::BadWhence => {
+                *newpos = i64::try_from(self.position).unwrap_or(i64::MAX);
+                false
+            }
+        }
     }
 
     fn flush(&mut self, _st: &mut StreamState) -> i32 {
@@ -257,10 +288,9 @@ impl Wrapper for PhpWrapper {
             if include_denied {
                 return disabled(options);
             }
-            let body = memory_open(TempMode::ReadOnly, state::request_body());
             return Ok(Stream::new(
                 Box::new(InputOps {
-                    body: Box::new(body),
+                    body: state::request_body(),
                     position: 0,
                 }),
                 "rb",
@@ -406,13 +436,29 @@ mod tests {
         assert_eq!(take_exception(), Some(PhpUrlException::NegativeMaxMemory));
     }
 
+    /// A fixed request body.
+    struct Static(&'static [u8]);
+
+    impl state::BodySource for Static {
+        fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
+            let rest = self.0.get(offset..).unwrap_or_default();
+            let n = rest.len().min(buf.len());
+            buf[..n].copy_from_slice(&rest[..n]);
+            n
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+
     #[test]
     fn output_and_input_hooks() {
         let captured = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let c2 = std::rc::Rc::clone(&captured);
         state::set_hooks(state::Hooks {
             output: Some(Box::new(move |b| c2.borrow_mut().extend_from_slice(b))),
-            request_body: Some(Box::new(|| b"body=1".to_vec())),
+            request_body: Some(std::rc::Rc::new(Static(b"body=1"))),
             executed_filename: None,
         });
         state::reset_request();

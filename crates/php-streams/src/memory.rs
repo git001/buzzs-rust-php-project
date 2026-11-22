@@ -44,6 +44,33 @@ pub fn memory_create(mode: TempMode) -> Stream {
     s
 }
 
+/// Where `php_stream_memory_seek()` goes.
+pub(crate) enum SeekTarget {
+    /// The new position (`size_t` arithmetic, wrapping; reported as
+    /// `zend_off_t`).
+    At(u64),
+    /// Before the start: fails, and the position goes to 0.
+    BeforeStart,
+    /// An unknown `whence`: fails, the position stays.
+    BadWhence,
+}
+
+/// The target of `php_stream_memory_seek()` over `len` bytes at `fpos`.
+pub(crate) fn seek_target(len: usize, fpos: usize, offset: i64, whence: i32) -> SeekTarget {
+    let len = len as u64;
+    let fpos = fpos as u64;
+    let mag = offset.unsigned_abs();
+    let target = match whence {
+        SEEK_CUR if offset < 0 => fpos.checked_sub(mag),
+        SEEK_CUR => Some(fpos.wrapping_add(mag)),
+        SEEK_SET => (offset >= 0).then_some(mag),
+        SEEK_END if offset > 0 => Some(len.wrapping_add(mag)),
+        SEEK_END => len.checked_sub(mag),
+        _ => return SeekTarget::BadWhence,
+    };
+    target.map_or(SeekTarget::BeforeStart, SeekTarget::At)
+}
+
 /// `php_stream_memory_open()`: a memory stream over `data`.
 pub fn memory_open(mode: TempMode, data: Vec<u8>) -> Stream {
     let mut s = memory_create(mode);
@@ -102,21 +129,13 @@ impl StreamOps for MemoryOps {
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
     fn seek(&mut self, st: &mut StreamState, offset: i64, whence: i32, newpos: &mut i64) -> bool {
-        // size_t arithmetic as in php_stream_memory_seek() (wrapping; the
-        // new offset is reported as zend_off_t).
-        let len = self.data.len() as u64;
-        let fpos = self.fpos as u64;
-        let mag = offset.unsigned_abs();
-        let target: Option<u64> = match whence {
-            SEEK_CUR if offset < 0 => fpos.checked_sub(mag),
-            SEEK_CUR => Some(fpos.wrapping_add(mag)),
-            SEEK_SET => (offset >= 0).then_some(mag),
-            SEEK_END if offset > 0 => Some(len.wrapping_add(mag)),
-            SEEK_END => len.checked_sub(mag),
-            _ => {
+        let target = match seek_target(self.data.len(), self.fpos, offset, whence) {
+            SeekTarget::BadWhence => {
                 *newpos = self.fpos as i64;
                 return false;
             }
+            SeekTarget::BeforeStart => None,
+            SeekTarget::At(t) => Some(t),
         };
         if let Some(t) = target {
             self.fpos = usize::try_from(t).unwrap_or(usize::MAX);

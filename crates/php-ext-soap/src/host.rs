@@ -843,9 +843,20 @@ impl SoapHost for VmHost<'_> {
         (s(self, "REQUEST_METHOD"), s(self, "QUERY_STRING"))
     }
 
+    /// `php_stream_copy_to_mem()` of `php://input`: one allocation of the
+    /// body's size, checked against `memory_limit` (past it there is no
+    /// body, and the VM raises the fatal as the call returns).
     fn request_body(&mut self) -> Option<Vec<u8>> {
-        let body = php_streams::state::request_body();
-        (!body.is_empty()).then_some(body)
+        let src = php_streams::state::request_body()?;
+        if src.is_empty() {
+            return None;
+        }
+        let mut body = Vec::new();
+        php_memlimit::TryGrow::try_grow_exact(&mut body, src.len()).ok()?;
+        body.resize(src.len(), 0);
+        let n = src.read_at(0, &mut body);
+        body.truncate(n);
+        Some(body)
     }
 
     fn ini_get(&mut self, name: &str) -> Option<Vec<u8>> {

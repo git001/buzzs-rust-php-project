@@ -71,7 +71,22 @@ pub type OutputHook = Box<dyn FnMut(&[u8])>;
 /// `zend_get_executed_filename()` provider.
 pub type FilenameHook = Box<dyn Fn() -> Option<Vec<u8>>>;
 /// Request body provider.
-pub type BodyHook = Box<dyn FnMut() -> Vec<u8>>;
+/// The request body behind `php://input` (`SG(request_info).request_body`),
+/// read at an offset: every `php://input` stream keeps its own position
+/// and the body is not copied.
+pub trait BodySource {
+    /// Copies the body bytes from `offset` on into `buf`; 0 at the end.
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize;
+    /// The body's length in bytes.
+    fn len(&self) -> usize;
+    /// Whether the body is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// The SAPI's request body (see [`BodySource`]).
+pub type BodyHook = std::rc::Rc<dyn BodySource>;
 
 /// Callbacks into the VM / SAPI.
 #[derive(Default)]
@@ -111,7 +126,6 @@ struct Globals {
     cli_err: bool,
     user_stream_current_filename: Option<Vec<u8>>,
     in_user_include: bool,
-    request_body: Option<Vec<u8>>,
     /// The umask before the request's first `umask()` call (`BG(umask)`),
     /// put back at request end.
     request_umask: Option<u32>,
@@ -164,15 +178,9 @@ pub fn executed_filename() -> Option<Vec<u8>> {
     HOOKS.with(|h| h.borrow().executed_filename.as_ref().and_then(|f| f()))
 }
 
-/// The request body for `php://input` (read once from the SAPI hook).
-pub fn request_body() -> Vec<u8> {
-    if let Some(b) = GLOBALS.with(|g| g.borrow().request_body.clone()) {
-        return b;
-    }
-    let hook = HOOKS.with(|h| h.borrow_mut().request_body.take());
-    let body = hook.map(|mut f| f()).unwrap_or_default();
-    GLOBALS.with(|g| g.borrow_mut().request_body = Some(body.clone()));
-    body
+/// The request body for `php://input`, `None` when the SAPI has none.
+pub fn request_body() -> Option<BodyHook> {
+    HOOKS.with(|h| h.borrow().request_body.clone())
 }
 
 /// `php_clear_stat_cache()`: forgets the cached `stat`/`lstat` results.
@@ -261,7 +269,6 @@ pub fn reset_request() {
         g.stat_cache = StatCache::default();
         g.user_stream_current_filename = None;
         g.in_user_include = false;
-        g.request_body = None;
         g.request_umask.take()
     });
     if let Some(mask) = umask {

@@ -35,6 +35,16 @@ impl Drop for ServerProc {
 }
 
 fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc {
+    start_with(name, files, router, &[])
+}
+
+/// [`start`] with `-d` settings.
+fn start_with(
+    name: &str,
+    files: &[(&str, &str)],
+    router: Option<&str>,
+    ini: &[&str],
+) -> ServerProc {
     let root =
         std::env::temp_dir().join(format!("php-cli-server-it-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -45,7 +55,11 @@ fn start(name: &str, files: &[(&str, &str)], router: Option<&str>) -> ServerProc
         std::fs::write(p, content).unwrap();
     }
     let mut cmd = Command::new(php_binary());
-    cmd.args(["-n", "-t"])
+    cmd.arg("-n");
+    for setting in ini {
+        cmd.args(["-d", setting]);
+    }
+    cmd.arg("-t")
         .arg(&root)
         .args(["-S", "127.0.0.1:0"])
         .current_dir(&root)
@@ -363,4 +377,52 @@ fn banner_on_pipes_and_log_survives_startup() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `php://input` reads the request body in place: two streams at their own
+/// positions cost no copy of a body larger than `memory_limit`, and reading
+/// all of it ends in the memory fatal at the script's line, with shutdown
+/// functions run (as PHP 8.6).
+#[test]
+#[ignore = "needs target/debug/php"]
+fn php_input_reads_the_body_without_copies() {
+    let srv = start_with(
+        "input",
+        &[
+            (
+                "peek.php",
+                "<?php $a = fopen('php://input', 'r'); $b = fopen('php://input', 'r'); \
+                 fseek($b, 30000000); echo fread($a, 10), '|', fread($b, 10), '|', memory_get_peak_usage() < 16777216 ? 'under' : 'over';",
+            ),
+            (
+                "all.php",
+                "<?php\nregister_shutdown_function(function () { echo \"\\nshutdown\"; });\n$s = file_get_contents('php://input');\necho 'not reached';",
+            ),
+        ],
+        None,
+        &["memory_limit=16M", "post_max_size=0", "display_errors=1", "html_errors=0"],
+    );
+    let body = format!("{}{}", "a".repeat(30_000_000), "b".repeat(10_000_000));
+    let post = |path: &str| {
+        request(
+            srv.port,
+            &format!(
+                "POST /{path} HTTP/1.0\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let peek = post("peek.php");
+    assert_eq!(split(&peek).1, "aaaaaaaaaa|bbbbbbbbbb|under", "{peek}");
+    let all = post("all.php");
+    let (_, out) = split(&all);
+    assert!(
+        out.contains("Allowed memory size of 16777216 bytes exhausted")
+            && out.contains("all.php on line 3"),
+        "{all}"
+    );
+    assert!(
+        out.ends_with("shutdown") && !out.contains("not reached"),
+        "{all}"
+    );
 }

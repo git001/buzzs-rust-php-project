@@ -195,16 +195,51 @@ pub fn discard_request_body<S: SapiInput + ?Sized>(s: &S) {
 /// use from what the SAPI has not read yet (`php_stream_input_read()`).
 /// The multipart parser reads the SAPI directly and leaves no buffer, so
 /// `php://input` then gets only what it left.
-pub fn input<S: SapiInput + ?Sized>(s: &S) -> Vec<u8> {
+///
+/// `php://input` reads it at an offset ([`read_input_at`]), so the body is
+/// not copied however often the script opens the stream.
+fn input_body<S: SapiInput + ?Sized>(s: &S) -> Option<Bytes<'_>> {
     if s.body().buffer.borrow().is_none() {
         buffer_rest(s, 0);
     }
-    request_body(s).map(|b| b.to_vec()).unwrap_or_default()
+    request_body(s)
+}
+
+/// Copies the `php://input` bytes from `offset` on into `buf`; 0 at the
+/// end (`php_stream_input_read()`).
+pub fn read_input_at<S: SapiInput + ?Sized>(s: &S, offset: usize, buf: &mut [u8]) -> usize {
+    let Some(body) = input_body(s) else {
+        return 0;
+    };
+    let rest = body.get(offset..).unwrap_or_default();
+    let n = rest.len().min(buf.len());
+    buf[..n].copy_from_slice(&rest[..n]);
+    n
+}
+
+/// The length of the `php://input` body.
+pub fn input_len<S: SapiInput + ?Sized>(s: &S) -> usize {
+    input_body(s).map_or(0, |b| b.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// All of `php://input`, read as a stream does.
+    fn input<S: SapiInput>(s: &S) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 3];
+        loop {
+            let n = read_input_at(s, out.len(), &mut buf);
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(out.len(), input_len(s));
+        out
+    }
 
     /// A SAPI holding its content in memory.
     struct InMemory(RequestBody, Option<Vec<u8>>);

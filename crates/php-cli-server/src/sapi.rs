@@ -758,6 +758,19 @@ pub enum Outcome {
     InternalError,
 }
 
+/// The request body as `php://input` reads it, without a copy.
+struct InputBody(Rc<RequestCtx>);
+
+impl php_streams::state::BodySource for InputBody {
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
+        php_sapi_input::body::read_input_at(&*self.0, offset, buf)
+    }
+
+    fn len(&self) -> usize {
+        php_sapi_input::body::input_len(&*self.0)
+    }
+}
+
 /// Makes `php://input` read the request body.
 fn install_input_hook(ctx: &Rc<RequestCtx>) {
     use php_ext_streams::bridge::with_vm;
@@ -770,7 +783,7 @@ fn install_input_hook(ctx: &Rc<RequestCtx>) {
         executed_filename: Some(Box::new(|| {
             with_vm(|vm| vm.current_location().0.as_bytes().to_vec())
         })),
-        request_body: Some(Box::new(move || php_sapi_input::body::input(&*body_ctx))),
+        request_body: Some(Rc::new(InputBody(body_ctx))),
     });
     php_streams::state::update_settings(|s| s.sapi_is_cli = false);
 }
