@@ -170,7 +170,9 @@ impl Vm {
             matches!(vm.functions.get(name), Some(crate::func::Func::Builtin(_)))
         };
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.ini.get_long("zend.assertions").hash(&mut h);
+        // Only -1 changes the code (the asserts are dropped); 0 and 1 are
+        // switched at run time (`zend_compile_assert`).
+        (self.ini.get_long("zend.assertions") < 0).hash(&mut h);
         self.optimization_level().hash(&mut h);
         self.ini.get_bool("opcache.save_comments").hash(&mut h);
         self.ini.get_bool("short_open_tag").hash(&mut h);

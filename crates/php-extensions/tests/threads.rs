@@ -575,6 +575,61 @@ echo "$own $bad\n";
     }
 }
 
+/// Serializes the tests that use the process's opcache: one of them
+/// resets it, which would drop what another just cached.
+static OPCACHE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Takes [`OPCACHE`] (a failed test does not poison it for the rest).
+fn opcache_lock() -> std::sync::MutexGuard<'static, ()> {
+    OPCACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A temporary PHP file for an opcache test: its name, and its path.
+fn opcache_file() -> (String, std::path::PathBuf) {
+    let (file, path) =
+        php_streams::temp::create_temporary(None, Some(b"threads-opcache-"), 0, &mut || {})
+            .expect("temporary file");
+    drop(file);
+    let name = String::from_utf8(path).expect("UTF-8 temp path");
+    let fs_path = std::path::PathBuf::from(&name);
+    (name, fs_path)
+}
+
+/// Runs `src` (after `<?php `, with `@P@` standing for `name`) in a new VM
+/// on the current thread, with opcache on and no timestamp checks (a
+/// changed file is seen only if the cache does not serve the old one),
+/// plus `ini`; returns its output.
+fn run_opcache(name: &str, ini: &[(&str, &str)], src: &str) -> String {
+    let sink = Sink::default();
+    let mut all: Vec<(String, String)> = vec![
+        ("display_errors".into(), "1".into()),
+        ("opcache.enable_cli".into(), "1".into()),
+        ("opcache.validate_timestamps".into(), "0".into()),
+        // The file was written just now.
+        ("opcache.file_update_protection".into(), "0".into()),
+    ];
+    all.extend(ini.iter().map(|&(k, v)| (k.to_owned(), v.to_owned())));
+    let opts = VmOptions { ini: all };
+    let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), php_extensions::ALL);
+    let src = format!("<?php {}", src.replace("@P@", name));
+    vm.run_script(src.as_bytes(), "/opcache.php");
+    sink.take()
+}
+
+/// [`run_opcache`] on a new thread.
+fn run_opcache_on_thread(name: &str, ini: &[(&'static str, &'static str)], src: &str) -> String {
+    let (name, ini, src) = (name.to_owned(), ini.to_vec(), src.to_owned());
+    on_thread(move || run_opcache(&name, &ini, &src))
+        .join()
+        .expect("VM thread")
+}
+
+/// Includes the opcache test file and says whether it is cached.
+const INCLUDE_CACHED: &str =
+    "echo include '@P@', ' ', opcache_is_script_cached('@P@') ? 'cached' : 'not cached', \"\\n\";";
+
 #[test]
 fn opcache_is_one_cache_for_the_process() {
     // php-src keeps the cached scripts in shared memory, one cache for
@@ -582,33 +637,10 @@ fn opcache_is_one_cache_for_the_process() {
     // opcache_invalidate() / opcache_reset() by one act for all. Here the
     // file changes behind the cache (no timestamp checks), so only the
     // shared cache gives a later thread the first version.
-    let (file, path) =
-        php_streams::temp::create_temporary(None, Some(b"threads-opcache-"), 0, &mut || {})
-            .expect("temporary file");
-    drop(file);
-    let name = String::from_utf8(path.clone()).expect("UTF-8 temp path");
-    let fs_path = std::path::PathBuf::from(&name);
-    let run = |src: &str| {
-        let src = format!("<?php {}", src.replace("@P@", &name));
-        on_thread(move || {
-            let sink = Sink::default();
-            let opts = VmOptions {
-                ini: vec![
-                    ("display_errors".into(), "1".into()),
-                    ("opcache.enable_cli".into(), "1".into()),
-                    ("opcache.validate_timestamps".into(), "0".into()),
-                    // The file was written just now.
-                    ("opcache.file_update_protection".into(), "0".into()),
-                ],
-            };
-            let mut vm = Vm::with_extensions(&opts, Box::new(sink.clone()), php_extensions::ALL);
-            vm.run_script(src.as_bytes(), "/opcache.php");
-            sink.take()
-        })
-        .join()
-        .expect("VM thread")
-    };
-    let cached = "echo include '@P@', ' ', opcache_is_script_cached('@P@') ? 'cached' : 'not cached', \"\\n\";";
+    let _cache = opcache_lock();
+    let (name, fs_path) = opcache_file();
+    let run = |src: &str| run_opcache_on_thread(&name, &[], src);
+    let cached = INCLUDE_CACHED;
     std::fs::write(&fs_path, "<?php return 'v1';").expect("write v1");
     assert_eq!(run(cached), "v1 cached\n", "first thread compiles");
     std::fs::write(&fs_path, "<?php return 'v2';").expect("write v2");
@@ -636,11 +668,35 @@ fn opcache_is_one_cache_for_the_process() {
 }
 
 #[test]
+fn opcache_shares_a_script_across_assertion_modes_that_compile_alike() {
+    // `zend.assertions` 1 and 0 compile to the same code (only -1 drops
+    // the asserts, `zend_compile_assert`); 0/1 is a runtime switch. A
+    // script cached under one serves the other, as php-src's shared
+    // memory does.
+    let _cache = opcache_lock();
+    let (name, fs_path) = opcache_file();
+    std::fs::write(&fs_path, "<?php return 'v1';").expect("write v1");
+    assert_eq!(
+        run_opcache_on_thread(&name, &[("zend.assertions", "1")], INCLUDE_CACHED),
+        "v1 cached\n",
+        "compiled with assertions on"
+    );
+    std::fs::write(&fs_path, "<?php return 'v2';").expect("write v2");
+    assert_eq!(
+        run_opcache_on_thread(&name, &[("zend.assertions", "0")], INCLUDE_CACHED),
+        "v1 cached\n",
+        "served with assertions off"
+    );
+    let _ = std::fs::remove_file(&fs_path);
+}
+
+#[test]
 fn opcache_keys_keep_the_working_directory_of_their_thread() {
     // A relative include is found by a key with the working directory in
     // it (`accel_make_persistent_key`). With one cache for the process,
     // two threads in different directories that include the same
     // relative name must each get their own file.
+    let _cache = opcache_lock();
     let tmp = php_streams::temp::temp_dir();
     let dirs: Vec<String> = ["A", "B"]
         .iter()
