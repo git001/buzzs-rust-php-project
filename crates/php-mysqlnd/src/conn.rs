@@ -344,6 +344,7 @@ impl ConnData {
         };
         let mut data: Vec<u8> = Vec::new();
         let mut scratch = ErrorInfo::default();
+        let mut over_limit = false;
         loop {
             let Some(size) = self.net.read_header(&mut self.stats, &mut scratch) else {
                 self.state = ConnState::QuitSent;
@@ -357,9 +358,20 @@ impl ConnData {
                     gone()
                 };
             };
-            let start = data.len();
-            data.resize(start + size, 0);
-            if !self.net.receive(&mut data[start..], &mut self.stats) {
+            // A row grows by up to 16 MiB per packet: checked first; past
+            // the limit the rest of the row is read and dropped.
+            if !over_limit && php_memlimit::TryGrow::try_grow_exact(&mut data, size).is_err() {
+                over_limit = true;
+                data = Vec::new();
+            }
+            let received = if over_limit {
+                self.net.skip(size, &mut self.stats)
+            } else {
+                let start = data.len();
+                data.resize(start + size, 0);
+                self.net.receive(&mut data[start..], &mut self.stats)
+            };
+            if !received {
                 self.state = ConnState::QuitSent;
                 return gone();
             }
@@ -373,6 +385,9 @@ impl ConnData {
         );
         self.inc(Stat::PacketsReceivedChangeUser, 1);
         *prev_size = data.len();
+        if over_limit {
+            return RowPacket::OverLimit;
+        }
         let p = protocol::classify_row(data);
         if let RowPacket::Row(_) = p {
             self.inc(
@@ -749,7 +764,7 @@ impl ConnData {
                         let mut prev = 0;
                         loop {
                             match self.read_row(false, &mut prev) {
-                                RowPacket::Row(_) => {}
+                                RowPacket::Row(_) | RowPacket::OverLimit => {}
                                 RowPacket::Eof(e) => {
                                     self.upsert.reset();
                                     self.upsert.warning_count = u32::from(e.warning_count);
@@ -1708,6 +1723,10 @@ impl ConnData {
         let mut over_limit = false;
         loop {
             match self.read_row(binary, &mut prev) {
+                RowPacket::OverLimit => {
+                    over_limit = true;
+                    rows = Vec::new();
+                }
                 RowPacket::Row(r) => {
                     if !over_limit && (php_memlimit::poll().is_err() || rows.try_grow(1).is_err()) {
                         over_limit = true;

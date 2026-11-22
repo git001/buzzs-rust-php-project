@@ -1086,6 +1086,15 @@ impl Statement {
         let mut prev = 0;
         let pkt = conn.data().read_row(true, &mut prev);
         let (out, status) = match pkt {
+            // Past `memory_limit`: no row, but the EOF that follows is read.
+            RowPacket::OverLimit => {
+                let eof = conn.data().read_row(true, &mut prev);
+                let status = match eof {
+                    RowPacket::Eof(e) => Some((e.warning_count, e.server_status)),
+                    _ => None,
+                };
+                (Ok(None), status)
+            }
             RowPacket::Row(raw) => {
                 let r = s
                     .result

@@ -446,8 +446,26 @@ impl Net {
             } else {
                 self.opts.net_read_buffer_size
             };
-            let want = chunk.max(buf.len() - done);
-            self.prefetch.resize(want, 0);
+            // Reads of a chunk or more go straight into the caller's buffer:
+            // php-src grows its read buffer one chunk at a time
+            // (`_php_stream_fill_read_buffer`), so a 16 MiB packet does not
+            // leave a second 16 MiB buffer on the connection.
+            if buf.len() - done >= chunk {
+                match s.read(&mut buf[done..]) {
+                    Ok(0) => {
+                        ok = false;
+                        break;
+                    }
+                    Ok(n) => done += n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
+                continue;
+            }
+            self.prefetch.resize(chunk, 0);
             self.pre_pos = 0;
             match s.read(&mut self.prefetch) {
                 Ok(0) => {
@@ -474,6 +492,20 @@ impl Net {
             return false;
         };
         s.write_all(buf).and_then(|()| s.flush()).is_ok()
+    }
+
+    /// Reads and drops `len` payload bytes through a small buffer (the rest
+    /// of a row past `memory_limit`), so the connection stays in step.
+    pub fn skip(&mut self, mut len: usize, stats: &mut Stats) -> bool {
+        let mut buf = [0u8; 8192];
+        while len > 0 {
+            let n = len.min(buf.len());
+            if !self.receive(&mut buf[..n], stats) {
+                return false;
+            }
+            len -= n;
+        }
+        true
     }
 
     /// `mysqlnd_pfc::receive`: reads `buf.len()` payload bytes, transparently

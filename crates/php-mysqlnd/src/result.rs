@@ -400,6 +400,10 @@ impl ResultSet {
         let pkt = c.read_row(binary, &mut prev);
         self.prev_row_size = prev;
         match pkt {
+            // Past `memory_limit`: no row; the rest of the set stays unread
+            // (dropping the result drains it) and the VM raises the fatal
+            // as the call returns.
+            RowPacket::OverLimit => Ok(None),
             RowPacket::Row(raw) => {
                 c.inc(
                     if self.ps {

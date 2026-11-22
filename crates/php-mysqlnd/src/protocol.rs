@@ -765,6 +765,10 @@ pub enum RowPacket {
     Eof(EofPacket),
     /// Error in the middle of the result set.
     Err(ServerError),
+    /// A row that would pass `memory_limit`: read and dropped, the
+    /// violation pending for the VM (php-src: `SET_OOM_ERROR` when the
+    /// row buffer cannot grow).
+    OverLimit,
 }
 
 /// Classifies a (fully assembled) row payload.
