@@ -19,3 +19,7 @@
 pub mod body;
 pub mod rfc1867;
 pub mod vars;
+
+/// The SAPI side of the request body (`sapi_module.read_post`), which
+/// [`body::SapiInput::post`] returns.
+pub use php_sapi::SapiPost;

@@ -11,7 +11,7 @@ mod module;
 pub mod panic;
 mod upload;
 
-pub use module::{Aborted, SapiModule, StderrLog};
+pub use module::{Aborted, SapiModule, SapiPost, StderrLog};
 pub use upload::{upload_err, UPLOAD_ERR_CONSTANTS};
 
 /// `sapi_request_info`: the request as the SAPI describes it. Strings are

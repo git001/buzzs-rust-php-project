@@ -5,9 +5,10 @@
 //! `SG(request_info).request_body` that `sapi_read_standard_form_data()`
 //! fills, and `php://input`.
 //!
-//! A SAPI either holds the whole body in memory ([`SapiInput::content`]:
-//! the built-in server, CGI), whose buffer is then a view into it, or
-//! streams it ([`SapiInput::read_post`]: Apache), whose buffer is read in
+//! A SAPI either holds the whole body in memory
+//! ([`php_sapi::SapiPost::content`]: the built-in server, CGI), whose
+//! buffer is then a view into it, or streams it
+//! ([`php_sapi::SapiPost::read_post`]), whose buffer is read in
 //! `SAPI_POST_BLOCK_SIZE` blocks.
 
 use std::cell::{Cell, RefCell};
@@ -72,25 +73,14 @@ impl RequestBody {
     }
 }
 
-/// How a SAPI delivers the request body (`sapi_module.read_post`).
+/// A request as the body functions see it: its body state and the SAPI
+/// that delivers the body ([`php_sapi::SapiPost`]).
 pub trait SapiInput {
     /// The request's body state.
     fn body(&self) -> &RequestBody;
 
-    /// The whole request content when the SAPI holds it in memory (the
-    /// built-in server, CGI): `read_post` then reads it from
-    /// `SG(read_post_bytes)` on, and the request body buffer is a view
-    /// into it.
-    fn content(&self) -> Option<&[u8]> {
-        None
-    }
-
-    /// `sapi_module.read_post` of a SAPI that streams the body: fills
-    /// `buf` as far as it can and returns the bytes read, 0 at the end.
-    /// Not called when [`SapiInput::content`] is `Some`.
-    fn read_post(&self, _buf: &mut [u8]) -> usize {
-        0
-    }
+    /// The SAPI's `read_post` side.
+    fn post(&self) -> &dyn php_sapi::SapiPost;
 }
 
 /// The offset `SG(read_post_bytes)` stands for in `content`.
@@ -104,14 +94,16 @@ fn offset(body: &RequestBody, content: &[u8]) -> usize {
 /// `SG(read_post_bytes)`.
 pub fn read_post_block<S: SapiInput + ?Sized>(s: &S, buf: &mut [u8]) -> usize {
     let body = s.body();
-    let n = match s.content() {
+    let n = match s.post().content() {
         Some(content) => {
             let off = offset(body, content);
             let n = buf.len().min(content.len() - off);
             buf[..n].copy_from_slice(&content[off..off + n]);
             n
         }
-        None => s.read_post(buf),
+        None => s
+            .post()
+            .read_post(u64::try_from(body.read_post_bytes.get()).unwrap_or(0), buf),
     };
     body.count(n);
     n
@@ -125,7 +117,7 @@ pub fn read_post_block<S: SapiInput + ?Sized>(s: &S, buf: &mut [u8]) -> usize {
 pub fn buffer_rest<S: SapiInput + ?Sized>(s: &S, post_max_size: i64) -> bool {
     let body = s.body();
     let exceeded = || post_max_size > 0 && body.read_post_bytes.get() > post_max_size;
-    if let Some(content) = s.content() {
+    if let Some(content) = s.post().content() {
         // All of it at once: the SAPI's Content-Length is the content's
         // length, which the caller checked against post_max_size.
         let start = offset(body, content);
@@ -178,7 +170,7 @@ pub fn request_body<S: SapiInput + ?Sized>(s: &S) -> Option<Bytes<'_>> {
     let buffer = s.body().buffer.borrow().clone()?;
     Some(match buffer {
         Buffer::Content(start) => {
-            let content = s.content().unwrap_or_default();
+            let content = s.post().content().unwrap_or_default();
             Bytes::Borrowed(&content[start.min(content.len())..])
         }
         Buffer::Owned(data) => Bytes::Shared(data),
@@ -248,6 +240,12 @@ mod tests {
         fn body(&self) -> &RequestBody {
             &self.0
         }
+        fn post(&self) -> &dyn php_sapi::SapiPost {
+            self
+        }
+    }
+
+    impl php_sapi::SapiPost for InMemory {
         fn content(&self) -> Option<&[u8]> {
             Some(self.1.as_deref().unwrap_or_default())
         }
@@ -269,7 +267,13 @@ mod tests {
         fn body(&self) -> &RequestBody {
             &self.body
         }
-        fn read_post(&self, buf: &mut [u8]) -> usize {
+        fn post(&self) -> &dyn php_sapi::SapiPost {
+            self
+        }
+    }
+
+    impl php_sapi::SapiPost for Streamed {
+        fn read_post(&self, _offset: u64, buf: &mut [u8]) -> usize {
             let pos = self.pos.get();
             let n = buf.len().min(self.chunk).min(self.data.len() - pos);
             buf[..n].copy_from_slice(&self.data[pos..pos + n]);

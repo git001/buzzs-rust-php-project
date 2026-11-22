@@ -73,3 +73,28 @@ impl SapiModule for StderrLog {
         let _ = std::io::stderr().lock().write_all(&line);
     }
 }
+
+/// The request body as the SAPI delivers it (`sapi_module.read_post`),
+/// which every server provides in its own way: CGI from standard input,
+/// the built-in server from the body it received, `FastCGI` from `STDIN`
+/// records, HTTP from its spool or stream. Implemented by the SAPI's
+/// request object rather than by [`SapiModule`]: requests run on threads
+/// with their own state, where php-src reads `SG(request_info)`. The read
+/// loop, `SG(read_post_bytes)`, the request body buffer and `php://input`
+/// are `php-sapi-input`'s (`main/SAPI.c`).
+pub trait SapiPost {
+    /// The whole request content when the SAPI already holds it in memory
+    /// (the built-in server): it is then read from `SG(read_post_bytes)` on
+    /// and the request body buffer is a view into it.
+    fn content(&self) -> Option<&[u8]> {
+        None
+    }
+
+    /// `sapi_module.read_post` of a SAPI that streams the body: fills
+    /// `buf` as far as it can and returns the bytes read, 0 at the end.
+    /// `offset` is `SG(read_post_bytes)`, the body bytes read so far. Not
+    /// called when [`SapiPost::content`] is `Some`.
+    fn read_post(&self, _offset: u64, _buf: &mut [u8]) -> usize {
+        0
+    }
+}

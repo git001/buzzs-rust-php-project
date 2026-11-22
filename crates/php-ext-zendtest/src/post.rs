@@ -41,7 +41,13 @@ impl SapiInput for StreamBody<'_> {
         &self.body
     }
 
-    fn read_post(&self, buf: &mut [u8]) -> usize {
+    fn post(&self) -> &dyn php_sapi_input::SapiPost {
+        self
+    }
+}
+
+impl php_sapi_input::SapiPost for StreamBody<'_> {
+    fn read_post(&self, _offset: u64, buf: &mut [u8]) -> usize {
         read_full(&mut self.stream.borrow_mut(), buf)
     }
 }

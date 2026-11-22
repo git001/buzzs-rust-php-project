@@ -125,6 +125,12 @@ impl SapiInput for RequestCtx {
         &self.body
     }
 
+    fn post(&self) -> &dyn php_sapi::SapiPost {
+        self
+    }
+}
+
+impl php_sapi::SapiPost for RequestCtx {
     /// `sapi_cli_server_read_post()` / `sapi_cgi_read_post()` read the
     /// body the server received whole.
     fn content(&self) -> Option<&[u8]> {
@@ -146,8 +152,8 @@ impl SapiInput for ServerVars<'_> {
         self.ctx.body()
     }
 
-    fn content(&self) -> Option<&[u8]> {
-        self.ctx.content()
+    fn post(&self) -> &dyn php_sapi::SapiPost {
+        self.ctx
     }
 }
 
