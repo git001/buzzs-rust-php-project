@@ -109,12 +109,23 @@ fn checked_buf_stops_growing_at_the_limit() {
         out.push(b'y');
         out.extend([1, 2, 3]);
         assert_eq!(out.len(), len, "nothing appended after the refusal");
+        assert!(
+            std::fmt::Write::write_str(&mut out, "z").is_err(),
+            "fmt::Write fails after the refusal"
+        );
+        assert_eq!(
+            std::io::Write::write(&mut out, b"z").map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::OutOfMemory),
+            "io::Write too"
+        );
         assert_eq!(out.into_vec(), Err(err));
         php_memlimit::clear();
         let mut small = php_memlimit::CheckedBuf::new();
         php_memlimit::ByteSink::extend_from_slice(&mut small, b"ab");
         small.push(b'c');
-        assert_eq!(small.into_vec().as_deref(), Ok(&b"abc"[..]));
+        write!(small, "i:{};", 42);
+        assert!(std::io::Write::write_all(&mut small, b"!").is_ok());
+        assert_eq!(small.into_vec().as_deref(), Ok(&b"abci:42;!"[..]));
         php_memlimit::request_end();
     })
     .join()

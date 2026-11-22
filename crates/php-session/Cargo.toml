@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-stdstr = { path = "../php-stdstr" }
 php-runtime = { path = "../php-runtime" }
 php-random = { path = "../php-random" }
 php-support = { path = "../php-support" }

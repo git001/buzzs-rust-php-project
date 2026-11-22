@@ -5,7 +5,7 @@
 //! (`php_register_variable_ex`, `php_default_treat_data`) behind
 //! `parse_str()` and the SAPI's `$_GET`/`$_POST`/`$_COOKIE`.
 
-use php_memlimit::{ByteSink, CheckedBuf};
+use php_memlimit::CheckedBuf;
 use php_runtime::{
     ArrayKey, ErrorLevel, HashTable, Obj, RtResult, RuntimeContext, RuntimeError, Value, ZArray,
     ZStr,
@@ -35,23 +35,7 @@ pub trait QueryContext: RuntimeContext {
     }
 }
 
-fn hex_upper(n: u8) -> u8 {
-    b"0123456789ABCDEF"[usize::from(n & 15)]
-}
-
-/// `php_url_encode` (`raw = false`, RFC 1738) / `php_raw_url_encode`
-/// (`raw = true`, RFC 3986) appended to `out`.
-pub fn url_encode_into(out: &mut impl ByteSink, s: &[u8], raw: bool) {
-    for &c in s {
-        if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.') || (raw && c == b'~') {
-            out.push(c);
-        } else if c == b' ' && !raw {
-            out.push(b'+');
-        } else {
-            out.extend_from_slice(&[b'%', hex_upper(c >> 4), hex_upper(c)]);
-        }
-    }
-}
+pub use php_stdstr::url::url_encode_into;
 
 fn hex_val(c: u8) -> Option<u8> {
     match c {

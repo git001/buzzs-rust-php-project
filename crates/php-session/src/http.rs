@@ -70,23 +70,6 @@ pub fn http_date(t: i64) -> String {
     )
 }
 
-/// `php_url_encode()`: `[A-Za-z0-9_.-]` kept, space as `+`, the rest `%XX`.
-#[must_use]
-pub fn url_encode(s: &[u8]) -> Vec<u8> {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = Vec::with_capacity(s.len());
-    for &c in s {
-        if c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-') {
-            out.push(c);
-        } else if c == b' ' {
-            out.push(b'+');
-        } else {
-            out.extend_from_slice(&[b'%', HEX[usize::from(c >> 4)], HEX[usize::from(c & 15)]]);
-        }
-    }
-    out
-}
-
 /// The cookie attributes `php_session_send_cookie()` writes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CookieParams<'a> {
@@ -117,7 +100,8 @@ pub fn session_cookie(p: &CookieParams<'_>, now: i64) -> Vec<u8> {
     let mut c = b"Set-Cookie: ".to_vec();
     c.extend_from_slice(p.name);
     c.push(b'=');
-    c.extend_from_slice(&url_encode(p.id));
+    // `php_url_encode()` of the session ID.
+    php_stdstr::url::url_encode_into(&mut c, p.id, false);
     if p.lifetime > 0 {
         let t = now.saturating_add(p.lifetime);
         if t > 0 {
@@ -232,9 +216,17 @@ mod tests {
     }
 
     #[test]
-    fn url_encoding() {
-        assert_eq!(url_encode(b"a b/c~"), b"a+b%2Fc%7E");
-        assert_eq!(url_encode(b"Az09-_."), b"Az09-_.");
+    fn the_cookie_url_encodes_the_session_id() {
+        let p = CookieParams {
+            name: b"S",
+            id: b"a b/c~Az09-_.",
+            ..CookieParams::default()
+        };
+        assert!(
+            session_cookie(&p, 0).starts_with(b"Set-Cookie: S=a+b%2Fc%7EAz09-_."),
+            "{:?}",
+            String::from_utf8_lossy(&session_cookie(&p, 0))
+        );
     }
 
     #[test]

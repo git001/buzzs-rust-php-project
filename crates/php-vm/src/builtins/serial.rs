@@ -220,11 +220,11 @@ fn add_var_hash(d: &SerRc, var: &Value) -> i64 {
 }
 
 fn put_long(buf: &mut CheckedBuf, n: i64) {
-    buf.extend_from_slice(format!("i:{n};").as_bytes());
+    write!(buf, "i:{n};");
 }
 
 fn put_string(buf: &mut CheckedBuf, s: &[u8]) {
-    buf.extend_from_slice(format!("s:{}:\"", s.len()).as_bytes());
+    write!(buf, "s:{}:\"", s.len());
     buf.extend_from_slice(s);
     buf.extend_from_slice(b"\";");
 }
@@ -237,7 +237,7 @@ fn put_key(buf: &mut CheckedBuf, k: &ArrayKey) {
 }
 
 fn put_class_header(buf: &mut CheckedBuf, name: &[u8]) {
-    buf.extend_from_slice(format!("O:{}:\"", name.len()).as_bytes());
+    write!(buf, "O:{}:\"", name.len());
     buf.extend_from_slice(name);
     buf.extend_from_slice(b"\":");
 }
@@ -285,7 +285,7 @@ impl Serializer<'_> {
         count: usize,
         mut skip_magic: bool,
     ) -> VmResult<()> {
-        self.buf.extend_from_slice(format!("{count}:{{").as_bytes());
+        write!(self.buf, "{count}:{{");
         if count > 0 {
             for (k, v) in t.iter() {
                 // The output stops growing at `memory_limit`; so does the walk.
@@ -324,13 +324,11 @@ impl Serializer<'_> {
                 return Ok(());
             }
             if matches!(v, Value::Reference(_)) {
-                self.buf
-                    .extend_from_slice(format!("R:{already};").as_bytes());
+                write!(self.buf, "R:{already};");
                 return Ok(());
             }
             if matches!(v, Value::Object(_)) {
-                self.buf
-                    .extend_from_slice(format!("r:{already};").as_bytes());
+                write!(self.buf, "r:{already};");
                 return Ok(());
             }
         }
@@ -373,8 +371,7 @@ impl Serializer<'_> {
         }
         if cls.is_enum() {
             let case = vm.enum_case_name(o).unwrap_or_default();
-            self.buf
-                .extend_from_slice(format!("E:{}:\"", cls.name.len() + 1 + case.len()).as_bytes());
+            write!(self.buf, "E:{}:\"", cls.name.len() + 1 + case.len());
             self.buf.extend_from_slice(cls.name.as_bytes());
             self.buf.push(b':');
             self.buf.extend_from_slice(case.as_bytes());
@@ -405,8 +402,7 @@ impl Serializer<'_> {
             };
             if let Some(data) = data {
                 put_class_header(&mut self.buf, cls.name.as_bytes());
-                self.buf
-                    .extend_from_slice(format!("{}:{{", data.len()).as_bytes());
+                write!(self.buf, "{}:{{", data.len());
                 for (k, v) in data.iter() {
                     put_key(&mut self.buf, k);
                     self.value(vm, &element(v))?;
@@ -421,11 +417,9 @@ impl Serializer<'_> {
             let r = vm.call_method_name(o, "serialize", Vec::new())?;
             match r {
                 Value::Str(data) => {
-                    self.buf
-                        .extend_from_slice(format!("C:{}:\"", cls.name.len()).as_bytes());
+                    write!(self.buf, "C:{}:\"", cls.name.len());
                     self.buf.extend_from_slice(cls.name.as_bytes());
-                    self.buf
-                        .extend_from_slice(format!("\":{}:{{", data.len()).as_bytes());
+                    write!(self.buf, "\":{}:{{", data.len());
                     self.buf.extend_from_slice(data.as_bytes());
                     self.buf.push(b'}');
                 }

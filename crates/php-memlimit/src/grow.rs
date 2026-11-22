@@ -151,6 +151,14 @@ impl CheckedBuf {
         }
     }
 
+    /// Appends formatted text: `write!(buf, "i:{n};")` formats straight
+    /// into the buffer, without a `String` in between. Infallible at the
+    /// call site like the other appends (a refused growth is in
+    /// [`CheckedBuf::check`]).
+    pub fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) {
+        let _ = std::fmt::Write::write_fmt(self, args);
+    }
+
     /// Shortens the buffer to `len` bytes (`Vec::truncate`).
     pub fn truncate(&mut self, len: usize) {
         self.buf.truncate(len);
@@ -236,6 +244,31 @@ impl Extend<u8> for CheckedBuf {
         for b in bytes {
             self.push(b);
         }
+    }
+}
+
+/// For formatting code that takes any `fmt::Write`: fails once a growth
+/// was refused.
+impl std::fmt::Write for CheckedBuf {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.extend_from_slice(s.as_bytes());
+        self.over.map_or(Ok(()), |_| Err(std::fmt::Error))
+    }
+}
+
+/// For encoders that take any `io::Write`: fails with `OutOfMemory` once a
+/// growth was refused.
+impl std::io::Write for CheckedBuf {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.extend_from_slice(bytes);
+        match self.over {
+            Some(_) => Err(std::io::ErrorKind::OutOfMemory.into()),
+            None => Ok(bytes.len()),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

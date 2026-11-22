@@ -3,11 +3,23 @@
 //! URL encoding and `parse_url()` — a port of `ext/standard/url.c`.
 
 use crate::error::{StdError, StdResult};
+use php_memlimit::ByteSink;
 
 const HEXCHARS: &[u8; 16] = b"0123456789ABCDEF";
 
 fn url_encode_impl(s: &[u8], raw: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len() + s.len() / 2);
+    url_encode_into(&mut out, s, raw);
+    out
+}
+
+/// `php_url_encode` (`raw = false`: a space becomes `+`) or
+/// `php_raw_url_encode` (`raw = true`, RFC 3986: `~` is kept, a space
+/// becomes `%20`) of `s`, appended to `out`: everything except
+/// `[A-Za-z0-9_.-]` becomes `%XX` (upper-case hex). The one URL encoder:
+/// `urlencode()`, `rawurlencode()`, `http_build_query()`, the session
+/// cookie and the built-in server's cookies use it.
+pub fn url_encode_into(out: &mut impl ByteSink, s: &[u8], raw: bool) {
     for &c in s {
         if !raw && c == b' ' {
             out.push(b'+');
@@ -16,14 +28,15 @@ fn url_encode_impl(s: &[u8], raw: bool) -> Vec<u8> {
             || (c > b'Z' && c < b'a' && c != b'_')
             || (c > b'z' && (!raw || c != b'~'))
         {
-            out.push(b'%');
-            out.push(HEXCHARS[usize::from(c >> 4)]);
-            out.push(HEXCHARS[usize::from(c & 15)]);
+            out.extend_from_slice(&[
+                b'%',
+                HEXCHARS[usize::from(c >> 4)],
+                HEXCHARS[usize::from(c & 15)],
+            ]);
         } else {
             out.push(c);
         }
     }
-    out
 }
 
 /// `urlencode(string $string): string` (`php_url_encode`).

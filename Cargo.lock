@@ -1321,6 +1321,7 @@ version = "0.1.0"
 dependencies = [
  "php-random",
  "php-runtime",
+ "php-stdstr",
  "php-support",
 ]
 
@@ -1397,12 +1398,16 @@ dependencies = [
  "php-memlimit",
  "php-random",
  "php-runtime",
+ "php-stdstr",
  "php-timer",
 ]
 
 [[package]]
 name = "php-stdstr"
 version = "0.1.0"
+dependencies = [
+ "php-memlimit",
+]
 
 [[package]]
 name = "php-streams"
