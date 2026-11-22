@@ -94,6 +94,7 @@ impl Vm {
         }
         self.const_deprecation_guard.clear();
         self.ct_constants = None;
+        self.compile_fingerprint_memo = None;
         *self.const_deprecation_filter.borrow_mut() = (0, Vec::new());
 
         // 4. Superglobals: fresh symbol table.

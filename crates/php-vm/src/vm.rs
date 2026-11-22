@@ -2393,6 +2393,8 @@ pub struct Vm {
     /// keyed by the number of internal and deprecated constants it was
     /// built from (see [`Vm::ct_constants`]).
     pub(crate) ct_constants: Option<((usize, usize), crate::compiler::CtConstants)>,
+    /// [`Vm::compile_fingerprint`] and the state it was computed from.
+    pub(crate) compile_fingerprint_memo: Option<(crate::include::FingerprintKey, Option<u64>)>,
     /// `ZEND_COMPILE_NO_BUILTINS`: compile every builtin call as a call
     /// instead of the dedicated opcodes and constants of
     /// `zend_try_compile_special_func()` (see [`Vm::special_builtins`]).

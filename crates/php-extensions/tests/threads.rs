@@ -715,6 +715,32 @@ fn opcache_images_without_a_fingerprint_are_not_shared() {
 }
 
 #[test]
+fn opcache_compiles_again_when_a_thread_changes_its_compiler_inputs() {
+    // A thread keeps the units it compiled. A later VM of the same thread
+    // with other compiler inputs (here `short_open_tag`, PHP_INI_PERDIR,
+    // so it differs between pools and directories) must not get them: the
+    // file means something else under the other setting.
+    let _cache = opcache_lock();
+    let (name, fs_path) = opcache_file();
+    std::fs::write(&fs_path, "<? return 'short'; ?><?php return 'long';").expect("write");
+    let out = on_thread(move || {
+        let include = "echo include '@P@', \"\\n\";";
+        [
+            run_opcache(&name, &[("short_open_tag", "0")], include),
+            run_opcache(&name, &[("short_open_tag", "1")], include),
+        ]
+    })
+    .join()
+    .expect("VM thread");
+    let _ = std::fs::remove_file(&fs_path);
+    assert_eq!(
+        out,
+        ["<? return 'short'; ?>long\n", "short\n"],
+        "without short tags, then with"
+    );
+}
+
+#[test]
 fn opcache_keys_keep_the_working_directory_of_their_thread() {
     // A relative include is found by a key with the working directory in
     // it (`accel_make_persistent_key`). With one cache for the process,

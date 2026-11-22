@@ -95,6 +95,26 @@ pub fn opcache_enabled_for(sapi: &[u8], enable: bool, enable_cli: bool) -> bool 
     enable && (enable_cli || !matches!(sapi, b"cli" | b"phpdbg"))
 }
 
+/// The state [`Vm::compile_fingerprint`] is computed from: while it is
+/// the same, so is the fingerprint.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FingerprintKey {
+    /// [`php_support::ini::IniRegistry::generation`]: every INI value the
+    /// fingerprint reads.
+    ini: u64,
+    /// The size of the function table, for which builtins are present: a
+    /// builtin is only removed (`disable_functions`) or added (an
+    /// extension), and a name freed by a removed builtin is taken by a
+    /// user function only by adding it.
+    functions: usize,
+    /// What [`Vm::ct_constants`] is rebuilt on.
+    constants: (usize, usize),
+    /// Whether user opcode handlers are installed.
+    user_opcodes: bool,
+    /// [`Vm::compile_no_builtins`].
+    no_builtins: bool,
+}
+
 impl Vm {
     /// Installs a compile hook (`zend_compile_file` override point) for files.
     pub fn set_compile_hook(f: CompileHookFn) {
@@ -161,7 +181,29 @@ impl Vm {
     /// reused only under the same fingerprint. `None` when the current
     /// setup must not use cached code at all (user opcode handlers are
     /// installed, or `zend.multibyte` keeps the AST for diagnostics).
+    ///
+    /// The opcache asks on every cache hit, so the value is kept until
+    /// something it depends on changes ([`FingerprintKey`]).
     pub fn compile_fingerprint(&mut self) -> Option<u64> {
+        let key = FingerprintKey {
+            ini: self.ini.generation(),
+            functions: self.functions.len(),
+            constants: self.ct_constants_key(),
+            user_opcodes: !self.user_opcode_handlers.is_empty(),
+            no_builtins: self.compile_no_builtins,
+        };
+        if let Some((k, fingerprint)) = self.compile_fingerprint_memo {
+            if k == key {
+                return fingerprint;
+            }
+        }
+        let fingerprint = self.compute_compile_fingerprint();
+        self.compile_fingerprint_memo = Some((key, fingerprint));
+        fingerprint
+    }
+
+    /// [`Self::compile_fingerprint`], computed.
+    fn compute_compile_fingerprint(&mut self) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         if !self.user_opcodes().is_empty() || self.ini.get_bool("zend.multibyte") {
             return None;
@@ -234,18 +276,24 @@ impl Vm {
         true
     }
 
+    /// What [`Self::ct_constants`] is rebuilt on: the numbers of internal
+    /// and of deprecated constants.
+    fn ct_constants_key(&self) -> (usize, usize) {
+        (
+            self.constants
+                .len()
+                .saturating_sub(self.user_constants.len()),
+            self.deprecated_constants.len(),
+        )
+    }
+
     /// The constants the compiler may substitute (`zend_try_ct_eval_const`,
     /// `can_ct_eval_const` in `Zend/zend_compile.c`): the internal (not
     /// user-defined) constants with a scalar value that are not deprecated.
     /// Built once and rebuilt only when internal or deprecated constants
     /// are added or removed.
     pub(crate) fn ct_constants(&mut self) -> CtConstants {
-        let key = (
-            self.constants
-                .len()
-                .saturating_sub(self.user_constants.len()),
-            self.deprecated_constants.len(),
-        );
+        let key = self.ct_constants_key();
         if let Some((k, c)) = &self.ct_constants {
             if *k == key {
                 return c.clone();
@@ -1344,6 +1392,41 @@ mod tests {
         assert!(!is_uncacheable_stream_path(b"/tmp/a.inc"));
         assert!(!is_uncacheable_stream_path(b"://x"));
         assert!(!is_uncacheable_stream_path(b"data:text/plain,x"));
+    }
+
+    #[test]
+    fn the_kept_compile_fingerprint_follows_its_inputs() {
+        let mut vm = Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
+        let set = |vm: &mut Vm, name: &str, value: &[u8]| {
+            let mut diag = Vec::new();
+            // A pool's or directory's value (`php_admin_value`, `.user.ini`).
+            assert!(vm.ini.alter(
+                name,
+                value,
+                php_support::ini::Access::PERDIR,
+                php_support::ini::Stage::Activate,
+                true,
+                &mut diag,
+            ));
+        };
+        let short_tags = vm.compile_fingerprint();
+        assert!(short_tags.is_some());
+        assert_eq!(
+            vm.compile_fingerprint(),
+            short_tags,
+            "kept while nothing changes"
+        );
+        set(&mut vm, "short_open_tag", b"0");
+        let long_tags = vm.compile_fingerprint();
+        assert_ne!(long_tags, short_tags, "an INI input changed");
+        set(&mut vm, "short_open_tag", b"1");
+        assert_eq!(vm.compile_fingerprint(), short_tags, "and changed back");
+        set(&mut vm, "zend.assertions", b"0");
+        assert_eq!(
+            vm.compile_fingerprint(),
+            short_tags,
+            "assertions 0 and 1 compile alike"
+        );
     }
 
     fn fake_realpath(path: &[u8]) -> Option<Vec<u8>> {

@@ -126,8 +126,14 @@ pub(crate) fn share(
 }
 
 /// This thread's unit of the cached `script`, if it decoded (or
-/// compiled) that image before. Cheap enough to ask under the lock.
-pub(crate) fn known(script: &SharedScript) -> Option<Rc<CompiledUnit>> {
+/// compiled) that image before and the compiler inputs are still those
+/// it was compiled under (`fingerprint`, as for [`decode`]; under `None`
+/// only the compiling thread has a unit). Cheap enough to ask under the
+/// lock.
+pub(crate) fn known(script: &SharedScript, fingerprint: Option<u64>) -> Option<Rc<CompiledUnit>> {
+    if fingerprint != script.fingerprint {
+        return None;
+    }
     DECODED.with(|d| {
         let mut d = d.borrow_mut();
         d.drop_after_reset();

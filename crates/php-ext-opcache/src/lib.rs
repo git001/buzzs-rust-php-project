@@ -1275,6 +1275,8 @@ fn memory_lookup(
 ) -> VmResult<MemoryLookup> {
     let validate_timestamps = vm.ini_bool("opcache.validate_timestamps");
     let revalidate_freq = vm.ini_long("opcache.revalidate_freq");
+    // The compiler inputs a cached unit must have been compiled under.
+    let fingerprint = vm.compile_fingerprint();
     let vm_ref: &Vm = vm;
     let found = with_cache(|cache| {
         let current_mtime = || p.revalidated_mtime(vm_ref);
@@ -1298,7 +1300,7 @@ fn memory_lookup(
         // This thread's unit of the image, when it has one; else the
         // image, decoded below outside the lock.
         match found {
-            CacheLookup::Hit(script) => match shared::known(script) {
+            CacheLookup::Hit(script) => match shared::known(script, fingerprint) {
                 Some(unit) => Err(MemoryLookup::Hit(unit)),
                 None => Ok(std::sync::Arc::clone(script)),
             },
@@ -1309,13 +1311,10 @@ fn memory_lookup(
     // Decoded once per image and thread. An image compiled under other
     // compiler inputs is compiled again (and replaces the entry).
     let found = match found {
-        Ok(script) => {
-            let fingerprint = vm.compile_fingerprint();
-            match shared::decode(&p.real_str, &script, fingerprint) {
-                Some(unit) => MemoryLookup::Hit(unit),
-                None => MemoryLookup::Absent,
-            }
-        }
+        Ok(script) => match shared::decode(&p.real_str, &script, fingerprint) {
+            Some(unit) => MemoryLookup::Hit(unit),
+            None => MemoryLookup::Absent,
+        },
         Err(other) => other,
     };
     if let MemoryLookup::Hit(unit) = &found {
