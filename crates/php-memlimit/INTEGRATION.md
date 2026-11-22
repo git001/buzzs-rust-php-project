@@ -236,3 +236,45 @@ count.
   chunk/huge-block size.
 - On clamping to `max_memory_limit` we apply the max as the limit (PHP
   leaves the heap limit unchanged).
+
+## Stricter than php-src (intentional)
+
+Listed with the other deliberate differences in `DIFFERENCES.md` (Memory).
+
+php-src 8.6 delays the soft-limit error (`EG(delayed_oom)`): `emalloc` over
+`memory_limit` still returns the memory and only sets `EG(vm_interrupt)`.
+A builtin that grows in a loop of its own (no VM safe point inside) keeps
+running past the limit, until it returns or until the hard limit
+(`memory_hard_limit_percent`) ends the process. mysqlnd, for example, reads
+a whole buffered result set this way.
+
+Buzz runs many requests in one process, so a request must not grow
+"until the hard ceiling". Growth loops in builtins therefore stop at the
+soft limit: `php_memlimit::poll()` once per iteration, and the
+collection's `try_*` growth (`HashTable::try_push`/`try_insert`,
+`TryGrow::try_grow`) before it doubles. The overrun is at most one
+iteration or one growth step; the contract test
+`crates/php-extensions/tests/memlimit_p0.rs` holds every listed path to
+2 MiB above the limit.
+
+What a script observes:
+
+- Where php-src returns from the call over the limit and then reports
+  "Allowed memory size of … exhausted", Buzz reports the same fatal, only
+  with a lower peak (`memory_get_peak_usage()` in a shutdown function).
+- Where php-src reaches the hard limit and ends the process ("Hard memory
+  limit … exhausted" on stderr, then signal 9, status 137 in a shell, no
+  shutdown functions; `Zend/tests/oom_hard_limit_exceeded.phpt`), Buzz
+  ends the request with the soft-limit fatal: exit status 255, shutdown
+  functions run, the worker serves the next request.
+- `tried to allocate` names the growth step that was refused, not the
+  allocation php-src happened to be in.
+
+Paths (branch `memlimit-fallible`): string and array builtins, `json_*`,
+`serialize`/`unserialize`, `var_dump`/`print_r` (which also stream like
+php-src), `http_build_query`, `PDOStatement::fetchAll` (all modes),
+`SQLite3Result::fetchAll`, `mysqli_fetch_all`, and buffered mysqlnd
+results (`mysqli_query`, `mysqli_stmt::store_result`, PDO MySQL). A
+buffered mysqlnd result that hits the limit drops the rows read so far and
+reads the rest of the set from the server without keeping it, so the
+connection stays in step with the server (persistent connections, pools).

@@ -157,6 +157,9 @@ pub fn fetch_all(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let mut rows = Vec::new();
     while let v @ Value::Array(_) = fetch_into(vm, &rs, mode)? {
+        // `memory_limit` per row (see `php_memlimit::poll`).
+        php_memlimit::poll()?;
+        php_memlimit::TryGrow::try_grow(&mut rows, 1)?;
         rows.push(v);
     }
     Ok(Value::Array(ZArray::from_values(rows)))

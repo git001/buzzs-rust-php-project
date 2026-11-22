@@ -17,7 +17,7 @@ use crate::error::{Func, STMT_FETCH, STMT_FETCH_ALL, STMT_FETCH_OBJECT, STMT_SET
 use crate::host::{Ctx, PdoHost};
 use crate::row::PdoRow;
 use crate::stmt::{PdoStatement, Stmt};
-use php_runtime::{ArrayKey, ErrorLevel, Obj, RtResult, Value, ZArray, ZStr};
+use php_runtime::{ArrayKey, ErrorLevel, Obj, RtResult, RuntimeError, Value, ZArray, ZStr};
 use std::rc::Rc;
 
 /// The mode bits of a fetch mode (`how & ~PDO_FETCH_FLAGS`).
@@ -215,15 +215,25 @@ fn key_pair_fetch(cx: &mut Ctx<'_>, st: &Stmt, ori: i64, offset: i64, out: &mut 
     }
     let key = fetch_value(cx, st, 0, None);
     let val = fetch_value(cx, st, 1, None);
-    let t = out.make_mut();
-    if let Value::Int(i) = key {
-        t.insert(ArrayKey::Int(i), val);
+    let key = if let Value::Int(i) = key {
+        ArrayKey::Int(i)
     } else {
         let r = key.to_zstr(cx.host());
-        let k = cx.check(r).unwrap_or_else(ZStr::empty);
-        t.insert(ArrayKey::from_zstr(&k), val);
-    }
-    true
+        ArrayKey::from_zstr(&cx.check(r).unwrap_or_else(ZStr::empty))
+    };
+    within_limit(cx, || out.make_mut().try_insert(key, val).map(drop))
+}
+
+/// Stores a fetched row where php-src's `emalloc` would bail out at
+/// `memory_limit`: a violation pending from building the row, or growing
+/// the result past the limit, becomes the pending memory fatal and the
+/// fetch loop ends (`false`).
+fn within_limit(
+    cx: &mut Ctx<'_>,
+    store: impl FnOnce() -> Result<(), php_memlimit::OverLimit>,
+) -> bool {
+    let r = php_memlimit::poll().and_then(|()| store());
+    cx.check(r.map_err(RuntimeError::from)).is_some()
 }
 
 /// Converts a fetched group key to a string (`convert_to_string`).
@@ -1005,21 +1015,27 @@ impl PdoStatement {
                     _ => ArrayKey::from_bytes(b""),
                 };
                 let t = out.make_mut();
-                if flags & FETCH_UNIQUE == FETCH_UNIQUE {
-                    t.insert(key, data);
-                } else {
-                    let slot = t.lookup(key);
-                    if !matches!(slot, Value::Array(_)) {
-                        *slot = Value::Array(ZArray::new());
+                let stored = within_limit(cx, || {
+                    if flags & FETCH_UNIQUE == FETCH_UNIQUE {
+                        return t.try_insert(key, data).map(drop);
                     }
-                    if let Value::Array(g) = slot {
-                        let _ = g.make_mut().push(data);
+                    if !matches!(t.get(&key), Some(Value::Array(_))) {
+                        t.try_insert(key.clone(), Value::Array(ZArray::new()))?;
                     }
+                    match t.lookup(key) {
+                        Value::Array(g) => g.make_mut().try_push(data).map(drop),
+                        _ => Ok(()),
+                    }
+                });
+                if !stored {
+                    break;
                 }
             }
         } else {
             while let Some(data) = do_fetch(cx, st, how, FETCH_ORI_NEXT, 0, None) {
-                let _ = out.make_mut().push(data);
+                if !within_limit(cx, || out.make_mut().try_push(data).map(drop)) {
+                    break;
+                }
             }
         }
 

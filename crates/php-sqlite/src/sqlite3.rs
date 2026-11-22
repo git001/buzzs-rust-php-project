@@ -1457,7 +1457,13 @@ impl Sqlite3Result {
             match rc {
                 SQLITE_ROW => {
                     let row = self.fetch_one(&mut cx, &stmt, nb_cols, mode);
-                    let _ = all.make_mut().push(Value::Array(row));
+                    // At `memory_limit` the loop ends and the VM raises the
+                    // pending fatal when the call returns.
+                    let stored = php_memlimit::poll()
+                        .and_then(|()| all.make_mut().try_push(Value::Array(row)).map(drop));
+                    if stored.is_err() {
+                        break;
+                    }
                 }
                 SQLITE_DONE => break,
                 _ => {

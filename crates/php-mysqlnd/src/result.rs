@@ -500,10 +500,15 @@ impl ResultSet {
         self.fetch_array(FETCH_ASSOC)
     }
 
-    /// `mysqli_fetch_all`: every remaining row.
+    /// `mysqli_fetch_all`: every remaining row; stops at `memory_limit`,
+    /// leaving the violation pending for the VM.
     pub fn fetch_all(&mut self, flags: u32) -> ZArray {
+        use php_memlimit::TryGrow;
         let mut out = Vec::new();
         while let Ok(Some(r)) = self.fetch_array(flags) {
+            if php_memlimit::poll().is_err() || out.try_grow(1).is_err() {
+                break;
+            }
             out.push(Value::Array(r));
         }
         ZArray::from_values(out)

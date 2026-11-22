@@ -1691,16 +1691,32 @@ impl ConnData {
     /// Buffers every remaining row of the current result set
     /// (`mysqlnd_res::store_result_fetch_data`). On failure the error is
     /// returned (not yet copied to the connection).
+    ///
+    /// At `memory_limit` (a violation pending from the last row, or the
+    /// buffer growing past the limit) the rows read so far are dropped and
+    /// the rest of the set is read and discarded, so the connection stays
+    /// in step with the server; the VM raises the pending memory fatal when
+    /// the call returns.
     pub(crate) fn fetch_all_rows(
         &mut self,
         binary: bool,
     ) -> std::result::Result<Vec<Vec<u8>>, ErrorEntry> {
+        use php_memlimit::TryGrow;
         let mut rows = Vec::new();
         let mut prev = 0;
         let mut err = None;
+        let mut over_limit = false;
         loop {
             match self.read_row(binary, &mut prev) {
-                RowPacket::Row(r) => rows.push(r),
+                RowPacket::Row(r) => {
+                    if !over_limit && (php_memlimit::poll().is_err() || rows.try_grow(1).is_err()) {
+                        over_limit = true;
+                        rows = Vec::new();
+                    }
+                    if !over_limit {
+                        rows.push(r);
+                    }
+                }
                 RowPacket::Eof(e) => {
                     self.upsert.reset();
                     self.upsert.warning_count = u32::from(e.warning_count);

@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 php-vm = { path = "../php-vm" }
+php-memlimit = { path = "../php-memlimit" }
 php-runtime = { path = "../php-runtime" }
 php-support = { path = "../php-support" }
 php-mysqlnd = { path = "../php-mysqlnd" }

@@ -660,6 +660,7 @@ dependencies = [
 name = "php-ext-mysqli"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-mysqlnd",
  "php-runtime",
  "php-streams",
@@ -1194,6 +1195,7 @@ version = "0.1.0"
 dependencies = [
  "openssl",
  "php-hash",
+ "php-memlimit",
  "php-runtime",
 ]
 
@@ -1252,6 +1254,7 @@ dependencies = [
 name = "php-pdo"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-mysqlnd",
  "php-runtime",
  "php-sqlite",
@@ -1375,6 +1378,7 @@ name = "php-sqlite"
 version = "0.1.0"
 dependencies = [
  "libsqlite3-sys",
+ "php-memlimit",
  "php-runtime",
  "php-streams",
 ]

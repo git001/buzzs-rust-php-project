@@ -140,17 +140,86 @@ const CASES: &[(&str, &str, &str)] = &[
                     INSERT INTO t SELECT x, 'abcdefgh' FROM c\");",
         "$r = $db->query('SELECT * FROM t')->fetchAll();",
     ),
+    (
+        "pdo_sqlite_fetch_all_key_pair",
+        "$db = new PDO('sqlite::memory:'); \
+         $db->exec('CREATE TABLE t (x INTEGER, y TEXT)'); \
+         $db->exec(\"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c LIMIT 400000) \
+                    INSERT INTO t SELECT x, 'abcdefgh' FROM c\");",
+        "$r = $db->query('SELECT * FROM t')->fetchAll(PDO::FETCH_KEY_PAIR);",
+    ),
+    (
+        "pdo_sqlite_fetch_all_group",
+        "$db = new PDO('sqlite::memory:'); \
+         $db->exec('CREATE TABLE t (x INTEGER, y TEXT)'); \
+         $db->exec(\"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c LIMIT 400000) \
+                    INSERT INTO t SELECT x, 'abcdefgh' FROM c\");",
+        "$r = $db->query('SELECT x, y FROM t')->fetchAll(PDO::FETCH_GROUP);",
+    ),
+    (
+        "sqlite3_fetch_all",
+        "$db = new SQLite3(':memory:'); \
+         $db->exec('CREATE TABLE t (x INTEGER, y TEXT)'); \
+         $db->exec(\"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c LIMIT 400000) \
+                    INSERT INTO t SELECT x, 'abcdefgh' FROM c\");",
+        "$r = $db->query('SELECT * FROM t')->fetchAll();",
+    ),
+];
+
+/// Opens `$m` (mysqli) on the `MYSQL_TEST_*` server and fills a temporary
+/// table `t` with 400 000 rows (server side, outside the limit).
+const MYSQLI_SETUP: &str = "$m = new mysqli(getenv('MYSQL_TEST_HOST'), getenv('MYSQL_TEST_USER'), \
+         getenv('MYSQL_TEST_PASSWD'), getenv('MYSQL_TEST_DB')); \
+     $m->query('SET SESSION cte_max_recursion_depth = 1000000'); \
+     $m->query('CREATE TEMPORARY TABLE t (x INT, y VARCHAR(16))'); \
+     $m->query(\"INSERT INTO t WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000) \
+                SELECT x, 'abcdefgh' FROM c\");";
+
+/// [`MYSQLI_SETUP`] for PDO: `$db` on the same server.
+const PDO_MYSQL_SETUP: &str = "$db = new PDO('mysql:host=' . getenv('MYSQL_TEST_HOST') . ';dbname=' . getenv('MYSQL_TEST_DB'), \
+         getenv('MYSQL_TEST_USER'), getenv('MYSQL_TEST_PASSWD')); \
+     $db->exec('SET SESSION cte_max_recursion_depth = 1000000'); \
+     $db->exec('CREATE TEMPORARY TABLE t (x INT, y VARCHAR(16))'); \
+     $db->exec(\"INSERT INTO t WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000) \
+                SELECT x, 'abcdefgh' FROM c\");";
+
+/// Cases against a live MySQL server, run when `MYSQL_TEST_HOST` is set
+/// (`MYSQL_TEST_USER`, `MYSQL_TEST_PASSWD`, `MYSQL_TEST_DB` as for the
+/// php-mysqlnd live tests).
+const MYSQL_CASES: &[(&str, &str, &str)] = &[
+    // A buffered result reads every row before the call returns.
+    (
+        "mysqli_query_store",
+        MYSQLI_SETUP,
+        "$r = $m->query('SELECT * FROM t');",
+    ),
+    (
+        "mysqli_stmt_store_result",
+        MYSQLI_SETUP,
+        "$s = $m->prepare('SELECT * FROM t'); $s->execute(); $s->store_result();",
+    ),
+    // Unbuffered: the rows grow in fetch_all / fetchAll.
+    (
+        "mysqli_fetch_all",
+        MYSQLI_SETUP,
+        "$r = $m->query('SELECT * FROM t', MYSQLI_USE_RESULT)->fetch_all();",
+    ),
+    (
+        "pdo_mysql_query_store",
+        PDO_MYSQL_SETUP,
+        "$r = $db->query('SELECT * FROM t');",
+    ),
+    (
+        "pdo_mysql_fetch_all",
+        PDO_MYSQL_SETUP,
+        "$db->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false); \
+         $r = $db->query('SELECT * FROM t')->fetchAll();",
+    ),
 ];
 
 /// Cases that do not meet the contract yet, with what goes wrong. Keep in
 /// sync with the run (the test prints every result).
-const KNOWN_GAPS: &[(&str, &str)] = &[
-    // Stage 4 (volume paths).
-    (
-        "pdo_sqlite_fetch_all",
-        "fetchAll grows unchecked up to the hard ceiling: the process ends",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &str)] = &[];
 
 /// Output sink of a VM.
 #[derive(Clone, Default)]
@@ -200,7 +269,11 @@ fn child_case() {
     let Some(name) = std::env::var(CASE_ENV).ok() else {
         return;
     };
-    let &(_, setup, growth) = CASES.iter().find(|c| c.0 == name).expect("known case");
+    let &(_, setup, growth) = CASES
+        .iter()
+        .chain(MYSQL_CASES)
+        .find(|c| c.0 == name)
+        .expect("known case");
     let src = script(setup, growth);
     assert!(php_memlimit::set_hard_limit_handler(hard_limit));
     let report = std::thread::Builder::new()
@@ -313,8 +386,25 @@ fn memory_limit_bounds_every_growth_path() {
     if std::env::var_os(CASE_ENV).is_some() {
         return;
     }
+    check(CASES);
+}
+
+#[test]
+fn memory_limit_bounds_mysql_rows() {
+    if std::env::var_os(CASE_ENV).is_some() {
+        return;
+    }
+    if std::env::var_os("MYSQL_TEST_HOST").is_none() {
+        eprintln!("skipping: MYSQL_TEST_HOST not set");
+        return;
+    }
+    check(MYSQL_CASES);
+}
+
+/// Runs `cases` in child processes and holds them to the contract.
+fn check(cases: &'static [(&'static str, &'static str, &'static str)]) {
     let exe = std::env::current_exe().expect("test binary path");
-    let runs: Vec<_> = CASES
+    let runs: Vec<_> = cases
         .iter()
         .map(|&(name, _, _)| {
             let exe = exe.clone();
@@ -334,7 +424,7 @@ fn memory_limit_bounds_every_growth_path() {
     for run in runs {
         let (name, (gap, summary), report) = run.join().expect("child runner");
         let state = gap.as_deref().unwrap_or("ok");
-        let _ = writeln!(table, "{name:<22} {summary:<24} {state}");
+        let _ = writeln!(table, "{name:<30} {summary:<24} {state}");
         if let Some(gap) = gap {
             if std::env::var_os("PHPRUST_MEMLIMIT_P0_VERBOSE").is_some() {
                 let _ = writeln!(table, "--- {name}\n{report}");
@@ -343,7 +433,11 @@ fn memory_limit_bounds_every_growth_path() {
         }
     }
     eprintln!("{table}");
-    let known: BTreeMap<&str, &str> = KNOWN_GAPS.iter().copied().collect();
+    let known: BTreeMap<&str, &str> = KNOWN_GAPS
+        .iter()
+        .copied()
+        .filter(|(n, _)| cases.iter().any(|c| c.0 == *n))
+        .collect();
     let new: Vec<_> = gaps.keys().filter(|n| !known.contains_key(*n)).collect();
     let fixed: Vec<_> = known.keys().filter(|n| !gaps.contains_key(*n)).collect();
     assert!(

@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-memlimit = { path = "../php-memlimit" }
 php-runtime = { path = "../php-runtime" }
 php-streams = { path = "../php-streams" }
 libsqlite3-sys = { version = "0.37", default-features = false, features = ["min_sqlite_version_3_34_1"] }
