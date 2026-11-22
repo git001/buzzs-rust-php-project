@@ -691,6 +691,30 @@ fn opcache_shares_a_script_across_assertion_modes_that_compile_alike() {
 }
 
 #[test]
+fn opcache_images_without_a_fingerprint_are_not_shared() {
+    // Under `zend.multibyte` (and with user opcode handlers) the compiler
+    // inputs have no fingerprint. Two such setups need not compile
+    // alike, so another thread compiles the script itself instead of
+    // decoding the cached image.
+    let _cache = opcache_lock();
+    let (name, fs_path) = opcache_file();
+    let multibyte = [("zend.multibyte", "1")];
+    std::fs::write(&fs_path, "<?php return 'v1';").expect("write v1");
+    assert_eq!(
+        run_opcache_on_thread(&name, &multibyte, INCLUDE_CACHED),
+        "v1 cached\n",
+        "the first thread compiles"
+    );
+    std::fs::write(&fs_path, "<?php return 'v2';").expect("write v2");
+    assert_eq!(
+        run_opcache_on_thread(&name, &multibyte, INCLUDE_CACHED),
+        "v2 cached\n",
+        "another thread compiles again"
+    );
+    let _ = std::fs::remove_file(&fs_path);
+}
+
+#[test]
 fn opcache_keys_keep_the_working_directory_of_their_thread() {
     // A relative include is found by a key with the working directory in
     // it (`accel_make_persistent_key`). With one cache for the process,

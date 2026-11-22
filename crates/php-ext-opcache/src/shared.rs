@@ -35,7 +35,8 @@ pub(crate) struct SharedScript {
     id: u64,
     /// The compiler inputs it was compiled under
     /// ([`php_vm::Vm::compile_fingerprint`]); `None` when they cannot be
-    /// named (`zend.multibyte`, user opcode handlers).
+    /// named (`zend.multibyte`, user opcode handlers): then no other
+    /// thread decodes the image, only the compiling thread keeps its unit.
     fingerprint: Option<u64>,
     /// The bytecode image.
     image: Box<[u8]>,
@@ -136,14 +137,15 @@ pub(crate) fn known(script: &SharedScript) -> Option<Rc<CompiledUnit>> {
 
 /// Decodes the cached `script` of `path` for this thread and keeps the
 /// unit. `None` when the image was compiled under other compiler inputs
-/// than `fingerprint` names, or does not decode: the script is then
-/// compiled again.
+/// than `fingerprint` names, when the inputs cannot be named (`None`
+/// stands for several setups, which need not compile alike), or when it
+/// does not decode: the script is then compiled again.
 pub(crate) fn decode(
     path: &str,
     script: &SharedScript,
     fingerprint: Option<u64>,
 ) -> Option<Rc<CompiledUnit>> {
-    if fingerprint != script.fingerprint {
+    if fingerprint.is_none() || fingerprint != script.fingerprint {
         return None;
     }
     let unit = Rc::new(php_vm::bytecode_cache::decode(&script.image).ok()?);
