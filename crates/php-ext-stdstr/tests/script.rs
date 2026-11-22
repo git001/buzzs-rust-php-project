@@ -398,6 +398,25 @@ fn deprecated_functions_and_strings() {
     );
 }
 
+/// The violation a builtin returns with `?` is reported where it leaves
+/// the builtin: at the caller's line, after the output buffers are
+/// discarded (`php_error_cb` for a memory-limit fatal, as php 8.6 does).
+#[test]
+fn memory_limit_fatal_from_a_builtin_discards_the_output_buffers() {
+    let out = run_with(
+        &[
+            ("display_errors", "1"),
+            ("memory_limit", "8M"),
+            ("fatal_error_backtraces", "0"),
+        ],
+        "ob_start();\necho \"buffered\\n\";\n$x = str_repeat('ab', 50000000);\necho \"not reached\\n\";",
+    );
+    assert_eq!(
+        out,
+        "\nFatal error: Allowed memory size of 8388608 bytes exhausted (tried to allocate 100000032 bytes) in t.php on line 3\n"
+    );
+}
+
 #[test]
 fn memory_limit_is_enforced_for_large_results() {
     let out = run_with(

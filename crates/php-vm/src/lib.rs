@@ -484,10 +484,11 @@ impl Vm {
     }
 
     pub fn shutdown(&mut self, r: Result<(), Throw>) -> i32 {
-        let fatal = matches!(r, Err(Throw::Fatal));
         // `oom_after_main_script`: a violation recorded by the last
-        // statement is still reported.
-        if !fatal && php_memlimit::is_pending() {
+        // statement is still reported; so is one whose `Throw::Fatal`
+        // unwound without passing a delivery point (`deliver_oom`): a
+        // memory-limit fatal is never silent.
+        if php_memlimit::is_pending() {
             let _ = self.raise_pending_oom();
         }
         self.observer_unwind(0, r.as_ref().err());
@@ -522,7 +523,6 @@ impl Vm {
             }
             self.frames.clear();
         }
-        let _ = fatal;
         // Destructors.
         if object::destructors_enabled() {
             self.in_shutdown = true;

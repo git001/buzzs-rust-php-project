@@ -3540,6 +3540,20 @@ impl Vm {
         Ok(())
     }
 
+    /// Where a builtin's result leaves it: a [`Throw::Fatal`] that is a
+    /// still pending `memory_limit` violation (an [`OverLimit`] returned
+    /// with `?`) is reported here, at the caller's line, before it unwinds
+    /// further. Any other result passes unchanged.
+    ///
+    /// [`OverLimit`]: php_memlimit::OverLimit
+    #[inline]
+    pub(crate) fn deliver_oom<T>(&mut self, r: VmResult<T>) -> VmResult<T> {
+        if matches!(r, Err(Throw::Fatal)) && php_memlimit::is_pending() {
+            self.raise_pending_oom()?;
+        }
+        r
+    }
+
     /// Forgets a pending violation and its location (start of request
     /// shutdown: `EG(delayed_oom).state = ZEND_OOM_STATE_NONE`).
     pub(crate) fn clear_pending_oom() {

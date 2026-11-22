@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::ptr;
 use std::sync::atomic::{
-    AtomicBool, AtomicI64, AtomicU8, AtomicUsize,
+    AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize,
     Ordering::{Acquire, Relaxed, Release},
 };
 use std::sync::OnceLock;
@@ -24,6 +24,16 @@ pub type HardLimitHandler = fn(HardLimitExceeded) -> !;
 
 /// Signature of the pending hook (see [`CountingAlloc::set_pending_hook`]).
 pub type PendingHook = fn();
+
+/// The process-wide hard-ceiling handler ([`crate::set_hard_limit_handler`]):
+/// every instance without its own uses it, so a thread that attached its
+/// allocator before the handler was set still has it.
+pub(crate) static PROCESS_HARD_HANDLER: OnceLock<HardLimitHandler> = OnceLock::new();
+
+/// The process-wide pending hook ([`crate::set_pending_hook`]), with the
+/// same fallback: the VM installs it in `Vm::new`, which a worker thread
+/// runs after [`crate::attach_thread`].
+pub(crate) static PROCESS_PENDING_HOOK: OnceLock<PendingHook> = OnceLock::new();
 
 /// One heap operation reported to the [heap observer](CountingAlloc::set_observer)
 /// while [observing](CountingAlloc::observe) is on (the custom heap handlers
@@ -349,6 +359,14 @@ pub struct CountingAlloc<A> {
     /// Whether [`observe`](Self::observe) took ownership away from the
     /// observed thread (to give it back when observing stops).
     observed_owner: AtomicBool,
+    /// `ZEND_MM_MAX_ALLOCS`: allocations left up to and including the one
+    /// that fails as if over the limit, 0 for off. While non-zero the soft
+    /// threshold is 0, as while observing, so every allocation takes the
+    /// slow path that counts it down.
+    max_allocs: AtomicU64,
+    /// Whether the [`max_allocs`](Self::set_max_allocs) allocation was
+    /// reached (`zend_mm_max_allocs_hit`).
+    max_allocs_hit: AtomicBool,
 }
 
 impl<A> CountingAlloc<A> {
@@ -386,6 +404,8 @@ impl<A> CountingAlloc<A> {
             observer: OnceLock::new(),
             observing: AtomicUsize::new(0),
             observed_owner: AtomicBool::new(false),
+            max_allocs: AtomicU64::new(0),
+            max_allocs_hit: AtomicBool::new(false),
         }
     }
 
@@ -431,6 +451,8 @@ impl<A> CountingAlloc<A> {
             c.store(0, Relaxed);
         }
         self.hard_percent.store(-1, Relaxed);
+        self.max_allocs.store(0, Relaxed);
+        self.max_allocs_hit.store(false, Relaxed);
         self.force_limit(None);
         self.clear();
     }
@@ -693,8 +715,9 @@ impl<A> CountingAlloc<A> {
             }
         };
         // While observing, every allocation takes the slow path, which
-        // decides whether to report it.
-        let soft = if self.observing.load(Relaxed) == 0 {
+        // decides whether to report it; while `max_allocs` counts down, it
+        // counts each one.
+        let soft = if self.observing.load(Relaxed) == 0 && self.max_allocs.load(Relaxed) == 0 {
             soft
         } else {
             0
@@ -716,7 +739,11 @@ impl<A> CountingAlloc<A> {
             self.over_limit.store(over.limit, Relaxed);
             self.over_tried.store(over.tried, Relaxed);
             self.over_state.store(PENDING, Release);
-            if let Some(hook) = self.pending_hook.get() {
+            if let Some(hook) = self
+                .pending_hook
+                .get()
+                .or_else(|| PROCESS_PENDING_HOOK.get())
+            {
                 hook();
             }
             true
@@ -844,6 +871,68 @@ impl<A> CountingAlloc<A> {
             .and_then(|b| b.checked_add(extra))
             .unwrap_or(usize::MAX);
         self.try_reserve(bytes)
+    }
+
+    /// A violation of `tried` bytes that did not come from the soft-limit
+    /// check: records it like [`try_reserve`](Self::try_reserve) does and
+    /// returns it. For an allocation the inner allocator or the hard
+    /// ceiling refused after the check passed (a fallible collection API
+    /// returning its error).
+    pub fn refused(&self, tried: usize) -> OverLimit {
+        let over = OverLimit {
+            limit: self.limit().unwrap_or(LIMIT_MAX),
+            tried,
+        };
+        self.record(over);
+        over
+    }
+
+    /// Makes the `n`-th allocation from now fail as if it crossed the soft
+    /// limit (`zend_mm_set_max_allocs`, the `ZEND_MM_MAX_ALLOCS` test mode):
+    /// the violation is recorded, and the allocation itself is granted,
+    /// except in a [fallible](crate::fallible) scope. Later allocations are
+    /// not affected. `0` turns it off; [`request_end`](Self::request_end)
+    /// does too.
+    pub fn set_max_allocs(&self, n: u64) {
+        self.max_allocs.store(n, Relaxed);
+        self.max_allocs_hit.store(false, Relaxed);
+        self.update_thresholds();
+    }
+
+    /// Whether the allocation chosen with [`set_max_allocs`](Self::set_max_allocs)
+    /// was reached (`zend_mm_max_allocs_hit`: the SAPI then exits with 121
+    /// instead of 255 after the fatal).
+    pub fn max_allocs_hit(&self) -> bool {
+        self.max_allocs_hit.load(Relaxed)
+    }
+
+    /// Counts one allocation against [`max_allocs`](Self::set_max_allocs);
+    /// whether it is the chosen one.
+    #[cold]
+    #[inline(never)]
+    fn count_down_max_allocs(&self) -> bool {
+        let left = self.max_allocs.load(Relaxed);
+        if left == 0 {
+            return false;
+        }
+        self.max_allocs.store(left - 1, Relaxed);
+        if left > 1 {
+            return false;
+        }
+        self.max_allocs_hit.store(true, Relaxed);
+        self.update_thresholds();
+        true
+    }
+
+    /// The chosen allocation of [`max_allocs`](Self::set_max_allocs):
+    /// recorded as a violation (unless one is already pending), granted
+    /// unless fallible (`tracked_max_allocs_error`).
+    fn fail_as_over_limit(&self, size: usize) -> bool {
+        self.record(OverLimit {
+            limit: self.limit().unwrap_or(LIMIT_MAX),
+            tried: size,
+        });
+        !in_fallible_scope()
     }
 
     /// Installs the function called (once) when an allocation would cross
@@ -1074,7 +1163,11 @@ impl<A> CountingAlloc<A> {
     fn admit_over_soft(&self, new: usize, size: usize, huge: bool) -> bool {
         let in_handler = self.in_hard_handler.load(Relaxed);
         if new > self.hard_raw.load(Relaxed) && !in_handler {
-            if let Some(handler) = self.hard_handler.get() {
+            if let Some(handler) = self
+                .hard_handler
+                .get()
+                .or_else(|| PROCESS_HARD_HANDLER.get())
+            {
                 if !self.in_hard_handler.swap(true, Relaxed) {
                     let hard_limit = self.hard_limit().unwrap_or(LIMIT_MAX);
                     handler(HardLimitExceeded {
@@ -1087,6 +1180,9 @@ impl<A> CountingAlloc<A> {
         }
         if in_handler {
             return true;
+        }
+        if self.max_allocs.load(Relaxed) != 0 && self.count_down_max_allocs() {
+            return self.fail_as_over_limit(size);
         }
         let limit = self.limit.load(Relaxed);
         if limit == UNLIMITED {
@@ -1519,6 +1615,7 @@ impl<A: GlobalAlloc> CountingAlloc<A> {
     /// itself with [`bind_to_current_thread`](Self::bind_to_current_thread)
     /// keeps it, so its teardown frees stay on the owner path).
     pub fn request_end(&self) {
+        self.max_allocs.store(0, Relaxed);
         self.forgiven.store(0, Relaxed);
         self.forgiven_huge.store(0, Relaxed);
         self.force_limit(None);

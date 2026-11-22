@@ -289,15 +289,7 @@ fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
     let on_main_thread = ensure_main_stack(&argv);
     memcap::limit_memory();
-    php_memlimit::set_hard_limit_handler(hard_limit);
-    php_memlimit::set_tracked(php_memlimit::tracked_from_env(
-        std::env::var_os("USE_ZEND_ALLOC")
-            .as_deref()
-            .map(OsStrExt::as_bytes),
-        std::env::var_os("USE_TRACKED_ALLOC")
-            .as_deref()
-            .map(OsStrExt::as_bytes),
-    ));
+    php_memlimit::configure_from_env(hard_limit);
     #[cfg(unix)]
     // SAFETY: ignoring SIGPIPE like php_cli.c, so writes to a closed pipe
     // fail with EPIPE instead of killing the process.

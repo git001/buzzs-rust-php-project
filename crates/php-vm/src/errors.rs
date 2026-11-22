@@ -340,7 +340,7 @@ impl Vm {
             }
         }
         if is_fatal(level) {
-            self.exit_status = 255;
+            self.exit_status = fatal_exit_status();
             object::set_destructors_enabled(false);
             return Err(Throw::Fatal);
         }
@@ -549,7 +549,7 @@ impl Vm {
             self.display_error(level, msg, file, line);
         }
         if level == level::ERROR {
-            self.exit_status = 255;
+            self.exit_status = fatal_exit_status();
         }
     }
 
@@ -580,7 +580,7 @@ impl Vm {
         if self.error_reporting & lv != 0 {
             self.display_error(lv, msg.as_bytes(), file, line);
         }
-        self.exit_status = 255;
+        self.exit_status = fatal_exit_status();
         object::set_destructors_enabled(false);
     }
 
@@ -984,5 +984,17 @@ mod tests {
             out,
             "\nFatal error: Duplicate declaration of static variable $a in t.php on line 3\nStack trace:\n#0 {main}\n"
         );
+    }
+}
+
+/// The exit status of a fatal error (`php_error_cb`): 255, or 121
+/// (`ZEND_MM_MAX_ALLOCS_EXIT_STATUS`) once the allocation chosen by
+/// `ZEND_MM_MAX_ALLOCS` was reached, so a test driver tells the injected
+/// failure from any other fatal.
+fn fatal_exit_status() -> i32 {
+    if php_memlimit::max_allocs_hit() {
+        121
+    } else {
+        255
     }
 }

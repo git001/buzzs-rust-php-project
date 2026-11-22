@@ -122,7 +122,7 @@ fn wordwrap(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         } else {
             tl.saturating_mul(brk.len() + 1)
         };
-        mem::check(vm, mem::zstr(alloc))?;
+        mem::check(mem::zstr(alloc))?;
     }
     let r = transform::wordwrap(text.as_bytes(), width, brk.as_bytes(), cut);
     Ok(bytes(check(vm, r)?))
@@ -133,10 +133,7 @@ fn explode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.zstr(1);
     let sep = a.zstr(0);
     let pieces = mem::occurrences(s.as_bytes(), sep.as_bytes(), false) + 1;
-    mem::check(
-        vm,
-        pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
-    )?;
+    mem::check(pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()))?;
     let r = search::explode_slices(sep.as_bytes(), s.as_bytes(), limit);
     let parts = check(vm, r)?;
     // `php_explode()`: the input itself when it is not split
@@ -176,7 +173,7 @@ fn implode_zstr(vm: &mut Vm, glue: &[u8], pieces: &ZArray) -> VmResult<ZStr> {
         })
         .sum();
     let total = known.saturating_add(glue.len().saturating_mul(pieces.len().saturating_sub(1)));
-    mem::check(vm, mem::zstr(total))?;
+    mem::check(mem::zstr(total))?;
     let mut out = ZStrBuf::with_capacity(total);
     for (i, (_, v)) in pieces.iter().enumerate() {
         if i > 0 {
@@ -358,7 +355,7 @@ fn chunk_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if len > 0 {
         let chunks = s.len() / usize::try_from(len).unwrap_or(usize::MAX) + 1;
         let alloc = s.len().saturating_add(chunks.saturating_mul(end.len()));
-        mem::check(vm, mem::zstr(alloc))?;
+        mem::check(mem::zstr(alloc))?;
     }
     let r = transform::chunk_split(s.as_bytes(), len, end.as_bytes());
     Ok(bytes(check(vm, r)?))
@@ -464,7 +461,7 @@ fn substr_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         };
         estimate = estimate.saturating_add(mem::elem(len.saturating_add(r)));
     }
-    mem::check(vm, estimate)?;
+    mem::check(estimate)?;
     let mut out = HashTable::new();
     for (k, v) in subjects.iter() {
         let orig = to_str(vm, &v.deref())?;
@@ -593,7 +590,7 @@ fn strtr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
                 alloc = alloc.saturating_sub(key.len()).saturating_add(val.len());
             }
             if alloc > capacity {
-                mem::check(vm, mem::zstr(alloc - capacity))?;
+                mem::check(mem::zstr(alloc - capacity))?;
             }
             Ok(val)
         },
@@ -638,19 +635,13 @@ fn stripslashes(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// conversion warnings repeat per subject and stop once the subject
 /// becomes empty).
 /// Reserves the result of replacing every `search` in `subject`.
-fn reserve_replace(
-    vm: &mut Vm,
-    subject: &[u8],
-    search: &[u8],
-    replace: &[u8],
-    ci: bool,
-) -> VmResult<()> {
+fn reserve_replace(subject: &[u8], search: &[u8], replace: &[u8], ci: bool) -> VmResult<()> {
     if replace.len() > search.len() {
         let n = mem::occurrences(subject, search, ci);
         let grown = subject
             .len()
             .saturating_add(n.saturating_mul(replace.len() - search.len()));
-        mem::check(vm, mem::zstr(grown))?;
+        mem::check(mem::zstr(grown))?;
     }
     Ok(())
 }
@@ -659,7 +650,7 @@ fn reserve_replace(
 /// subject itself when `search` does not occur (no allocation), else one
 /// exactly sized result. Reserves the grown size first, like
 /// [`reserve_replace`].
-fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmResult<(ZStr, i64)> {
+fn replace_cs(subject: ZStr, search: &[u8], replace: &[u8]) -> VmResult<(ZStr, i64)> {
     let hay = subject.as_bytes();
     let Some(first) = search::memnstr(hay, search) else {
         return Ok((subject, 0));
@@ -674,7 +665,7 @@ fn replace_cs(vm: &mut Vm, subject: ZStr, search: &[u8], replace: &[u8]) -> VmRe
         let grown = hay
             .len()
             .saturating_add(count.saturating_mul(replace.len() - search.len()));
-        mem::check(vm, mem::zstr(grown))?;
+        mem::check(mem::zstr(grown))?;
         grown
     } else {
         hay.len() - count * (search.len() - replace.len())
@@ -710,9 +701,9 @@ fn replace_in_subject(
         let s = to_str(vm, search)?;
         let r = to_str(vm, replace)?;
         if !ci && !s.is_empty() {
-            return replace_cs(vm, subject, &s, &r);
+            return replace_cs(subject, &s, &r);
         }
-        reserve_replace(vm, &subject, &s, &r, ci)?;
+        reserve_replace(&subject, &s, &r, ci)?;
         let res = transform::str_replace(
             subject.as_bytes(),
             ReplaceArg::One::<&[u8]>(s.as_bytes()),
@@ -743,7 +734,7 @@ fn replace_in_subject(
             continue;
         }
         if !ci {
-            let (out, n) = replace_cs(vm, subject, &s, &r)?;
+            let (out, n) = replace_cs(subject, &s, &r)?;
             subject = out;
             if n > 0 {
                 count += n;
@@ -753,7 +744,7 @@ fn replace_in_subject(
             }
             continue;
         }
-        reserve_replace(vm, &subject, &s, &r, ci)?;
+        reserve_replace(&subject, &s, &r, ci)?;
         let res = transform::str_replace(
             subject.as_bytes(),
             ReplaceArg::One::<&[u8]>(s.as_bytes()),
@@ -817,15 +808,14 @@ fn hebrev(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(transform::hebrev(a.zstr(0).as_bytes(), a.int(1))))
 }
 
-fn nl2br(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn nl2br(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let xhtml = !a.has(1) || a.bool(1);
     let s = a.str(0);
     let breaks = s.iter().filter(|&&c| c == b'\n' || c == b'\r').count();
     let tag = if xhtml { 6 } else { 4 };
-    mem::check(
-        vm,
-        mem::zstr(s.len().saturating_add(breaks.saturating_mul(tag))),
-    )?;
+    mem::check(mem::zstr(
+        s.len().saturating_add(breaks.saturating_mul(tag)),
+    ))?;
     let out = transform::nl2br(s.as_bytes(), xhtml);
     Ok(bytes(out))
 }
@@ -865,7 +855,7 @@ fn str_repeat(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let total = s
             .len()
             .saturating_mul(usize::try_from(times).unwrap_or(usize::MAX));
-        mem::check(vm, mem::zstr(total))?;
+        mem::check(mem::zstr(total))?;
         // A short result is written straight into one exactly sized
         // string (`zend_string_safe_alloc` + the copies), with no
         // intermediate vector.
@@ -939,7 +929,7 @@ fn str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let len = a.int(1);
     let target = usize::try_from(len).unwrap_or(0);
     if target > s.len() && !pad.is_empty() && (0..=2).contains(&ty) {
-        mem::check(vm, mem::zstr(target))?;
+        mem::check(mem::zstr(target))?;
     }
     let r = transform::str_pad(s.as_bytes(), len, pad.as_bytes(), ty);
     Ok(bytes(check(vm, r)?))
@@ -983,7 +973,6 @@ fn str_word_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             prev = w;
         }
         mem::check(
-            vm,
             words
                 .saturating_mul(mem::elem(0))
                 .saturating_add(text.len()),
@@ -1010,10 +999,7 @@ fn str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if let Ok(chunk) = usize::try_from(len) {
         if chunk > 0 {
             let pieces = s.len().div_ceil(chunk);
-            mem::check(
-                vm,
-                pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()),
-            )?;
+            mem::check(pieces.saturating_mul(mem::elem(0)).saturating_add(s.len()))?;
         }
     }
     let r = transform::str_split(s.as_bytes(), len);
@@ -1067,7 +1053,6 @@ fn str_getcsv(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     #[allow(clippy::naive_bytecount)]
     let fields = input.iter().filter(|&&c| c == opts.delimiter).count() + 1;
     mem::check(
-        vm,
         fields
             .saturating_mul(mem::elem(0))
             .saturating_add(input.len()),

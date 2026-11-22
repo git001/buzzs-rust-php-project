@@ -88,3 +88,35 @@ fn ended_threads_hand_their_allocator_on() {
     assert!(usage < php_memlimit::PHP_BASELINE + 64 * 1024, "{usage}");
     assert_ne!(first, 0);
 }
+
+thread_local! {
+    /// Calls of [`count_hook`] on this thread: the hook is process-wide,
+    /// other tests' threads record violations of their own meanwhile.
+    static HOOK_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn count_hook() {
+    HOOK_CALLS.with(|c| c.set(c.get() + 1));
+}
+
+/// The VM installs the pending hook in `Vm::new`, which a worker thread
+/// runs after `attach_thread`: the hook must reach that thread's
+/// allocator too, or a recorded violation never interrupts the script.
+#[test]
+fn a_hook_set_after_attaching_reaches_the_thread() {
+    let calls = std::thread::spawn(|| {
+        php_memlimit::attach_thread();
+        assert!(php_memlimit::set_pending_hook(count_hook));
+        php_memlimit::request_start(Some(8 * M)).expect("limit");
+        let block = black_box(vec![1u8; 9 * M]);
+        let calls = HOOK_CALLS.with(std::cell::Cell::get);
+        assert!(php_memlimit::is_pending());
+        drop(block);
+        php_memlimit::clear();
+        php_memlimit::request_end();
+        calls
+    })
+    .join()
+    .expect("worker");
+    assert_eq!(calls, 1);
+}

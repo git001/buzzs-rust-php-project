@@ -604,6 +604,7 @@ impl Vm {
             func: Some(handle),
         };
         let mut r = (b.handler)(self, &mut args);
+        r = self.deliver_oom(r);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
             if let Err(e) = self.check_interrupt() {
@@ -801,6 +802,7 @@ impl Vm {
             func: Some(b),
         };
         let mut r = handler(self, &mut args);
+        r = self.deliver_oom(r);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
             if let Err(e) = self.check_interrupt() {
@@ -946,6 +948,7 @@ impl Vm {
             func: Some(b),
         };
         let mut r = handler(self, &mut args);
+        r = self.deliver_oom(r);
         // `ZEND_VM_FCALL_INTERRUPT_CHECK`, after the call.
         if r.is_ok() {
             if let Err(e) = self.check_interrupt() {

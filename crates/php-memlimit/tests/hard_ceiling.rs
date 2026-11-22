@@ -87,3 +87,41 @@ fn hard_ceiling_calls_handler() {
         "{stderr}"
     );
 }
+
+#[test]
+fn child_trap() {
+    if !is_child() {
+        return;
+    }
+    assert!(php_memlimit::set_hard_limit_handler(
+        php_memlimit::trap_hard_limit
+    ));
+    php_memlimit::request_start(Some(10 * M)).expect("limit");
+    let v = black_box(vec![0u8; 100 * M]);
+    println!("UNREACHABLE {}", v.len());
+}
+
+#[test]
+fn hard_ceiling_trap_names_the_growth() {
+    if is_child() {
+        return;
+    }
+    let out = run_child("child_trap");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "Hard memory limit of 20971520 bytes exhausted (tried to allocate 104857600 bytes): growth not checked against memory_limit"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("child_trap"),
+        "backtrace names the caller: {stderr}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("UNREACHABLE"));
+    assert_eq!(
+        out.status.code(),
+        Some(php_memlimit::TRAP_EXIT_STATUS),
+        "an exit, not a signal (no core dump)"
+    );
+}

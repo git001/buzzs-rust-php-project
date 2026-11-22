@@ -3698,6 +3698,7 @@ impl Vm {
             func: Some(b.clone()),
         };
         let mut r = (b.handler)(self, &mut args);
+        r = self.deliver_oom(r);
         r = self.flush_typed_arg_writes(r);
         self.observer_internal(depth - 1, Some(&r));
         // Blocking builtins (sleep, stream reads) return to a pending

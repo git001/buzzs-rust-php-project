@@ -131,7 +131,6 @@ pub(crate) fn to_str(vm: &mut Vm, v: &Value) -> VmResult<ZStr> {
 /// accounted by `php_memlimit`'s global allocator.
 pub(crate) mod mem {
     use php_vm::ext::VmResult;
-    use php_vm::Vm;
 
     /// Allocation size of a `zend_string` of `len` bytes.
     pub(crate) const fn zstr(len: usize) -> usize {
@@ -163,15 +162,11 @@ pub(crate) mod mem {
     }
 
     /// Reserves `alloc` bytes before building a result of that size; over
-    /// the limit, raises `Allowed memory size of N bytes exhausted (tried
-    /// to allocate M bytes)` at the current line.
-    pub(crate) fn check(vm: &mut Vm, alloc: usize) -> VmResult<()> {
-        if let Err(over) = php_memlimit::try_reserve(alloc) {
-            // Handle the recorded violation here so the VM's post-call poll
-            // does not raise it a second time.
-            let _ = php_memlimit::take();
-            return Err(vm.fatal(&over.to_string()));
-        }
+    /// the limit, the VM raises `Allowed memory size of N bytes exhausted
+    /// (tried to allocate M bytes)` at the caller's line as the error
+    /// leaves the builtin.
+    pub(crate) fn check(alloc: usize) -> VmResult<()> {
+        php_memlimit::try_reserve(alloc)?;
         Ok(())
     }
 }

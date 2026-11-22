@@ -30,6 +30,18 @@ pub enum Throw {
 /// Result type of VM operations.
 pub type VmResult<T> = Result<T, Throw>;
 
+/// A growth checked against `memory_limit` failed: the violation is
+/// recorded in `php-memlimit` and pending, so this is the fatal that the
+/// VM reports where the error leaves a builtin ([`Vm::deliver_oom`]) or
+/// at the next safe point. `?` on [`php_memlimit::try_reserve`],
+/// [`php_memlimit::TryGrow::try_grow`] or [`php_memlimit::poll`] in a
+/// builtin is all it takes.
+impl From<php_memlimit::OverLimit> for Throw {
+    fn from(_: php_memlimit::OverLimit) -> Self {
+        Throw::Fatal
+    }
+}
+
 /// The names of a variable table's slots (`op_array->vars`).
 ///
 /// Every frame of a function shares the compiled-variable names of its op

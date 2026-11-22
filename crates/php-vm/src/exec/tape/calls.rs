@@ -817,6 +817,7 @@ pub(super) fn call_native(
         func: Some(b),
     };
     let mut r = handler(vm, &mut args);
+    r = vm.deliver_oom(r);
     if r.is_ok() {
         if let Err(e) = vm.check_interrupt() {
             r = Err(e);

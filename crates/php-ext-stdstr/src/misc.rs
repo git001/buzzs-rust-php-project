@@ -98,7 +98,7 @@ fn unpack_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `C*`/`c*` (one element per remaining byte) is the format that can
     // turn a script-sized string into a huge array.
     if format.windows(2).any(|w| matches!(w, [b'c' | b'C', b'*'])) {
-        mem::check(vm, data.len().saturating_mul(mem::elem(0)))?;
+        mem::check(data.len().saturating_mul(mem::elem(0)))?;
     }
     let mut n = Notices::new();
     let r = pack::unpack(format.as_bytes(), data.as_bytes(), a.int(2), &mut n);
@@ -195,13 +195,13 @@ fn metaphone(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(bytes(check(vm, r)?))
 }
 
-fn levenshtein(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
+fn levenshtein(_vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cost = |n: usize| if a.has(n) { a.int(n) } else { 1 };
     let (s1, s2) = (a.str(0), a.str(1));
     if !s1.is_empty() && !s2.is_empty() {
         // The first of the two workspace rows.
         let row = (s2.len() + 1).saturating_mul(8);
-        mem::check(vm, row)?;
+        mem::check(row)?;
     }
     let r = analysis::levenshtein(s1.as_bytes(), s2.as_bytes(), cost(2), cost(3), cost(4));
     Ok(Value::Int(r))

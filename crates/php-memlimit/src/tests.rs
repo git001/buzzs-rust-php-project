@@ -1028,3 +1028,57 @@ fn persistent_scope_moves_the_limit_threshold_with_the_baseline() {
     let _b = alloc(&a, 9_000);
     assert!(a.check().is_none());
 }
+
+#[test]
+fn max_allocs_fails_the_nth_allocation_like_the_limit() {
+    let a = CountingAlloc::new(System);
+    a.request_start(None).expect("unlimited");
+    a.set_max_allocs(3);
+    let _b1 = alloc(&a, 100);
+    let _b2 = alloc(&a, 100);
+    assert!(!a.is_pending() && !a.max_allocs_hit());
+    let b3 = alloc(&a, 200);
+    assert!(!b3.p.is_null(), "granted outside a fallible scope");
+    assert!(a.max_allocs_hit());
+    assert_eq!(
+        a.check(),
+        Some(OverLimit {
+            limit: LIMIT_MAX,
+            tried: 200
+        }),
+        "recorded like a soft-limit violation"
+    );
+    a.clear();
+    let _b4 = alloc(&a, 100);
+    assert!(!a.is_pending(), "only the n-th allocation fails");
+
+    a.set_max_allocs(1);
+    assert!(!a.max_allocs_hit(), "re-arming forgets the hit");
+    let f = fallible(|| alloc(&a, 64));
+    assert!(f.p.is_null(), "refused in a fallible scope");
+    assert!(a.is_pending());
+    a.clear();
+
+    a.set_max_allocs(2);
+    a.request_end();
+    let _c1 = alloc(&a, 64);
+    let _c2 = alloc(&a, 64);
+    assert!(!a.is_pending(), "request end turns it off");
+}
+
+#[test]
+fn refused_records_like_try_reserve() {
+    let a = CountingAlloc::new(System);
+    a.request_start(Some(8 * M)).expect("limit");
+    let over = a.refused(123);
+    assert_eq!(
+        over,
+        OverLimit {
+            limit: 8 * M,
+            tried: 123
+        }
+    );
+    assert_eq!(a.check(), Some(over));
+    a.request_end();
+    assert_eq!(a.refused(5).limit, LIMIT_MAX, "unlimited");
+}

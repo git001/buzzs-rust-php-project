@@ -15,8 +15,15 @@
 //!   allocate M bytes)` with the record obtained from [`take`]; recording
 //!   stays suspended until [`clear`] at request shutdown;
 //! * builtins about to allocate a known large amount call [`try_reserve`]
-//!   first (PHP's fallible allocations + `RETURN_OOM()`), or wrap Rust's
-//!   `try_reserve` APIs in [`fallible`];
+//!   first (PHP's fallible allocations + `RETURN_OOM()`); collections
+//!   that grow with script-sized input use [`TryGrow`], and loops without
+//!   a safe point [`poll`]; the [`OverLimit`] these return travels with `?`
+//!   to the VM, which reports the fatal;
+//! * for tests, `ZEND_MM_MAX_ALLOCS` fails the n-th allocation of a
+//!   request as if over the limit ([`set_max_allocs_per_request`]), and
+//!   [`trap_hard_limit`] aborts with a backtrace at the hard ceiling, so a
+//!   run with a small `memory_limit` names every growth that is not
+//!   checked;
 //! * huge allocations made inside [`uncounted`] (an extension's library
 //!   allocating through its own `malloc`, like libgmp under `ext/gmp`) are
 //!   left out of usage and both limits for their whole lifetime;
@@ -37,10 +44,13 @@
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
 
 mod counting;
+mod grow;
 mod limit;
 
 use std::alloc::{GlobalAlloc, Layout};
 use std::cell::{Cell, RefCell};
+use std::io::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Mutex, PoisonError};
 
 pub use mimalloc::MiMalloc;
@@ -49,6 +59,7 @@ pub use counting::{
     fallible, uncounted, CountingAlloc, HardLimitHandler, HeapEvent, HeapObserver, PendingHook,
     Stats,
 };
+pub use grow::TryGrow;
 pub use limit::{
     clamp_to_max_warning, hard_limit_for, limit_from_ini, round_to_chunks, scale_by_percent,
     HardLimitExceeded, HardLimitPercentError, MemoryLimitIni, OverLimit, SetLimitError, CHUNK_SIZE,
@@ -89,10 +100,12 @@ pub fn current() -> &'static CountingAlloc<MiMalloc> {
 /// Gives the calling thread its own allocator, so that its usage, peak and
 /// `memory_limit` are its own (php-src ZTS: `AG(mm_heap)` per thread):
 /// the worker threads of a threaded server call it before their first
-/// request. Process-wide settings ([`set_hard_limit_handler`],
-/// [`set_pending_hook`], [`set_heap_observer`], [`set_tracked`]) are
-/// taken from [`GLOBAL`], so set them first. The allocator goes back to a
-/// pool when the thread ends. Idempotent.
+/// request. The hard-limit handler and the pending hook apply to every
+/// thread whenever they are set ([`set_hard_limit_handler`],
+/// [`set_pending_hook`]); the heap observer and tracked mode
+/// ([`set_heap_observer`], [`set_tracked`]) are taken from [`GLOBAL`]
+/// here, so set those first. The allocator goes back to a pool when the
+/// thread ends. Idempotent.
 pub fn attach_thread() {
     if THREAD.with(Cell::get).is_some() {
         return;
@@ -345,24 +358,119 @@ pub fn try_reserve_n(count: usize, elem_size: usize, extra: usize) -> Result<(),
     current().try_reserve_n(count, elem_size, extra)
 }
 
+/// The pending violation as an error, for loops that grow without a safe
+/// point (`if (ZEND_HAS_OOM()) RETURN_OOM();`): `poll()?` once per
+/// iteration bounds the overrun to one iteration.
+///
+/// # Errors
+///
+/// The pending [`OverLimit`].
+#[inline]
+pub fn poll() -> Result<(), OverLimit> {
+    match check() {
+        Some(over) => Err(over),
+        None => Ok(()),
+    }
+}
+
+/// [`CountingAlloc::refused`] on [`current`].
+pub fn refused(tried: usize) -> OverLimit {
+    current().refused(tried)
+}
+
+/// `ZEND_MM_MAX_ALLOCS` for every request: [`request_start`] arms
+/// [`CountingAlloc::set_max_allocs`] with it (0 = off). Set once by the
+/// SAPI at startup.
+static MAX_ALLOCS_PER_REQUEST: AtomicU64 = AtomicU64::new(0);
+
+/// Sets the allocation of every request that fails as if over the limit
+/// (`ZEND_MM_MAX_ALLOCS`, read by `php_request_startup`; see
+/// [`max_allocs_from_env`]). 0 turns it off.
+pub fn set_max_allocs_per_request(n: u64) {
+    MAX_ALLOCS_PER_REQUEST.store(n, Relaxed);
+}
+
+/// The `ZEND_MM_MAX_ALLOCS` value (`ZEND_ATOL`); 0 when unset, unparsable
+/// or not positive.
+pub fn max_allocs_from_env(value: Option<&[u8]>) -> u64 {
+    value.map_or(0, |v| u64::try_from(atol(v)).unwrap_or(0))
+}
+
+/// [`CountingAlloc::max_allocs_hit`] on [`current`].
+pub fn max_allocs_hit() -> bool {
+    current().max_allocs_hit()
+}
+
+/// Whether the hard-ceiling test mode is on: `PHPRUST_MEMORY_TRAP` parses
+/// (like `ZEND_ATOL`) to non-zero.
+pub fn trap_from_env(value: Option<&[u8]>) -> bool {
+    value.is_some_and(|v| atol(v) != 0)
+}
+
+/// Exit status of the [`trap_hard_limit`] test mode (128 + `SIGABRT`, but
+/// a plain exit: test runs leave no core dumps behind).
+pub const TRAP_EXIT_STATUS: i32 = 134;
+
+/// The hard-ceiling handler of the test mode ([`trap_from_env`]): the
+/// message and a backtrace of the allocation on stderr, then exit with
+/// [`TRAP_EXIT_STATUS`]. A growth that reaches the hard ceiling was not
+/// checked against the soft limit first; the backtrace names it. The
+/// handler runs with the ceiling disabled, so capturing the backtrace may
+/// allocate.
+pub fn trap_hard_limit(e: HardLimitExceeded) -> ! {
+    let trace = std::backtrace::Backtrace::force_capture();
+    let _ = writeln!(
+        std::io::stderr(),
+        "{e}: growth not checked against memory_limit\n{trace}"
+    );
+    std::process::exit(TRAP_EXIT_STATUS)
+}
+
+/// The SAPI's allocator settings from the environment, once at startup
+/// (before the first request): tracked mode ([`tracked_from_env`] of
+/// `USE_ZEND_ALLOC`, `USE_TRACKED_ALLOC`), `ZEND_MM_MAX_ALLOCS`
+/// ([`set_max_allocs_per_request`]) and the hard-ceiling handler: `normal`,
+/// or [`trap_hard_limit`] under `PHPRUST_MEMORY_TRAP`.
+pub fn configure_from_env(normal: HardLimitHandler) {
+    let var = |name: &str| std::env::var_os(name).map(std::ffi::OsString::into_encoded_bytes);
+    let trap = trap_from_env(var("PHPRUST_MEMORY_TRAP").as_deref());
+    set_hard_limit_handler(if trap { trap_hard_limit } else { normal });
+    set_tracked(tracked_from_env(
+        var("USE_ZEND_ALLOC").as_deref(),
+        var("USE_TRACKED_ALLOC").as_deref(),
+    ));
+    set_max_allocs_per_request(max_allocs_from_env(var("ZEND_MM_MAX_ALLOCS").as_deref()));
+}
+
 /// [`CountingAlloc::would_fit`] on [`current`].
 pub fn would_fit(bytes: usize) -> bool {
     current().would_fit(bytes)
 }
 
-/// [`CountingAlloc::set_hard_limit_handler`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
+/// [`CountingAlloc::set_hard_limit_handler`] for the whole process: on
+/// [`GLOBAL`] and on every thread's own allocator, also one attached before.
 pub fn set_hard_limit_handler(handler: HardLimitHandler) -> bool {
+    let _ = counting::PROCESS_HARD_HANDLER.set(handler);
     GLOBAL.set_hard_limit_handler(handler)
 }
 
-/// [`CountingAlloc::set_pending_hook`] on [`GLOBAL`] (process-wide; [`attach_thread`] passes it on).
+/// [`CountingAlloc::set_pending_hook`] for the whole process: on [`GLOBAL`]
+/// and on every thread's own allocator, also one attached before.
 pub fn set_pending_hook(hook: PendingHook) -> bool {
+    let _ = counting::PROCESS_PENDING_HOOK.set(hook);
     GLOBAL.set_pending_hook(hook)
 }
 
-/// [`CountingAlloc::request_start`] on [`current`].
+/// [`CountingAlloc::request_start`] on [`current`], arming the
+/// [`set_max_allocs_per_request`] test mode.
 pub fn request_start(limit: Option<usize>) -> Result<(), SetLimitError> {
-    current().request_start(limit)
+    let alloc = current();
+    let r = alloc.request_start(limit);
+    let max_allocs = MAX_ALLOCS_PER_REQUEST.load(Relaxed);
+    if max_allocs != 0 {
+        alloc.set_max_allocs(max_allocs);
+    }
+    r
 }
 
 /// [`CountingAlloc::request_end`] on [`current`].
