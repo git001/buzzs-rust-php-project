@@ -12,6 +12,7 @@
 
 use crate::class::ConstExpr;
 use crate::vm::{Vm, VmResult};
+use php_memlimit::CheckedBuf;
 use php_runtime::dump::{export_string, unmangle_property_name};
 use php_runtime::float::{format_double, format_double_h};
 use php_runtime::ops::{GuardKind, RecursionGuard};
@@ -99,7 +100,9 @@ pub(crate) fn take_deferred_throw() -> VmResult<()> {
 /// Output of a dump: streamed through the output layer, or collected
 /// (`print_r($v, true)`, `var_export($v, true)`).
 pub(crate) struct Out {
-    buf: Vec<u8>,
+    /// Never grows past `memory_limit`: a refused growth is recorded and
+    /// the rest of the dump dropped ([`Out::check`], [`Out::finish`]).
+    buf: CheckedBuf,
     stream: bool,
 }
 
@@ -107,7 +110,7 @@ impl Out {
     /// Output written with `echo` semantics.
     pub(crate) fn stream() -> Self {
         Out {
-            buf: Vec::new(),
+            buf: CheckedBuf::new(),
             stream: true,
         }
     }
@@ -115,7 +118,7 @@ impl Out {
     /// Output collected into a string.
     pub(crate) fn collect() -> Self {
         Out {
-            buf: Vec::new(),
+            buf: CheckedBuf::new(),
             stream: false,
         }
     }
@@ -136,10 +139,16 @@ impl Out {
         }
     }
 
-    /// The collected bytes (streamed output is flushed instead).
-    pub(crate) fn finish(mut self, vm: &mut Vm) -> Vec<u8> {
+    /// Whether the output stopped at `memory_limit`: the walk stops then.
+    pub(crate) fn check(&self) -> VmResult<()> {
+        Ok(self.buf.check()?)
+    }
+
+    /// The collected bytes (streamed output is flushed instead), or the
+    /// memory-limit fatal when the output stopped growing.
+    pub(crate) fn finish(mut self, vm: &mut Vm) -> VmResult<Vec<u8>> {
         self.flush(vm);
-        self.buf
+        Ok(self.buf.into_vec()?)
     }
 }
 
@@ -677,6 +686,7 @@ pub(crate) fn var_dump(
             }
             let a = a.clone();
             for (k, v) in a.iter() {
+                out.check()?;
                 let Some(_depth) = Depth::enter(vm) else {
                     out.spaces(level + 1);
                     out.put(b"nesting level too deep");
@@ -807,6 +817,7 @@ fn var_dump_object(
         }
     }
     for (k, slot) in properties.iter().flatten() {
+        out.check()?;
         let Some(_depth) = Depth::enter(vm) else {
             out.spaces(level + 1);
             out.put(b"nesting level too deep");
@@ -932,6 +943,7 @@ fn print_hash(
     out.put(b"(\n");
     let inner = indent + 4;
     for (k, slot) in entries {
+        out.check()?;
         let PropertySlot::Value(v) = slot else {
             continue;
         };
@@ -1005,6 +1017,7 @@ pub(crate) fn var_export(vm: &mut Vm, out: &mut Out, value: &Value, level: usize
             out.put(b"array (\n");
             let a = a.clone();
             for (k, v) in a.iter() {
+                out.check()?;
                 out.spaces(level + 1);
                 match k {
                     ArrayKey::Int(i) => out.put(i.to_string().as_bytes()),
@@ -1054,6 +1067,7 @@ fn var_export_object(vm: &mut Vm, out: &mut Out, o: &Obj, level: usize) -> VmRes
         }
     }
     for (k, slot) in info.properties.iter().flatten() {
+        out.check()?;
         let PropertySlot::Value(v) = slot else {
             continue;
         };

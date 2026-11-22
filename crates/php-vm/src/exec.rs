@@ -734,6 +734,8 @@ impl Vm {
         match e {
             E::Thrown(Value::Object(o)) => Throw::Exception(o),
             E::Thrown(_) => Throw::Fatal,
+            // Recorded and pending: reported where it leaves the builtin.
+            E::MemoryLimit(_) => Throw::Fatal,
             E::Fatal(m) => {
                 let _ = self.fatal(&m);
                 Throw::Fatal

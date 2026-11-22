@@ -25,6 +25,8 @@ pub(crate) fn to_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     match e {
         RuntimeError::Thrown(Value::Object(o)) => Throw::Exception(o),
         RuntimeError::Thrown(_) => Throw::Fatal,
+        // Recorded and pending: the VM reports it as the error leaves the builtin.
+        RuntimeError::MemoryLimit(_) => Throw::Fatal,
         RuntimeError::Fatal(m) => {
             if m.is_empty() {
                 Throw::Fatal

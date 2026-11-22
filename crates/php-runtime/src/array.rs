@@ -339,6 +339,26 @@ fn index_len(table_size: u32) -> usize {
     table_size as usize * 2
 }
 
+/// Bytes of the index of a hash of `table_size` buckets.
+fn index_bytes(table_size: usize) -> usize {
+    table_size
+        .saturating_mul(2)
+        .saturating_mul(std::mem::size_of::<u32>())
+}
+
+/// Bytes of the storage of a packed table of `table_size` elements.
+fn packed_bytes(table_size: usize) -> usize {
+    table_size.saturating_mul(std::mem::size_of::<Option<Value>>())
+}
+
+/// Bytes of the storage (buckets and index) of a hash of `table_size`
+/// buckets.
+fn hash_bytes(table_size: usize) -> usize {
+    table_size
+        .saturating_mul(std::mem::size_of::<Bucket>())
+        .saturating_add(index_bytes(table_size))
+}
+
 /// A fresh index for `table_size` buckets: [`index_len`] empty hash slots
 /// (`HT_INVALID_IDX` / `u32::MAX`).
 fn new_index(table_size: u32) -> Box<[u32]> {
@@ -844,6 +864,20 @@ impl HashTable {
         t
     }
 
+    /// [`HashTable::with_capacity_mixed`] checked against `memory_limit`
+    /// first: the storage for `n` elements is allocated at once, and `n`
+    /// often comes from the script's input (`unserialize()`'s element
+    /// count).
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`php_memlimit::OverLimit`] when the storage would
+    /// cross the limit; nothing is allocated then.
+    pub fn try_with_capacity_mixed(n: usize) -> Result<Self, php_memlimit::OverLimit> {
+        php_memlimit::try_reserve(hash_bytes(check_size(to_u32(n)) as usize))?;
+        Ok(Self::with_capacity_mixed(n))
+    }
+
     /// Creates an empty table sized for `n` elements (`zend_new_array(n)`):
     /// nothing is allocated until the first insert, which allocates room for
     /// `nTableSize` (`n` rounded up to a power of two, at least 8) elements
@@ -1092,6 +1126,43 @@ impl HashTable {
             } else if it.1 > first_hole && it.1 < old_used {
                 it.1 = new_pos[it.1 as usize];
             }
+        }
+    }
+
+    /// Bytes the next insert of a new key allocates: the first storage of
+    /// an uninitialized table, the doubling of a full packed table
+    /// (`append`: a key at the end, which keeps it packed) or its
+    /// conversion to a hash (any other key; a full one doubles too), the
+    /// doubling of a full hash; 0 while the table has room. An upper
+    /// bound: a full hash with enough holes compacts instead, allocating
+    /// nothing.
+    fn next_alloc_bytes(&self, append: bool) -> usize {
+        let ts = self.table_size as usize;
+        match &self.store {
+            Store::Uninit if append => packed_bytes(ts),
+            Store::Uninit => hash_bytes(ts),
+            Store::Packed(v) => {
+                let full = v.len() >= ts;
+                match (append, full) {
+                    (true, false) => 0,
+                    (true, true) => packed_bytes(ts),
+                    (false, false) => hash_bytes(ts),
+                    (false, true) => hash_bytes(ts.saturating_mul(2)),
+                }
+            }
+            Store::Hash(d) if d.buckets.len() >= ts => ts
+                .saturating_mul(std::mem::size_of::<Bucket>())
+                .saturating_add(index_bytes(ts.saturating_mul(2))),
+            Store::Hash(_) => 0,
+        }
+    }
+
+    /// Checks the allocation of the next insert of a new key against
+    /// `memory_limit` (see [`HashTable::next_alloc_bytes`]).
+    fn check_growth(&self, append: bool) -> Result<(), php_memlimit::OverLimit> {
+        match self.next_alloc_bytes(append) {
+            0 => Ok(()),
+            bytes => php_memlimit::try_reserve(bytes),
         }
     }
 
@@ -1701,6 +1772,55 @@ impl HashTable {
         let h = self.next_index();
         self.index_insert(h, val, Mode::Next)?;
         Ok(h)
+    }
+
+    /// [`HashTable::push`] checked against `memory_limit`: when the table
+    /// must grow and the growth would cross the limit, the violation is
+    /// recorded and returned and nothing is inserted (`val` is dropped).
+    /// For loops that build a table of script-sized length.
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`php_memlimit::OverLimit`].
+    pub fn try_push(&mut self, val: Value) -> Result<Result<i64, Value>, php_memlimit::OverLimit> {
+        self.check_growth(true)?;
+        Ok(self.push(val))
+    }
+
+    /// [`HashTable::insert`] checked against `memory_limit` like
+    /// [`HashTable::try_push`]; replacing an existing key never fails.
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`php_memlimit::OverLimit`].
+    pub fn try_insert(
+        &mut self,
+        key: impl Into<ArrayKey>,
+        val: Value,
+    ) -> Result<Option<Value>, php_memlimit::OverLimit> {
+        let key = key.into();
+        if self.next_alloc_bytes(false) != 0 && !self.contains_key(&key) {
+            self.check_growth(false)?;
+        }
+        Ok(self.insert(key, val))
+    }
+
+    /// [`HashTable::add`] checked against `memory_limit` like
+    /// [`HashTable::try_insert`].
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`php_memlimit::OverLimit`].
+    pub fn try_add(
+        &mut self,
+        key: impl Into<ArrayKey>,
+        val: Value,
+    ) -> Result<Result<(), Value>, php_memlimit::OverLimit> {
+        let key = key.into();
+        if self.next_alloc_bytes(false) != 0 && !self.contains_key(&key) {
+            self.check_growth(false)?;
+        }
+        Ok(self.add(key, val))
     }
 
     /// Like [`HashTable::push`] but returns a mutable reference to the new slot.
@@ -3429,6 +3549,127 @@ mod tests {
         t.iterator_del(b);
         assert!(!t.has_iterators());
         assert!(t.iterator_positions().is_empty());
+    }
+
+    /// Runs `f` on a thread with its own allocator under `limit`, so the
+    /// limit is the test's alone.
+    fn under_limit(limit: usize, f: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(move || {
+            php_memlimit::attach_thread();
+            php_memlimit::request_start(Some(limit)).expect("limit");
+            f();
+            php_memlimit::request_end();
+        })
+        .join()
+        .expect("test thread");
+    }
+
+    #[test]
+    fn next_alloc_bytes_follows_the_table_state() {
+        let packed = std::mem::size_of::<Option<Value>>();
+        let bucket = std::mem::size_of::<Bucket>();
+        let mut t = HashTable::new();
+        assert_eq!(t.next_alloc_bytes(true), 8 * packed, "first packed storage");
+        assert_eq!(
+            t.next_alloc_bytes(false),
+            8 * bucket + 16 * 4,
+            "first hash storage"
+        );
+        for i in 0..8 {
+            assert!(matches!(t.push(Value::Int(i)), Ok(k) if k == i));
+        }
+        assert_eq!(
+            t.next_alloc_bytes(true),
+            8 * packed,
+            "a full packed table doubles"
+        );
+        assert_eq!(
+            t.next_alloc_bytes(false),
+            16 * bucket + 32 * 4,
+            "conversion of a full one"
+        );
+        t.insert(ZStr::from("k"), Value::Null);
+        assert_eq!(t.used(), 9);
+        assert_eq!(t.next_alloc_bytes(false), 0, "a hash with room");
+        let mut h = HashTable::new();
+        for i in 0..8 {
+            h.insert(ZStr::from(format!("k{i}")), Value::Int(i));
+        }
+        assert_eq!(
+            h.next_alloc_bytes(false),
+            8 * bucket + 32 * 4,
+            "a full hash doubles"
+        );
+    }
+
+    #[test]
+    fn checked_inserts_stop_at_the_limit() {
+        under_limit(16 << 20, || {
+            let mut t = HashTable::new();
+            let mut pushed = 0i64;
+            let err = loop {
+                match t.try_push(Value::Int(pushed)) {
+                    Ok(r) => {
+                        assert!(matches!(r, Ok(k) if k == pushed));
+                        pushed += 1;
+                    }
+                    Err(e) => break e,
+                }
+            };
+            assert_eq!(err.limit, 16 << 20);
+            assert_eq!(
+                i64::try_from(t.len()),
+                Ok(pushed),
+                "the refused value was not inserted"
+            );
+            assert!(php_memlimit::is_pending(), "recorded for the VM");
+            assert!(
+                php_memlimit::usage() <= (16 << 20) + (2 << 20),
+                "stopped before the doubling"
+            );
+            // A table that needs no growth still takes values.
+            php_memlimit::clear();
+            let mut small = HashTable::with_capacity(4);
+            small.insert(0, Value::Null);
+            assert!(matches!(
+                small.try_insert(0, Value::Int(1)),
+                Ok(Some(Value::Null))
+            ));
+            assert!(small.try_add(ZStr::from("x"), Value::Null).is_ok());
+        });
+    }
+
+    #[test]
+    fn replacing_in_a_full_table_never_fails() {
+        under_limit(16 << 20, || {
+            // A full hash whose doubling alone is more than the limit.
+            let n = 1i64 << 19;
+            let mut t = HashTable::with_capacity_mixed(1 << 19);
+            for i in 0..n {
+                t.insert(i, Value::Int(i));
+            }
+            assert!(t.next_alloc_bytes(false) > 16 << 20);
+            assert!(t.try_insert(n, Value::Null).is_err(), "a new key");
+            assert_eq!(i64::try_from(t.len()), Ok(n));
+            php_memlimit::clear();
+            assert!(
+                matches!(t.try_insert(3, Value::Null), Ok(Some(Value::Int(3)))),
+                "an existing key"
+            );
+            assert!(!php_memlimit::is_pending());
+        });
+    }
+
+    #[test]
+    fn checked_capacity_refuses_a_table_over_the_limit() {
+        under_limit(16 << 20, || {
+            let err = HashTable::try_with_capacity_mixed(1 << 20).expect_err("~48 MiB");
+            assert!(err.tried > 16 << 20, "{err:?}");
+            assert!(php_memlimit::is_pending());
+            php_memlimit::clear();
+            let t = HashTable::try_with_capacity_mixed(1000).expect("small");
+            assert_eq!(t.table_size(), 1024);
+        });
     }
 
     #[test]

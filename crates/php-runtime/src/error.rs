@@ -132,6 +132,19 @@ pub enum RuntimeError {
     Fatal(String),
     /// An exception object already thrown by user code.
     Thrown(Value),
+    /// A growth checked against `memory_limit` failed
+    /// ([`php_memlimit::try_reserve`], [`php_memlimit::TryGrow`],
+    /// [`HashTable::try_push`](crate::HashTable::try_push) …): the
+    /// violation is recorded and pending, and the VM reports the fatal
+    /// ("Allowed memory size of N bytes exhausted") where the error leaves
+    /// the builtin. `?` converts the [`php_memlimit::OverLimit`].
+    MemoryLimit(php_memlimit::OverLimit),
+}
+
+impl From<php_memlimit::OverLimit> for RuntimeError {
+    fn from(over: php_memlimit::OverLimit) -> Self {
+        RuntimeError::MemoryLimit(over)
+    }
 }
 
 impl RuntimeError {
@@ -145,12 +158,15 @@ impl RuntimeError {
             RuntimeError::ArithmeticError(_) => Some("ArithmeticError"),
             RuntimeError::DivisionByZeroError(_) => Some("DivisionByZeroError"),
             RuntimeError::ArgumentCountError(_) => Some("ArgumentCountError"),
-            RuntimeError::Fatal(_) | RuntimeError::Thrown(_) | RuntimeError::Custom { .. } => None,
+            RuntimeError::Fatal(_)
+            | RuntimeError::Thrown(_)
+            | RuntimeError::Custom { .. }
+            | RuntimeError::MemoryLimit(_) => None,
         }
     }
 
     /// The exception class name for every variant that names one, including
-    /// [`RuntimeError::Custom`] (`None` for `Fatal` and `Thrown`).
+    /// [`RuntimeError::Custom`] (`None` for `Fatal`, `Thrown` and `MemoryLimit`).
     #[must_use]
     pub fn exception_class(&self) -> Option<String> {
         match self {
@@ -159,7 +175,8 @@ impl RuntimeError {
         }
     }
 
-    /// The message of a built-in error (`None` for [`RuntimeError::Thrown`]).
+    /// The message of a built-in error (`None` for [`RuntimeError::Thrown`] and
+    /// [`RuntimeError::MemoryLimit`]).
     #[must_use]
     pub fn message(&self) -> Option<&str> {
         match self {
@@ -171,7 +188,7 @@ impl RuntimeError {
             | RuntimeError::ArgumentCountError(m)
             | RuntimeError::Custom { message: m, .. }
             | RuntimeError::Fatal(m) => Some(m),
-            RuntimeError::Thrown(_) => None,
+            RuntimeError::Thrown(_) | RuntimeError::MemoryLimit(_) => None,
         }
     }
 }
@@ -181,6 +198,7 @@ impl fmt::Display for RuntimeError {
         match self {
             RuntimeError::Thrown(v) => write!(f, "thrown {}", v.type_name()),
             RuntimeError::Fatal(m) => write!(f, "Fatal error: {m}"),
+            RuntimeError::MemoryLimit(over) => write!(f, "Fatal error: {over}"),
             other => write!(
                 f,
                 "{}: {}",

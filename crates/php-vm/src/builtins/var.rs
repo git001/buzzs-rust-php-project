@@ -54,7 +54,7 @@ fn print_r(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             dump::clear_deferred_throw();
         }
         r?;
-        let s = out.finish(vm);
+        let s = out.finish(vm)?;
         raise_after_dump(vm)?;
         return Ok(sv(s));
     }
@@ -74,14 +74,14 @@ fn var_export(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if b(a, 1) {
         let mut out = Out::collect();
         dump::var_export(vm, &mut out, &v, 1)?;
-        return Ok(sv(out.finish(vm)));
+        return Ok(sv(out.finish(vm)?));
     }
     // `php_var_export_ex` builds the whole export in a buffer: warnings
     // (circular references) and output of user code run meanwhile come
     // first, and a partial export is still written on an exception.
     let mut out = Out::collect();
     let r = dump::var_export(vm, &mut out, &v, 1);
-    let bytes = out.finish(vm);
+    let bytes = out.finish(vm)?;
     if !bytes.is_empty() {
         vm.echo(&bytes);
     }

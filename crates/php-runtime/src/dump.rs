@@ -140,7 +140,7 @@ fn var_dump_level(
             out.extend_from_slice(common);
             out.extend_from_slice(format!("array({}) {{\n", a.len()).as_bytes());
             let a = a.clone();
-            let result = (|| {
+            let result = (|| -> RtResult<()> {
                 for (k, v) in a.iter() {
                     dump_key(out, k, level);
                     var_dump_level(out, v, level + 2, visiting, ctx)?;
@@ -273,7 +273,7 @@ fn var_dump_object(
             out.extend_from_slice(format!(")#{} ({count}) {{\n", o.handle()).as_bytes());
         }
     }
-    let result = (|| {
+    let result = (|| -> RtResult<()> {
         for (k, slot) in properties.iter().flatten() {
             dump_property_key(out, k, level);
             match slot {
@@ -499,7 +499,7 @@ fn var_export_level(
             }
             out.extend_from_slice(b"array (\n");
             let a = a.clone();
-            let r = (|| {
+            let r = (|| -> RtResult<()> {
                 for (k, v) in a.iter() {
                     spaces(out, level + 1);
                     match k {
@@ -566,7 +566,7 @@ fn var_export_object(
             out.extend_from_slice(b"::__set_state(array(\n");
         }
     }
-    let r = (|| {
+    let r = (|| -> RtResult<()> {
         if is_enum {
             return Ok(());
         }

@@ -85,6 +85,42 @@ fn fallible_growth_stops_at_the_soft_limit() {
     php_memlimit::request_end();
 }
 
+/// A builder's buffer never grows past the limit: the refused growth is
+/// recorded, later appends are dropped, the error comes back at the end.
+/// On its own thread with its own allocator: the limit is this test's.
+#[test]
+fn checked_buf_stops_growing_at_the_limit() {
+    std::thread::spawn(|| {
+        php_memlimit::attach_thread();
+        php_memlimit::request_start(Some(8 * M)).expect("limit");
+        let mut out = php_memlimit::CheckedBuf::new();
+        let chunk = [b'x'; 4096];
+        let mut appended = 0usize;
+        while out.check().is_ok() && appended < 64 * M {
+            out.extend_from_slice(&chunk);
+            appended += chunk.len();
+        }
+        let err = out.check().expect_err("stopped at the limit");
+        assert_eq!(err.limit, 8 * M);
+        assert!(out.len() <= 8 * M, "{}", out.len());
+        assert!(php_memlimit::peak() <= 8 * M + 2 * M, "never grew past it");
+        assert!(php_memlimit::is_pending(), "recorded for the VM");
+        let len = out.len();
+        out.push(b'y');
+        out.extend([1, 2, 3]);
+        assert_eq!(out.len(), len, "nothing appended after the refusal");
+        assert_eq!(out.into_vec(), Err(err));
+        php_memlimit::clear();
+        let mut small = php_memlimit::CheckedBuf::new();
+        php_memlimit::ByteSink::extend_from_slice(&mut small, b"ab");
+        small.push(b'c');
+        assert_eq!(small.into_vec().as_deref(), Ok(&b"abc"[..]));
+        php_memlimit::request_end();
+    })
+    .join()
+    .expect("test thread");
+}
+
 #[test]
 fn env_parsing() {
     assert_eq!(php_memlimit::max_allocs_from_env(None), 0);

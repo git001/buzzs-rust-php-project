@@ -199,7 +199,11 @@ pub fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     }
     match e {
         RuntimeError::Thrown(Value::Object(o)) => Throw::Exception(o),
-        RuntimeError::Thrown(_) | RuntimeError::Fatal(_) => Throw::Fatal,
+        // A memory-limit violation is recorded and pending: the VM
+        // reports it as the error leaves the builtin.
+        RuntimeError::Thrown(_) | RuntimeError::Fatal(_) | RuntimeError::MemoryLimit(_) => {
+            Throw::Fatal
+        }
         RuntimeError::Custom { class, message } => vm.throw(&class.to_string_lossy(), &message),
         other => {
             let class = other.class_name().unwrap_or("Error");

@@ -128,6 +128,8 @@ pub(crate) fn rt_throw(vm: &mut Vm, e: php_runtime::RuntimeError) -> php_vm::Thr
     match e {
         E::Thrown(Value::Object(o)) => php_vm::Throw::Exception(o),
         E::Thrown(_) => php_vm::Throw::Fatal,
+        // Recorded and pending: the VM reports it as the error leaves the builtin.
+        E::MemoryLimit(_) => php_vm::Throw::Fatal,
         E::Fatal(m) => vm.fatal(&m),
         E::Custom { class, message } => vm.throw(&class.to_string_lossy(), &message),
         E::Error(m)

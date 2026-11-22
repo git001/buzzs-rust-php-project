@@ -37,6 +37,8 @@ pub(crate) fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
     match e {
         RuntimeError::Thrown(Value::Object(o)) => Throw::Exception(o),
         RuntimeError::Thrown(_) => Throw::Fatal,
+        // Recorded and pending: the VM reports it as the error leaves the builtin.
+        RuntimeError::MemoryLimit(_) => Throw::Fatal,
         RuntimeError::Fatal(m) => vm.fatal(&m),
         RuntimeError::Custom { class, message } => vm.throw(&class.to_string_lossy(), &message),
         RuntimeError::Error(m)
@@ -128,7 +130,7 @@ impl JsonHost for VmJsonHost<'_> {
             if let Err(t) = super::check_memory(self.vm, self.input_len, output) {
                 return Err(to_rt(self.vm, t));
             }
-            buf.reserve(additional);
+            php_memlimit::TryGrow::try_grow(buf, additional)?;
         }
         Ok(())
     }

@@ -49,7 +49,10 @@ impl Sink for DecodeSink<'_> {
 
     fn array_append(&mut self, array: &mut HashTable, value: Value) {
         // A decoded array is a list, so the next index can never overflow.
-        let _ = array.push(value);
+        // A growth over `memory_limit` drops the value and leaves the
+        // violation pending: the parser stops before the next value
+        // (`aborted`).
+        let _ = array.try_push(value);
     }
 
     fn array_finish(&mut self, array: HashTable) -> Value {
@@ -83,8 +86,10 @@ impl Sink for DecodeSink<'_> {
     ) -> Result<(), ActionError> {
         match object {
             ObjectBuilder::Assoc(table) => {
-                // zend_symtable_update: numeric keys become integers.
-                table.insert(ArrayKey::from_zstr(&key), value);
+                // zend_symtable_update: numeric keys become integers. A
+                // growth over `memory_limit` drops the member, as in
+                // `array_append`.
+                let _ = table.try_insert(ArrayKey::from_zstr(&key), value);
                 Ok(())
             }
             ObjectBuilder::Std(obj) => {

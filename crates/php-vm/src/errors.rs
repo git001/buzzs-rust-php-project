@@ -340,7 +340,7 @@ impl Vm {
             }
         }
         if is_fatal(level) {
-            self.exit_status = fatal_exit_status();
+            self.exit_status = fatal_ends_request();
             object::set_destructors_enabled(false);
             return Err(Throw::Fatal);
         }
@@ -549,7 +549,7 @@ impl Vm {
             self.display_error(level, msg, file, line);
         }
         if level == level::ERROR {
-            self.exit_status = fatal_exit_status();
+            self.exit_status = fatal_ends_request();
         }
     }
 
@@ -580,7 +580,7 @@ impl Vm {
         if self.error_reporting & lv != 0 {
             self.display_error(lv, msg.as_bytes(), file, line);
         }
-        self.exit_status = fatal_exit_status();
+        self.exit_status = fatal_ends_request();
         object::set_destructors_enabled(false);
     }
 
@@ -987,11 +987,15 @@ mod tests {
     }
 }
 
-/// The exit status of a fatal error (`php_error_cb`): 255, or 121
+/// A fatal error was reported (`php_error_cb`): a `memory_limit`
+/// violation still pending dies with the request unreported, as in
+/// php-src, where the bailout leaves it behind (only the first fatal is
+/// shown). Returns the exit status: 255, or 121
 /// (`ZEND_MM_MAX_ALLOCS_EXIT_STATUS`) once the allocation chosen by
 /// `ZEND_MM_MAX_ALLOCS` was reached, so a test driver tells the injected
 /// failure from any other fatal.
-fn fatal_exit_status() -> i32 {
+fn fatal_ends_request() -> i32 {
+    let _ = php_memlimit::take();
     if php_memlimit::max_allocs_hit() {
         121
     } else {

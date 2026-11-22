@@ -87,11 +87,11 @@ pub fn default_unprotect(key: GuardKey) {
 ///   then [`std_class_write`](Self::std_class_write) for each member, so
 ///   object handle numbers match.
 pub trait JsonHost: RuntimeContext {
-    /// Reserves space for an output-buffer append. A VM may check its
-    /// `memory_limit` before the allocation.
+    /// Reserves space for an output-buffer append, checked against
+    /// `memory_limit`: a growth over the limit fails with the recorded
+    /// violation instead of allocating.
     fn json_reserve(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
-        buf.reserve(additional);
-        Ok(())
+        Ok(php_memlimit::TryGrow::try_grow(buf, additional)?)
     }
 
     /// Whether the object's class implements `JsonSerializable`.

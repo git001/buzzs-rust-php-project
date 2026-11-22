@@ -5,6 +5,7 @@
 //! (`php_register_variable_ex`, `php_default_treat_data`) behind
 //! `parse_str()` and the SAPI's `$_GET`/`$_POST`/`$_COOKIE`.
 
+use php_memlimit::{ByteSink, CheckedBuf};
 use php_runtime::{
     ArrayKey, ErrorLevel, HashTable, Obj, RtResult, RuntimeContext, RuntimeError, Value, ZArray,
     ZStr,
@@ -40,7 +41,7 @@ fn hex_upper(n: u8) -> u8 {
 
 /// `php_url_encode` (`raw = false`, RFC 1738) / `php_raw_url_encode`
 /// (`raw = true`, RFC 3986) appended to `out`.
-pub fn url_encode_into(out: &mut Vec<u8>, s: &[u8], raw: bool) {
+pub fn url_encode_into(out: &mut impl ByteSink, s: &[u8], raw: bool) {
     for &c in s {
         if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.') || (raw && c == b'~') {
             out.push(c);
@@ -90,7 +91,8 @@ pub fn url_decode(s: &[u8], raw: bool) -> Vec<u8> {
 pub const MAX_DEPTH: usize = 4096;
 
 struct Builder<'a> {
-    out: Vec<u8>,
+    /// The query: never grows past `memory_limit` (checked per entry).
+    out: CheckedBuf,
     arg_sep: &'a [u8],
     raw: bool,
     /// Containers being encoded (recursion protection).
@@ -185,12 +187,20 @@ impl Builder<'_> {
                 "Maximum call stack size reached.".into(),
             ));
         }
-        let entries: Vec<(ArrayKey, Value)> = match container {
-            Container::Array(a) => a.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-            Container::Object(o) => ctx.accessible_properties(o)?,
-        };
         self.active.push(id);
-        let r = self.encode_entries(ctx, entries, num_prefix, key_prefix);
+        let r = match container {
+            // A shared handle, not a copy of every entry: changes made by
+            // user code meanwhile copy the array (copy-on-write).
+            Container::Array(a) => {
+                let a = a.clone();
+                let entries = a.iter().map(|(k, v)| (k.clone(), v.clone()));
+                self.encode_entries(ctx, entries, num_prefix, key_prefix)
+            }
+            Container::Object(o) => match ctx.accessible_properties(o) {
+                Ok(entries) => self.encode_entries(ctx, entries, num_prefix, key_prefix),
+                Err(e) => Err(e),
+            },
+        };
         self.active.pop();
         r
     }
@@ -198,11 +208,12 @@ impl Builder<'_> {
     fn encode_entries(
         &mut self,
         ctx: &mut (impl QueryContext + ?Sized),
-        entries: Vec<(ArrayKey, Value)>,
+        entries: impl IntoIterator<Item = (ArrayKey, Value)>,
         num_prefix: Option<&[u8]>,
         key_prefix: Option<&[u8]>,
     ) -> RtResult<()> {
         for (key, data) in entries {
+            self.out.check()?;
             let data = data.deref();
             let nested = match &data {
                 Value::Array(a) => Some(Container::Array(a.clone())),
@@ -299,14 +310,14 @@ pub fn http_build_query(
         None => default_separator,
     };
     let mut b = Builder {
-        out: Vec::new(),
+        out: CheckedBuf::new(),
         arg_sep: sep,
         raw: encoding_type == PHP_QUERY_RFC3986,
         active: Vec::new(),
     };
     let np = (!numeric_prefix.is_empty()).then_some(numeric_prefix);
     b.encode_hash(ctx, &container, np, None)?;
-    Ok(ZStr::new(b.out))
+    Ok(ZStr::new(b.out.into_vec()?))
 }
 
 // ---------------------------------------------------------------- variables

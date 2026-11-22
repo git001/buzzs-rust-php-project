@@ -88,18 +88,49 @@ const CASES: &[(&str, &str, &str)] = &[
     ),
     (
         "unserialize",
-        "$s = serialize(range(1, 1000000));",
+        "$s = serialize(array_fill(0, 300000, 'abcdefghij'));",
         "$r = unserialize($s);",
     ),
     (
         "array_merge",
-        "$a = range(1, 600000);",
+        "$a = range(1, 200000);",
         "$r = array_merge($a, $a, $a, $a, $a);",
     ),
     (
         "array_map",
-        "$a = range(1, 600000);",
+        "$a = range(1, 200000);",
         "$r = array_map(fn ($v) => [$v], $a);",
+    ),
+    // String builders that grow one result without a safe point.
+    (
+        "json_encode",
+        "$a = array_fill(0, 500000, 'abcdefghijklmnopqrstuvwxyz0123456789');",
+        "$r = json_encode($a);",
+    ),
+    (
+        "implode",
+        "$a = array_fill(0, 500000, 'abcdefghijklmnopqrstuvwxyz0123456789');",
+        "$r = implode(',', $a);",
+    ),
+    (
+        "serialize",
+        "$a = array_fill(0, 500000, 'abcdefghijklmnopqrstuvwxyz0123456789');",
+        "$r = serialize($a);",
+    ),
+    (
+        "var_export",
+        "$a = array_fill(0, 500000, 'abcdefghijklmnopqrstuvwxyz0123456789');",
+        "$r = var_export($a, true);",
+    ),
+    (
+        "http_build_query",
+        "$a = array_fill(0, 500000, 'abcdefghijklmnopqrstuvwxyz0123456789');",
+        "$r = http_build_query($a);",
+    ),
+    (
+        "str_replace",
+        "$s = str_repeat('a', 3000000);",
+        "$r = str_replace('a', 'abcdefgh', $s);",
     ),
     (
         "pdo_sqlite_fetch_all",
@@ -114,20 +145,7 @@ const CASES: &[(&str, &str, &str)] = &[
 /// Cases that do not meet the contract yet, with what goes wrong. Keep in
 /// sync with the run (the test prints every result).
 const KNOWN_GAPS: &[(&str, &str)] = &[
-    // Stage 3 (fallible `HashTable`) / stage 4 (volume paths).
-    (
-        "array_map",
-        "grows its result unchecked: no fatal, ~145 MiB over",
-    ),
-    (
-        "array_merge",
-        "grows its result unchecked: no fatal, ~65 MiB over",
-    ),
-    ("json_decode", "the fatal comes, but ~6 MiB over the limit"),
-    (
-        "unserialize",
-        "grows its result unchecked: no fatal, ~170 MiB over",
-    ),
+    // Stage 4 (volume paths).
     (
         "pdo_sqlite_fetch_all",
         "fetchAll grows unchecked up to the hard ceiling: the process ends",
@@ -241,6 +259,10 @@ fn verdict(report: &str, code: Option<i32>) -> (Option<String>, String) {
             summary,
         );
     }
+    assert!(
+        !report.contains("Failed to set memory limit"),
+        "the case's setup needs more than the limit, so the limit never applied:\n{report}"
+    );
     if code != Some(0) {
         return (Some(format!("child exited with {code:?}")), summary);
     }

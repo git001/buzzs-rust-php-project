@@ -40,10 +40,11 @@ pub fn php_array_merge(dest: &mut HashTable, src: &HashTable) -> RtResult<()> {
     for (k, v) in src {
         match k {
             ArrayKey::Str(s) => {
-                dest.insert(ArrayKey::Str(s.clone()), copy_elem(v));
+                dest.try_insert(ArrayKey::Str(s.clone()), copy_elem(v))?;
             }
             ArrayKey::Int(_) => {
-                dest.push(copy_elem(v)).map_err(|_| cannot_add_element())?;
+                dest.try_push(copy_elem(v))?
+                    .map_err(|_| cannot_add_element())?;
             }
         }
     }
@@ -152,10 +153,10 @@ fn merge_wrapper<C: RuntimeContext + ?Sized>(
     for (k, v) in src.iter() {
         match k {
             ArrayKey::Str(s) => {
-                let _ = dest.add(ArrayKey::Str(s.clone()), copy_elem(v));
+                let _ = dest.try_add(ArrayKey::Str(s.clone()), copy_elem(v))?;
             }
             ArrayKey::Int(_) => {
-                let _ = dest.push(copy_elem(v));
+                let _ = dest.try_push(copy_elem(v))?;
             }
         }
     }

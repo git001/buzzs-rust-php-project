@@ -1308,7 +1308,7 @@ pub(crate) fn call(
                     }
                     len = len.saturating_sub(1);
                     f.path = Some(ZStr::from(&orig[..len]));
-                    Ok(())
+                    Ok::<(), RuntimeError>(())
                 })??;
                 Ok(Value::Null)
             }
@@ -1330,7 +1330,7 @@ pub(crate) fn call(
                     f.open_mode = Some(ZStr::from("wb"));
                     file_open(f, func, false)?;
                     f.path = Some(ZStr::empty());
-                    Ok(())
+                    Ok::<(), RuntimeError>(())
                 })??;
                 Ok(Value::Null)
             }
@@ -1945,7 +1945,7 @@ pub fn clone_into(
         if kind == FsKind::Info {
             f.path = path;
             f.file_name = file_name;
-            Ok(())
+            Ok::<(), RuntimeError>(())
         } else {
             let p = path.unwrap_or_default();
             dir_open(f, "DirectoryIterator::__construct", p.as_bytes())?;

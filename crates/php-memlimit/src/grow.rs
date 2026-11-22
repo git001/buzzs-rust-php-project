@@ -100,6 +100,153 @@ impl<T> TryGrow for VecDeque<T> {
     }
 }
 
+/// The byte buffer of a builder that grows one script-sized result
+/// (`serialize()`, `var_export()`, an encoder): it never grows past
+/// `memory_limit`. Its appends keep `Vec<u8>`'s names and stay infallible
+/// at the call site; a growth the limit refuses is recorded (pending for
+/// the VM), and from then on the buffer appends nothing more. The builder
+/// asks [`CheckedBuf::check`] where it can stop early (per element) and
+/// gets the error back from [`CheckedBuf::into_vec`] at the latest, so no
+/// append site needs a `?` and none can be missed.
+#[derive(Debug, Default)]
+pub struct CheckedBuf {
+    buf: Vec<u8>,
+    over: Option<OverLimit>,
+}
+
+impl CheckedBuf {
+    /// An empty buffer; nothing is allocated.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            over: None,
+        }
+    }
+
+    /// Appends `byte`.
+    #[inline]
+    pub fn push(&mut self, byte: u8) {
+        if self.buf.len() < self.buf.capacity() || self.room(1) {
+            self.buf.push(byte);
+        }
+    }
+
+    /// Appends `bytes`.
+    #[inline]
+    pub fn extend_from_slice(&mut self, bytes: &[u8]) {
+        if self.buf.capacity() - self.buf.len() >= bytes.len() || self.room(bytes.len()) {
+            self.buf.extend_from_slice(bytes);
+        }
+    }
+
+    /// Inserts `byte` at `index`, shifting the rest (`Vec::insert`).
+    ///
+    /// # Panics
+    ///
+    /// If `index > len`.
+    pub fn insert(&mut self, index: usize, byte: u8) {
+        if self.buf.len() < self.buf.capacity() || self.room(1) {
+            self.buf.insert(index, byte);
+        }
+    }
+
+    /// Shortens the buffer to `len` bytes (`Vec::truncate`).
+    pub fn truncate(&mut self, len: usize) {
+        self.buf.truncate(len);
+    }
+
+    /// Whether a growth was refused, as the error; the builder stops then.
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`OverLimit`].
+    #[inline]
+    pub fn check(&self) -> Result<(), OverLimit> {
+        match self.over {
+            Some(over) => Err(over),
+            None => Ok(()),
+        }
+    }
+
+    /// The built bytes.
+    ///
+    /// # Errors
+    ///
+    /// The recorded [`OverLimit`] when a growth was refused: the bytes are
+    /// incomplete then and are dropped.
+    pub fn into_vec(self) -> Result<Vec<u8>, OverLimit> {
+        self.check()?;
+        Ok(self.buf)
+    }
+
+    /// Makes room for `additional` more bytes unless the limit refuses it
+    /// (then it is recorded and nothing more is appended).
+    #[cold]
+    #[inline(never)]
+    fn room(&mut self, additional: usize) -> bool {
+        if self.over.is_some() {
+            return false;
+        }
+        match self.buf.try_grow(additional) {
+            Ok(()) => true,
+            Err(over) => {
+                self.over = Some(over);
+                false
+            }
+        }
+    }
+}
+
+/// A byte buffer that helpers append to: a plain `Vec<u8>` or a
+/// [`CheckedBuf`], so one encoder serves both.
+pub trait ByteSink {
+    /// Appends `byte`.
+    fn push(&mut self, byte: u8);
+    /// Appends `bytes`.
+    fn extend_from_slice(&mut self, bytes: &[u8]);
+}
+
+impl ByteSink for Vec<u8> {
+    #[inline]
+    fn push(&mut self, byte: u8) {
+        Vec::push(self, byte);
+    }
+
+    #[inline]
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        Vec::extend_from_slice(self, bytes);
+    }
+}
+
+impl ByteSink for CheckedBuf {
+    #[inline]
+    fn push(&mut self, byte: u8) {
+        CheckedBuf::push(self, byte);
+    }
+
+    #[inline]
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        CheckedBuf::extend_from_slice(self, bytes);
+    }
+}
+
+impl Extend<u8> for CheckedBuf {
+    fn extend<I: IntoIterator<Item = u8>>(&mut self, bytes: I) {
+        for b in bytes {
+            self.push(b);
+        }
+    }
+}
+
+impl std::ops::Deref for CheckedBuf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.buf
+    }
+}
+
 /// How a collection picks its new capacity.
 #[derive(Clone, Copy)]
 enum Growth {

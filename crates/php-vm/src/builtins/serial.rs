@@ -21,6 +21,7 @@ use crate::func::{flags, Args};
 use crate::object;
 use crate::typecheck::{given_type, TypeCtx};
 use crate::vm::{Throw, Vm, VmResult};
+use php_memlimit::CheckedBuf;
 use php_runtime::dump::unmangle_property_name;
 use php_runtime::float::zend_gcvt;
 use php_runtime::numeric::{handle_numeric_str, strtod};
@@ -218,24 +219,24 @@ fn add_var_hash(d: &SerRc, var: &Value) -> i64 {
     0
 }
 
-fn put_long(buf: &mut Vec<u8>, n: i64) {
+fn put_long(buf: &mut CheckedBuf, n: i64) {
     buf.extend_from_slice(format!("i:{n};").as_bytes());
 }
 
-fn put_string(buf: &mut Vec<u8>, s: &[u8]) {
+fn put_string(buf: &mut CheckedBuf, s: &[u8]) {
     buf.extend_from_slice(format!("s:{}:\"", s.len()).as_bytes());
     buf.extend_from_slice(s);
     buf.extend_from_slice(b"\";");
 }
 
-fn put_key(buf: &mut Vec<u8>, k: &ArrayKey) {
+fn put_key(buf: &mut CheckedBuf, k: &ArrayKey) {
     match k {
         ArrayKey::Int(i) => put_long(buf, *i),
         ArrayKey::Str(s) => put_string(buf, s.as_bytes()),
     }
 }
 
-fn put_class_header(buf: &mut Vec<u8>, name: &[u8]) {
+fn put_class_header(buf: &mut CheckedBuf, name: &[u8]) {
     buf.extend_from_slice(format!("O:{}:\"", name.len()).as_bytes());
     buf.extend_from_slice(name);
     buf.extend_from_slice(b"\":");
@@ -269,7 +270,8 @@ fn element(v: &Value) -> Value {
 }
 
 struct Serializer<'a> {
-    buf: Vec<u8>,
+    /// The output: never grows past `memory_limit` (checked per element).
+    buf: CheckedBuf,
     d: &'a SerRc,
 }
 
@@ -286,6 +288,8 @@ impl Serializer<'_> {
         self.buf.extend_from_slice(format!("{count}:{{").as_bytes());
         if count > 0 {
             for (k, v) in t.iter() {
+                // The output stops growing at `memory_limit`; so does the walk.
+                self.buf.check()?;
                 if skip_magic
                     && matches!(k, ArrayKey::Str(s) if s.as_bytes() == MAGIC_MEMBER.as_bytes())
                 {
@@ -622,11 +626,12 @@ impl Vm {
             let mut out = Vec::with_capacity(values.len());
             for v in values {
                 let mut s = Serializer {
-                    buf: Vec::new(),
+                    buf: CheckedBuf::new(),
                     d: &d,
                 };
-                match s.value(self, &element(v)) {
-                    Ok(()) => out.push(s.buf),
+                let r = s.value(self, &element(v)).and_then(|()| Ok(s.buf.check()?));
+                match r {
+                    Ok(()) => out.push(s.buf.into_vec()?),
                     Err(Throw::Fatal) => {
                         ABANDONED_SER.with(|s| s.borrow_mut().push(d.clone()));
                         return Err(Throw::Fatal);
@@ -648,18 +653,18 @@ fn serialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.values.first().cloned().unwrap_or_default();
     let d = ser_init();
     let mut s = Serializer {
-        buf: Vec::new(),
+        buf: CheckedBuf::new(),
         d: &d,
     };
     // The root: a by-value argument is never a reference.
-    let r = s.value(vm, &v.deref());
+    let r = s.value(vm, &v.deref()).and_then(|()| Ok(s.buf.check()?));
     if matches!(r, Err(Throw::Fatal)) {
         ABANDONED_SER.with(|s| s.borrow_mut().push(d.clone()));
         return Err(Throw::Fatal);
     }
     ser_destroy();
     r?;
-    Ok(sv(s.buf))
+    Ok(sv(s.buf.into_vec()?))
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,7 +1068,14 @@ impl Unserializer<'_> {
         let cap = usize::try_from(elements)
             .unwrap_or(0)
             .min(self.cur.max().saturating_sub(self.cur.pos));
-        let mut t = HashTable::with_capacity_mixed(cap);
+        // The element count is the input's: checked against
+        // `memory_limit` before the table for all of them is allocated. Over
+        // the limit, the violation is pending and the call fails like the
+        // `ZEND_HAS_OOM()` stop below (the fatal follows the call), so the
+        // unserializer cleans up as on any failure.
+        let Ok(mut t) = HashTable::try_with_capacity_mixed(cap) else {
+            return Ok(None);
+        };
         let mut remaining = elements;
         while remaining > 0 {
             remaining -= 1;

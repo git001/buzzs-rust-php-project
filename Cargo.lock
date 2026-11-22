@@ -1287,6 +1287,7 @@ dependencies = [
 name = "php-runtime"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "rustc-hash",
 ]
 

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+php-memlimit = { path = "../php-memlimit" }
 rustc-hash = "2"
 
 [lints]
