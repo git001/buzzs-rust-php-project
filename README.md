@@ -10,7 +10,8 @@ The original PHP is written in C. This project ports it to idiomatic, best-pract
 behaviour byte for byte: error messages, line numbers, `var_dump` layout, float printing.
 
 Current implementation coverage, test results, and remaining work are tracked in
-[FEATURE_GAP.md](FEATURE_GAP.md).
+[FEATURE_GAP.md](FEATURE_GAP.md); where Buzz deliberately differs from php-src is
+listed in [DIFFERENCES.md](DIFFERENCES.md).
 
 ## Layout
 

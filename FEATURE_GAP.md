@@ -1,6 +1,6 @@
 # FEATURE_GAP
 
-The TODO list for the Rust port of PHP: everything that has to be built to pass the php-src `.phpt` suite, as one table.
+The TODO list for the Rust port of PHP: everything that has to be built to pass the php-src `.phpt` suite, as one table. Deliberate differences from php-src are not gaps; they are listed in [DIFFERENCES.md](DIFFERENCES.md).
 
 - **%**: 100% means done; anything lower is the share done. Where possible it is the share of the row's run `.phpt` tests that pass (skips excluded, XFAIL counted as passing), refreshed by `scripts/update_feature_gap.py`.
 - **Performance rows** (`Performance (as fast as C): …`): % is the share of the workloads the row names that meet the acceptance criterion — candidate instructions ≤ 1.10× the C count recorded in `perf/bench/goal.tsv` (measured by `scripts/acceptance.sh` against `/usr/bin/php`, or bytes for memory layout): 100% means every workload in the row is as fast as C within the 10% tolerance. Per-operation rows subtract the empty-loop cost on both sides (`ops:<x>` minus `ops:empty_loop`).

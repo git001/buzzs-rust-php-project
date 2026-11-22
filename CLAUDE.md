@@ -114,6 +114,7 @@ Every crate's doc comments cite the php-src file(s) it ports (e.g. `ref: Zend/ze
 - Match PHP output byte-for-byte: error/warning message text, line numbers, `var_dump` formatting, float printing.
 - Each crate owns its public API; coordinate via the types in `php-runtime`.
 - Track progress in `FEATURE_GAP.md` (update the % column for rows you advance; keep rows at 100% as the completion record).
+- A deliberate difference from php-src (agreed first) goes into `DIFFERENCES.md` in the same commit: what Buzz does, what php-src does, why, where, which test.
 - Run `cargo fmt && cargo clippy --all-targets && cargo test` (scoped with `-p`) before declaring work done.
 
 ## Performance
