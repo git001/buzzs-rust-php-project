@@ -670,6 +670,7 @@ dependencies = [
 name = "php-ext-opcache"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-opcache",
  "php-runtime",
  "php-streams",

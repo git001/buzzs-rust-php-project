@@ -86,6 +86,15 @@ thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
 }
 
+/// Runs `f` on this thread's cache, outside the request's memory usage:
+/// php-src's realpath cache lives in persistent memory for the life of the
+/// process (`CWDG(realpath_cache)`, malloc), so neither its first
+/// allocation nor its entries count against `memory_limit`. Values `f`
+/// hands back to the request (clones of entries) must be made outside.
+fn with_cache<R>(f: impl FnOnce(&mut Cache) -> R) -> R {
+    php_memlimit::persistent(|| CACHE.with(|c| f(&mut c.borrow_mut())))
+}
+
 /// `realpath_cache_key()`: FNV-1 over the path bytes.
 pub fn cache_key(path: &[u8]) -> u64 {
     let mut h: u64 = 2_166_136_261;
@@ -103,14 +112,13 @@ fn chain_of(key: u64) -> usize {
 
 /// `realpath_cache_clean()`.
 pub fn cache_clean() {
-    CACHE.with(|c| *c.borrow_mut() = Cache::default());
+    with_cache(|c| *c = Cache::default());
 }
 
 /// `realpath_cache_del()`.
 pub fn cache_del(path: &[u8]) {
     let key = cache_key(path);
-    CACHE.with(|c| {
-        let mut c = c.borrow_mut();
+    with_cache(|c| {
         let n = chain_of(key);
         if let Some(pos) = c.chains[n]
             .iter()
@@ -124,12 +132,15 @@ pub fn cache_del(path: &[u8]) {
 
 /// `realpath_cache_size()`.
 pub fn cache_size() -> i64 {
-    CACHE.with(|c| c.borrow().size)
+    with_cache(|c| c.size)
 }
 
 /// The cached entries in `realpath_cache_get()` order (by hash chain,
 /// newest first within a chain).
 pub fn cache_entries() -> Vec<Bucket> {
+    // Created (if it is not yet) outside the request; the copies are the
+    // caller's.
+    with_cache(|_| ());
     CACHE.with(|c| c.borrow().chains.iter().flatten().cloned().collect())
 }
 
@@ -137,36 +148,36 @@ pub fn cache_entries() -> Vec<Bucket> {
 #[allow(clippy::many_single_char_names)] // tsrm_realpath's names
 fn cache_find(path: &[u8], t: i64, ttl: i64) -> Option<Bucket> {
     let key = cache_key(path);
-    CACHE.with(|c| {
-        let mut c = c.borrow_mut();
-        let n = chain_of(key);
+    let n = chain_of(key);
+    let found = with_cache(|c| {
         let mut i = 0;
         while i < c.chains[n].len() {
             if ttl != 0 && c.chains[n][i].expires < t {
                 let b = c.chains[n].remove(i);
                 c.size -= b.size();
             } else if c.chains[n][i].key == key && c.chains[n][i].path == path {
-                return Some(c.chains[n][i].clone());
+                return Some(i);
             } else {
                 i += 1;
             }
         }
         None
-    })
+    })?;
+    // The copy is the caller's: counted.
+    CACHE.with(|c| c.borrow().chains[n].get(found).cloned())
 }
 
 /// `realpath_cache_add()`.
 fn cache_add(path: &[u8], realpath: &[u8], is_dir: bool, t: i64, ttl: i64, limit: i64) {
-    let bucket = Bucket {
-        key: cache_key(path),
-        path: path.to_vec(),
-        realpath: realpath.to_vec(),
-        is_dir,
-        expires: t.saturating_add(ttl),
-    };
-    let size = bucket.size();
-    CACHE.with(|c| {
-        let mut c = c.borrow_mut();
+    with_cache(|c| {
+        let bucket = Bucket {
+            key: cache_key(path),
+            path: path.to_vec(),
+            realpath: realpath.to_vec(),
+            is_dir,
+            expires: t.saturating_add(ttl),
+        };
+        let size = bucket.size();
         if c.size + size <= limit {
             let n = chain_of(bucket.key);
             c.chains[n].insert(0, bucket);

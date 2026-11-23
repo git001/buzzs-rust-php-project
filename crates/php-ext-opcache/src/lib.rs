@@ -1311,10 +1311,13 @@ fn memory_lookup(
     // Decoded once per image and thread. An image compiled under other
     // compiler inputs is compiled again (and replaces the entry).
     let found = match found {
-        Ok(script) => match shared::decode(&p.real_str, &script, fingerprint) {
-            Some(unit) => MemoryLookup::Hit(unit),
-            None => MemoryLookup::Absent,
-        },
+        // The unit is this thread's for later requests too: persistent.
+        Ok(script) => {
+            match php_memlimit::persistent(|| shared::decode(&p.real_str, &script, fingerprint)) {
+                Some(unit) => MemoryLookup::Hit(unit),
+                None => MemoryLookup::Absent,
+            }
+        }
         Err(other) => other,
     };
     if let MemoryLookup::Hit(unit) = &found {
@@ -1376,20 +1379,23 @@ fn lookup(
         p.file_cache_read_only,
     ) {
         Ok(Some(payload)) => {
-            if let Some(unit) = load_cached_unit(vm, &payload, fingerprint, filename) {
+            let keep = !p.file_cache_only;
+            if let Some(unit) = load_cached_unit(vm, &payload, fingerprint, filename, keep) {
                 if vm.ini_bool("opcache.record_warnings") {
                     vm.emit_compile_warnings(&unit, filename)?;
                 }
-                if !p.file_cache_only {
-                    cache_in_memory(
-                        vm,
-                        &p.real_str,
-                        payload.mtime(),
-                        payload.len(),
-                        p.now_sec,
-                        &unit,
-                        payload.get(8..),
-                    );
+                if keep {
+                    php_memlimit::persistent(|| {
+                        cache_in_memory(
+                            vm,
+                            &p.real_str,
+                            payload.mtime(),
+                            payload.len(),
+                            p.now_sec,
+                            &unit,
+                            payload.get(8..),
+                        );
+                    });
                 }
                 return Ok(Some(unit));
             }
@@ -1657,24 +1663,37 @@ fn opcache_compile_hook(
     // `zend_persist` drops the doc comments under save_comments=0; the
     // script runs as cached, so even this first run has none.
     let strip = !vm.ini_bool("opcache.save_comments");
-    let res = vm.with_ignore_other_files(|vm| {
-        vm.with_doc_comments_stripped(strip, |vm| {
-            vm.compile_source_default(src.clone(), filename, false, skip_shebang)
+    let compile = |vm: &mut Vm| {
+        vm.with_ignore_other_files(|vm| {
+            vm.with_doc_comments_stripped(strip, |vm| {
+                vm.compile_source_default(src.clone(), filename, false, skip_shebang)
+            })
         })
-    })?;
+    };
+    // A unit for the in-memory cache outlives the request, as php-src's
+    // copy in shared memory does (`zend_accel_script_persist`): it is
+    // compiled and stored outside the request's usage. Under
+    // file_cache_only the unit is the request's own and counts.
+    let res = if p.file_cache_only {
+        compile(vm)
+    } else {
+        php_memlimit::persistent(|| compile(vm))
+    }?;
     if let CompileOutcome::Ok(ref unit) = res {
         // `zend_accel_script_optimize` -> `zend_optimize_script`.
         vm.call_registered_optimizer_passes();
         if !p.file_cache_only {
-            cache_in_memory(
-                vm,
-                &p.real_str,
-                mtime,
-                src.len() + 1024,
-                p.now_sec,
-                unit,
-                None,
-            );
+            php_memlimit::persistent(|| {
+                cache_in_memory(
+                    vm,
+                    &p.real_str,
+                    mtime,
+                    src.len() + 1024,
+                    p.now_sec,
+                    unit,
+                    None,
+                );
+            });
             if let Some((key, path)) = PENDING_KEY.with(|k| k.borrow_mut().take()) {
                 if path == p.real_str {
                     with_cache(|c| c.add_key(&key, &path));
@@ -1760,18 +1779,26 @@ fn script_stat(path: &std::path::Path) -> Option<ScriptStat> {
 /// Decodes a file cache entry (compiler fingerprint, then the bytecode
 /// image) and installs it. `None` when the entry was compiled under other
 /// compiler inputs, is unreadable, or cannot be installed in this request;
-/// the caller then compiles the file and overwrites the entry.
+/// the caller then compiles the file and overwrites the entry. A unit the
+/// in-memory cache will `keep` is decoded outside the request's usage
+/// (php-src loads it into shared memory); otherwise it is the request's.
 fn load_cached_unit(
     vm: &mut Vm,
     payload: &[u8],
     fingerprint: u64,
     filename: &ZStr,
+    keep: bool,
 ) -> Option<Rc<php_vm::compiler::CompiledUnit>> {
     let (stored, image) = payload.split_first_chunk::<8>()?;
     if u64::from_le_bytes(*stored) != fingerprint {
         return None;
     }
-    let unit = Rc::new(php_vm::bytecode_cache::decode(image).ok()?);
+    let decode = || php_vm::bytecode_cache::decode(image).ok().map(Rc::new);
+    let unit = if keep {
+        php_memlimit::persistent(decode)
+    } else {
+        decode()
+    }?;
     vm.install_cached_unit(&unit, filename).then_some(unit)
 }
 

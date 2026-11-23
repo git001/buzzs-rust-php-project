@@ -12,6 +12,7 @@ php-runtime = { path = "../php-runtime" }
 php-opcache = { path = "../php-opcache" }
 php-support = { path = "../php-support" }
 php-streams = { path = "../php-streams" }
+php-memlimit = { path = "../php-memlimit" }
 rustc-hash = "2"
 
 [lints]
