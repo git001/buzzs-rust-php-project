@@ -777,7 +777,7 @@ impl Vm {
             return Err(crate::builtins::dump::stack_size_error(self));
         }
         self.depth += 1;
-        let guard = crate::interrupt::ExecutionGuard::enter();
+        let guard = crate::interrupt::ExecutionGuard::enter(self);
         let r = self.execute_inner(base);
         drop(guard);
         self.depth -= 1;

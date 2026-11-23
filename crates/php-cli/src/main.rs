@@ -276,20 +276,11 @@ fn parse_hex(digits: &[u8]) -> Option<u64> {
 
 php_memlimit::install_global_allocator!();
 
-/// An allocation crossed the hard ceiling above `memory_limit`: PHP's
-/// message on stderr, then exit 137 without unwinding.
-fn hard_limit(e: php_memlimit::HardLimitExceeded) -> ! {
-    let _ = std::io::stderr().write_all(format!("{e} in Unknown on line 0\n").as_bytes());
-    // SAFETY: `_exit` terminates the process immediately; nothing here
-    // relies on destructors or atexit handlers (PHP does the same).
-    unsafe { libc::_exit(137) }
-}
-
 fn main() {
     let argv: Vec<Vec<u8>> = std::env::args_os().map(OsStringExt::into_vec).collect();
     let on_main_thread = ensure_main_stack(&argv);
     memcap::limit_memory();
-    php_memlimit::configure_from_env(hard_limit);
+    php_memlimit::configure_from_env(php_memlimit::exit_hard_limit);
     #[cfg(unix)]
     // SAFETY: ignoring SIGPIPE like php_cli.c, so writes to a closed pipe
     // fail with EPIPE instead of killing the process.

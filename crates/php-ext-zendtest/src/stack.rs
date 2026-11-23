@@ -70,22 +70,12 @@ pub(crate) fn emalloc(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Null)
 }
 
-/// `zend_mm_hard_limit_error`: "Hard memory limit of N bytes exhausted
-/// (tried to allocate M bytes) in FILE on line L" on stderr, then
-/// `_exit(137)` without unwinding or flushing output.
+/// `zend_mm_hard_limit_error` at the executing location.
 #[cold]
 fn hard_limit_error(vm: &Vm, hard_limit: usize, tried: usize) -> ! {
-    use std::io::Write;
     let (file, line) = vm.current_location();
     let e = php_memlimit::HardLimitExceeded { hard_limit, tried };
-    let msg = format!(
-        "{e} in {} on line {line}\n",
-        String::from_utf8_lossy(file.as_bytes())
-    );
-    let _ = std::io::stderr().write_all(msg.as_bytes());
-    // SAFETY: `_exit` terminates the process immediately; nothing relies on
-    // destructors or atexit handlers (php-src does the same).
-    unsafe { libc::_exit(137) }
+    php_memlimit::exit_hard_limit_at(e, file.as_bytes(), line)
 }
 
 #[cfg(test)]

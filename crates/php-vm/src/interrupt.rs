@@ -263,6 +263,7 @@ fn memory_limit_pending() {
 /// (every `Vm::new`) find it in place.
 pub(crate) fn install_memory_limit_hook() {
     let _ = php_memlimit::set_pending_hook(memory_limit_pending);
+    let _ = php_memlimit::set_location_hook(executing_location);
 }
 
 /// Whether some safe-point work of this thread is waiting.
@@ -286,14 +287,21 @@ pub(crate) fn resync_safe_point() {
 /// [`Vm::execute`]). The outermost execution flags work queued while the
 /// thread was not executing.
 pub(crate) struct ExecutionGuard {
-    _not_send: std::marker::PhantomData<*const ()>,
+    /// The VM that executed on this thread before (nested executions).
+    previous: *const Vm,
+}
+
+thread_local! {
+    /// The VM executing on this thread, for the hard-ceiling message
+    /// ([`executing_location`]); null when none executes.
+    static EXECUTING_VM: Cell<*const Vm> = const { Cell::new(std::ptr::null()) };
 }
 
 impl ExecutionGuard {
-    /// Enters an execution on this thread.
+    /// Enters an execution of `vm` on this thread.
     #[inline]
     #[must_use]
-    pub(crate) fn enter() -> Self {
+    pub(crate) fn enter(vm: &Vm) -> Self {
         let outer = EXECUTION_DEPTH.with(|d| {
             let n = d.get();
             d.set(n.saturating_add(1));
@@ -302,17 +310,37 @@ impl ExecutionGuard {
         if outer {
             first_execution_on_thread();
         }
-        Self {
-            _not_send: std::marker::PhantomData,
-        }
+        let previous = EXECUTING_VM.with(|v| v.replace(std::ptr::from_ref(vm)));
+        Self { previous }
     }
 }
 
 impl Drop for ExecutionGuard {
     #[inline]
     fn drop(&mut self) {
+        EXECUTING_VM.with(|v| v.set(self.previous));
         EXECUTION_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
     }
+}
+
+/// `php-memlimit`'s location hook (`zend_get_executed_filename`/`lineno`
+/// in `zend_mm_unrecoverable_error`): the file and line of the code the
+/// VM on this thread executes, for the hard-ceiling message just before
+/// the process ends.
+fn executing_location() -> Option<(Vec<u8>, u32)> {
+    let vm = EXECUTING_VM.with(Cell::get);
+    if vm.is_null() {
+        return None;
+    }
+    // SAFETY: the pointer is set by the `ExecutionGuard` of a `Vm::execute`
+    // that is still running on this thread (it resets it on drop), so the
+    // VM is alive and does not move. The VM is mutably borrowed further up
+    // the stack, in the allocation that crossed the hard ceiling; reading
+    // it here is sound only because the caller ends the process right
+    // after (`exit_hard_limit`) and that borrow is never used again.
+    let vm = unsafe { &*vm };
+    let (file, line) = vm.current_location();
+    Some((file.as_bytes().to_vec(), line))
 }
 
 /// This thread starts executing PHP code: work it queued while not
@@ -726,16 +754,23 @@ mod tests {
     fn execution_guard_counts_nesting_per_thread() {
         // Run on a fresh thread so no other test's executions interfere.
         std::thread::spawn(|| {
+            let vm = crate::Vm::new(&crate::VmOptions::default(), Box::new(std::io::sink()));
             let depth = || EXECUTION_DEPTH.with(std::cell::Cell::get);
+            let executing = || super::EXECUTING_VM.with(std::cell::Cell::get);
             assert_eq!(depth(), 0);
-            let outer = ExecutionGuard::enter();
+            assert!(executing().is_null());
+            let outer = ExecutionGuard::enter(&vm);
             assert_eq!(depth(), 1);
-            let inner = ExecutionGuard::enter();
+            let inner = ExecutionGuard::enter(&vm);
             assert_eq!(depth(), 2);
+            assert_eq!(executing(), std::ptr::from_ref(&vm));
+            assert_eq!(super::executing_location().map(|l| l.1), Some(0));
             drop(inner);
             assert_eq!(depth(), 1);
             drop(outer);
             assert_eq!(depth(), 0);
+            assert!(executing().is_null());
+            assert!(super::executing_location().is_none());
         })
         .join()
         .expect("guard thread");

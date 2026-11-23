@@ -427,6 +427,45 @@ pub fn trap_hard_limit(e: HardLimitExceeded) -> ! {
     std::process::exit(TRAP_EXIT_STATUS)
 }
 
+/// Where the script is running, for the hard-ceiling message: the file
+/// and line of the executing PHP code, `None` when nothing executes. The
+/// VM installs it ([`set_location_hook`]); it runs inside the allocator
+/// with the ceiling disabled, just before the process ends.
+pub type LocationHook = fn() -> Option<(Vec<u8>, u32)>;
+
+static LOCATION_HOOK: std::sync::OnceLock<LocationHook> = std::sync::OnceLock::new();
+
+/// Installs the [`LocationHook`]; `false` if one is installed already.
+pub fn set_location_hook(hook: LocationHook) -> bool {
+    LOCATION_HOOK.set(hook).is_ok()
+}
+
+/// php-src's end at the hard ceiling (`zend_mm_hard_limit_error` →
+/// `zend_mm_unrecoverable_error`): "Hard memory limit of N bytes exhausted
+/// (tried to allocate M bytes) in FILE on line L" on stderr, then
+/// `_exit(137)` without unwinding, shutdown functions or output flushing.
+/// The location comes from the [`LocationHook`], "Unknown" line 0 when
+/// nothing executes. The hard-ceiling handler of every SAPI (`php`,
+/// `php -S`, `php-cgi`, the `FastCGI` workers).
+pub fn exit_hard_limit(e: HardLimitExceeded) -> ! {
+    match LOCATION_HOOK.get().and_then(|hook| hook()) {
+        Some((file, line)) => exit_hard_limit_at(e, &file, line),
+        None => exit_hard_limit_at(e, b"Unknown", 0),
+    }
+}
+
+/// [`exit_hard_limit`] at a location the caller knows (a builtin that
+/// checks the ceiling itself, `zend_test_emalloc`).
+pub fn exit_hard_limit_at(e: HardLimitExceeded, file: &[u8], line: u32) -> ! {
+    let mut msg = format!("{e} in ").into_bytes();
+    msg.extend_from_slice(file);
+    msg.extend_from_slice(format!(" on line {line}\n").as_bytes());
+    let _ = std::io::stderr().write_all(&msg);
+    // SAFETY: `_exit` ends the process at once; nothing relies on
+    // destructors or atexit handlers (php-src does the same).
+    unsafe { libc::_exit(137) }
+}
+
 /// The SAPI's allocator settings from the environment, once at startup
 /// (before the first request): tracked mode ([`tracked_from_env`] of
 /// `USE_ZEND_ALLOC`, `USE_TRACKED_ALLOC`), `ZEND_MM_MAX_ALLOCS`
