@@ -1469,6 +1469,7 @@ dependencies = [
  "php-support",
  "php-timer",
  "rustc-hash",
+ "twox-hash",
 ]
 
 [[package]]

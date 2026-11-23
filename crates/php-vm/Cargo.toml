@@ -21,5 +21,8 @@ php-stdstr = { path = "../php-stdstr" }
 php-hash = { path = "../php-hash" }
 php-memlimit = { path = "../php-memlimit" }
 
+[build-dependencies]
+twox-hash = { version = "2.1", default-features = false, features = ["std", "xxhash3_64"] }
+
 [lints]
 workspace = true

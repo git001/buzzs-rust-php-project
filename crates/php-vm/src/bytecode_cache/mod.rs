@@ -24,13 +24,16 @@ use codec::{DResult, DecodeError, EResult, Reader, Writer};
 pub const FORMAT_VERSION: u32 = 1;
 
 /// Identifies this encoding for the cache's system id: the format
-/// version and the engine version. A cache directory shared by two
-/// builds keeps their entries apart.
+/// version, the engine version and the build id (a hash of the engine's
+/// sources, `build.rs`; php-src's `ZEND_BIN_ID`). A cache directory shared
+/// by two builds keeps their entries apart, also when only the compiler,
+/// the optimizer or the meaning of an op changed.
 #[must_use]
 pub fn format_id() -> String {
     format!(
-        "phprust-bytecode-{FORMAT_VERSION}-{}",
-        env!("CARGO_PKG_VERSION")
+        "phprust-bytecode-{FORMAT_VERSION}-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        env!("PHPRUST_BUILD_ID")
     )
 }
 

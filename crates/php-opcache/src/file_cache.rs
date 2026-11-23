@@ -123,7 +123,14 @@ pub fn write_file_cache(
 ) -> Result<PathBuf, (String, std::io::Error)> {
     let bin_path = get_bin_path(cache_dir, script_path);
     if let Some(parent) = bin_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
+        // Owner only, as `zend_file_cache_mkdir` (`S_IRWXU`): the
+        // bytecode carries the script's literals, credentials from a
+        // config file among them.
+        let mut dirs = std::fs::DirBuilder::new();
+        dirs.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+        if let Err(e) = dirs.create(parent) {
             let msg = format!(
                 "opcache cannot create directory for file '{}', {}",
                 bin_path.display(),
@@ -150,11 +157,12 @@ pub fn write_file_cache(
     temp_name.push(format!(".{}.{seq}.tmp", std::process::id()));
     let temp_path = bin_path.with_file_name(temp_name);
 
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-    {
+    // `S_IRUSR | S_IWUSR`, as `zend_file_cache_script_store`.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = match options.open(&temp_path) {
         Ok(f) => f,
         Err(e) => {
             let msg = format!(
@@ -352,6 +360,14 @@ mod tests {
             .map(|e| e.expect("entry").file_name())
             .collect();
         assert_eq!(names, [bin.file_name().expect("name").to_os_string()]);
+        // Owner only, as php-src: the bytecode carries the literals.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode(&bin), 0o600);
+            assert_eq!(mode(bin.parent().expect("parent")), 0o700);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
