@@ -16,6 +16,11 @@
 //! A SAPI implements [`body::SapiInput`] and [`vars::SapiVariables`] for
 //! its request, fills `vm.request_info`, and calls [`vars::populate`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod body;
 pub mod rfc1867;
 pub mod vars;

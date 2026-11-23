@@ -1016,6 +1016,10 @@ pub(crate) fn compact_tmps(lines: &mut [ZLine], has_finally: bool) -> u32 {
     let get_available = |taken: &mut Vec<bool>, max: &mut i64| -> u32 {
         let i = taken.iter().position(|x| !x).unwrap_or(taken.len());
         if i >= taken.len() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: temporaries of the compiled function"
+            )]
             taken.resize(i + 1, false);
         }
         taken[i] = true;
@@ -1038,6 +1042,10 @@ pub(crate) fn compact_tmps(lines: &mut [ZLine], has_finally: bool) -> u32 {
                 max = max.max(var + n);
                 let var = usize::try_from(var + 1).unwrap_or(0);
                 if taken.len() < var + num + 1 {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: temporaries of the compiled function"
+                    )]
                     taken.resize(var + num + 1, false);
                 }
                 map[t] = u32::try_from(var).ok();
@@ -1069,6 +1077,10 @@ pub(crate) fn compact_tmps(lines: &mut [ZLine], has_finally: bool) -> u32 {
                     max += 1;
                     let v = usize::try_from(max).unwrap_or(0);
                     if taken.len() <= v {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "bounded: temporaries of the compiled function"
+                        )]
                         taken.resize(v + 1, false);
                     }
                     taken[v] = true;

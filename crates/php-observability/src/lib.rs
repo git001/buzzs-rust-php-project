@@ -18,6 +18,11 @@
 //! ([`constants`]) that a format can embed as `${NAME}`, as haproxy's
 //! `HAPROXY_HTTP_LOG_FMT` can be embedded in its `log-format`.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod constants;
 mod event;
 mod fields;

@@ -1,6 +1,7 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! IDN and `Normalizer` checked against fixtures from `/usr/bin/php`.
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::too_many_lines, clippy::many_single_char_names)]
 
 mod common;

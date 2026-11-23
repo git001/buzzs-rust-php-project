@@ -8,6 +8,7 @@
 
 // The evaluator is test tooling that mirrors PHP's dynamic semantics; these
 // pedantic lints add noise without improving it.
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::many_single_char_names,
     clippy::unused_self,

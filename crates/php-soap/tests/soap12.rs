@@ -4,6 +4,7 @@
 //! requests handled by a `SoapServer` over `soap12-test.wsdl` with the
 //! `Soap12test` class; the response must match byte for byte.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::many_single_char_names,
     clippy::too_many_arguments,

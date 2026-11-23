@@ -73,6 +73,10 @@ impl Vm {
             };
             let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
             call_args.clear();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             call_args.reserve(pos.len());
             call_args.extend(pos.into_iter().map(Some));
             call.args = call_args;
@@ -84,6 +88,10 @@ impl Vm {
                     ));
                 };
                 if call.args.len() <= p {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: position of a declared parameter"
+                    )]
                     call.args.resize(p + 1, None);
                 }
                 call.args[p] = Some(v);

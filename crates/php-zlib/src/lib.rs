@@ -24,6 +24,11 @@
 //! the `function(): ` prefix (the VM adds it), exceptions carry PHP's full
 //! message.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod conv;
 mod ffi;
 

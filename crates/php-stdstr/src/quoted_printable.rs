@@ -17,6 +17,10 @@ const MAXL: usize = 75;
 pub fn quoted_printable_encode(s: &[u8]) -> Vec<u8> {
     // Reads past the end see the NUL terminator.
     let at = |i: usize| s.get(i).copied().unwrap_or(0);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most three times the input"
+    )]
     let mut out = Vec::with_capacity(s.len() * 3);
     let mut lp: usize = 0;
     let mut i = 0usize;
@@ -73,6 +77,7 @@ fn hex2int(c: u8) -> u8 {
 /// other `=` is copied literally.  The VM coerces the argument to string.
 pub fn quoted_printable_decode(s: &[u8]) -> Vec<u8> {
     let at = |i: usize| s.get(i).copied().unwrap_or(0);
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0usize;
     while at(i) != 0 {

@@ -34,6 +34,8 @@
 //!   `JSON_ERROR_DEPTH` through [`JsonHost::json_stack_limit_reached`]
 //!   (php-src uses its native stack limit there).
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub mod decode;
 pub mod encode;
 pub mod error;

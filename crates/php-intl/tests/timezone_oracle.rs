@@ -2,6 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `IntlTimeZone` checked against fixtures from `/usr/bin/php`.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::too_many_lines,
     clippy::float_cmp,

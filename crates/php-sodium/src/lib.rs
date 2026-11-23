@@ -49,6 +49,11 @@
 //! constants do not exist.  AES-256-GCM is compiled in (x86-64/aarch64) but
 //! only usable when [`aead::aes256gcm_is_available`] says so.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod ffi;
 
 pub mod aead;

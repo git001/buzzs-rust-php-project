@@ -22,6 +22,10 @@ pub fn parse_bool(s: &[u8]) -> bool {
 
 /// `smart_str_append_escaped()`.
 pub(crate) fn escape(s: &[u8]) -> String {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: the length of an existing string"
+    )]
     let mut out = String::with_capacity(s.len());
     for &c in s {
         if c < 32 || c == b'\\' || c > 126 {

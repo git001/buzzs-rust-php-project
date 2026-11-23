@@ -193,6 +193,10 @@ impl Vm {
         }
         let had_roots = !roots.is_empty() || !refs.is_empty() || !extra.is_empty();
         let mut g = Graph::default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: one entry per collected root"
+        )]
         let mut root_nodes: Vec<(usize, Option<u32>)> = Vec::with_capacity(roots.len());
         for (slot, o) in &roots {
             root_nodes.push((*slot, g.intern_obj(o)));

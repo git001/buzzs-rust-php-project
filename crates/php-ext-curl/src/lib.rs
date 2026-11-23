@@ -15,6 +15,10 @@
 
 // Native function handlers share one signature (`VmResult` even when
 // infallible) and use PHP's short argument names.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::unnecessary_wraps, clippy::many_single_char_names)]
 
 mod dispatch;

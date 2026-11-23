@@ -10,6 +10,11 @@
 //! * [`net`] — the HTTP connector over php-ext-streams socket transports;
 //! * [`methods`] — the native methods and functions.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod host;
 mod methods;
 mod net;

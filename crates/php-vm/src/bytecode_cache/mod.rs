@@ -46,6 +46,10 @@ pub fn encode(unit: &CompiledUnit) -> EResult<Vec<u8>> {
     let mut w = Writer::new();
     graph::encode_unit(unit, &mut w)?;
     let (table, body) = w.finish();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: size of the encoded unit"
+    )]
     let mut out = Vec::with_capacity(4 + 8 + table.len() + body.len());
     out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
     out.extend_from_slice(&(table.len() as u64).to_le_bytes());

@@ -5,6 +5,10 @@
 //! `php_vm::ext` extension API. Ref: ext/gd/gd.c, ext/gd/gd.stub.php.
 
 // `r`, `g`, `b`, `a`, `x`, `y`, `w`, `h` mirror gd.c.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::many_single_char_names)]
 
 mod create;

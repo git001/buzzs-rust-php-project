@@ -483,6 +483,10 @@ fn fold_builtin_calls(op_array: &mut OpArray, filter: impl Fn(&[u8]) -> bool) ->
         };
 
         // Get literal values for arguments
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         let mut arg_values = Vec::with_capacity(arg_lits.len());
         let mut all_found = true;
         for &lit_idx in &arg_lits {
@@ -576,6 +580,10 @@ fn hex2bin(s: &[u8]) -> Option<Vec<u8>> {
     if s.len() % 2 != 0 {
         return None;
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: linear in a compile-time literal"
+    )]
     let mut out = Vec::with_capacity(s.len() / 2);
     for chunk in s.chunks_exact(2) {
         let hi = hex_digit(chunk[0])?;
@@ -587,6 +595,10 @@ fn hex2bin(s: &[u8]) -> Option<Vec<u8>> {
 
 fn bin2hex(s: &[u8]) -> Vec<u8> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: linear in a compile-time literal"
+    )]
     let mut out = Vec::with_capacity(s.len() * 2);
     for &b in s {
         out.push(HEX[(b >> 4) as usize]);
@@ -892,7 +904,20 @@ fn evaluate_pure_builtin(name: &[u8], args: &[&Value]) -> Option<Value> {
         b"str_repeat" => {
             if args.len() == 2 {
                 if let (Value::Str(s), Value::Int(times)) = (args[0], args[1]) {
-                    if *times >= 0 && *times <= 10000 {
+                    // As php-src (`Zend/Optimizer/sccp.c`, "avoid creating
+                    // overly large strings at compile-time"): only results
+                    // below 64 KiB; a larger one is left to the run-time
+                    // call, which checks it against `memory_limit`.
+                    const FOLD_MAX: usize = 64 * 1024;
+                    if usize::try_from(*times)
+                        .ok()
+                        .and_then(|t| s.len().checked_mul(t))
+                        .is_some_and(|n| n < FOLD_MAX)
+                    {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "bounded: below FOLD_MAX bytes"
+                        )]
                         let repeated = s.as_bytes().repeat(*times as usize);
                         return Some(Value::Str(ZStr::from(repeated)));
                     }
@@ -1146,6 +1171,19 @@ mod tests {
         assert!(evaluate_pure_builtin(b"strlen", &[&s]).is_some());
         super::super::set_disabled_functions(std::iter::empty());
         assert!(evaluate_pure_builtin(b"str_repeat", &[&s, &n]).is_some());
+    }
+
+    /// `str_repeat()` is evaluated at compile time only below 64 KiB, as
+    /// php-src's sccp.c: a larger result would be allocated by the compiler,
+    /// outside any `memory_limit` check.
+    #[test]
+    fn str_repeat_is_folded_below_64_kib() {
+        let s = Value::Str(ZStr::from(&b"abcd"[..]));
+        let fold = |n: i64| evaluate_pure_builtin(b"str_repeat", &[&s, &Value::Int(n)]);
+        assert!(fold(16 * 1024 - 1).is_some());
+        assert!(fold(16 * 1024).is_none());
+        assert!(fold(100_000_000).is_none());
+        assert!(fold(-1).is_none());
     }
 
     /// `zend_version()` and `dirname()` are evaluated at compile time

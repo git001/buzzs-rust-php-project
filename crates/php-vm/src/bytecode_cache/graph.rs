@@ -425,10 +425,18 @@ impl Decoder<'_, '_> {
 
     fn attributes(&mut self) -> DResult<Vec<AttributeInfo>> {
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             let name = self.r.zstr()?;
             let arg_count = self.r.count()?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: count limited by the cache input"
+            )]
             let mut args = Vec::with_capacity(arg_count);
             for _ in 0..arg_count {
                 let arg_name = Option::decode(self.r)?;
@@ -455,6 +463,10 @@ impl Decoder<'_, '_> {
 
     fn params(&mut self) -> DResult<Vec<ParamInfo>> {
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             out.push(ParamInfo {
@@ -570,6 +582,10 @@ impl Decoder<'_, '_> {
         let traits = Vec::decode(self.r)?;
         let trait_rules = Vec::decode(self.r)?;
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut consts = Vec::with_capacity(n);
         for _ in 0..n {
             consts.push(ConstDecl {
@@ -584,6 +600,10 @@ impl Decoder<'_, '_> {
             });
         }
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut props = Vec::with_capacity(n);
         for _ in 0..n {
             props.push(PropDecl {
@@ -602,6 +622,10 @@ impl Decoder<'_, '_> {
             });
         }
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut methods = Vec::with_capacity(n);
         for _ in 0..n {
             methods.push(MethodDecl {
@@ -611,11 +635,19 @@ impl Decoder<'_, '_> {
             });
         }
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut cases = Vec::with_capacity(n);
         for _ in 0..n {
             cases.push((self.r.zstr()?, self.opt_expr()?, self.r.u32()?));
         }
         let n = self.r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut case_attributes = Vec::with_capacity(n);
         for _ in 0..n {
             case_attributes.push(self.attributes()?);
@@ -658,16 +690,28 @@ impl Decoder<'_, '_> {
             self.filled[idx] = true;
             let table = self.tables[idx].clone();
             let n = self.r.count()?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: count limited by the cache input"
+            )]
             let mut functions = Vec::with_capacity(n);
             for _ in 0..n {
                 functions.push(self.function()?);
             }
             let n = self.r.count()?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: count limited by the cache input"
+            )]
             let mut classes = Vec::with_capacity(n);
             for _ in 0..n {
                 classes.push(self.class()?);
             }
             let n = self.r.count()?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: count limited by the cache input"
+            )]
             let mut attrs = Vec::with_capacity(n);
             for _ in 0..n {
                 attrs.push(self.attr_list()?);

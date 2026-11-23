@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Expectations hand-ported from ext/intl/tests/grapheme*.phpt.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_intl::grapheme as g;
 
 fn s(v: Vec<u8>) -> String {

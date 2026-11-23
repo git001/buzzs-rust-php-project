@@ -55,6 +55,11 @@
 //!   streams, zstd, torrentzip, `LENGTH_UNCHECKED`, …) are compiled in only
 //!   when building against such a libzip; that code path is untested here.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod extract;
 mod ffi;
 mod paths;

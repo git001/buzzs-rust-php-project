@@ -31,6 +31,10 @@ pub fn canonicalize_version(version: &[u8]) -> Vec<u8> {
     let Some((&first, rest)) = version.split_first() else {
         return Vec::new();
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most twice the input"
+    )]
     let mut q = Vec::with_capacity(version.len() * 2);
     q.push(first);
     let mut lp = first;

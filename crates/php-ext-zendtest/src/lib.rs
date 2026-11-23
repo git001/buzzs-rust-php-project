@@ -8,6 +8,10 @@
 //!
 //! Native function handlers share the `NativeFn` signature, so the ones
 //! that cannot fail still return `VmResult`.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::unnecessary_wraps)]
 //!
 //! Layout:

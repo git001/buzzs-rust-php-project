@@ -227,6 +227,7 @@ fn put_member(slots: &RefCell<Vec<Vec<MemberSlot>>>, i: usize, x: MemberSlot) {
         entries.remove(0);
     }
     if entries.len() == entries.capacity() {
+        #[expect(clippy::disallowed_methods, reason = "bounded: grows by one element")]
         php_memlimit::persistent(|| entries.reserve(1));
     }
     entries.push(x);

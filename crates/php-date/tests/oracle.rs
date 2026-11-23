@@ -4,6 +4,8 @@
 //! plus deterministic random grammar combinations) with the output PHP
 //! produced for them (see `tools/gen_oracle.py` and `tools/probe.php`).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 
 use std::fs;

@@ -8,6 +8,7 @@
 //! `cargo test -p php-stdarr --test oracle -- --ignored regenerate_oracle`.
 
 // The Mt19937 emulation mirrors C's unsigned/signed conversions.
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

@@ -197,6 +197,10 @@ pub fn zend_gcvt(value: f64, ndigit: i32, dec_point: u8, exponent: u8) -> String
     } else {
         return non_finite(value, 17);
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most the ~770 significant digits of a double"
+    )]
     let mut out: Vec<u8> = Vec::with_capacity(d.digits.len() + 8);
     if d.negative {
         out.push(b'-');
@@ -221,6 +225,10 @@ pub fn zend_gcvt(value: f64, ndigit: i32, dec_point: u8, exponent: u8) -> String
         // Standard format 0.000ddd.
         out.push(b'0');
         out.push(dec_point);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: decpt is -3..=-1 here (below -3 takes the exponential branch)"
+        )]
         out.resize(out.len() + decpt.unsigned_abs() as usize, b'0');
         out.extend_from_slice(&d.digits);
     } else {
@@ -300,6 +308,10 @@ struct Cvt {
 }
 
 /// `php_ecvt(value, ndigit)`: exactly `ndigit` significant digits.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: only php_conv_fp calls it, with ndigit clamped to NDIG - 1"
+)]
 fn php_ecvt(value: f64, ndigit: i32) -> Cvt {
     let width = usize::try_from(ndigit).unwrap_or(0);
     if value == 0.0 {
@@ -324,6 +336,10 @@ fn php_ecvt(value: f64, ndigit: i32) -> Cvt {
 }
 
 /// `php_fcvt(value, ndigit)`: digits up to `ndigit` places after the point.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: only php_conv_fp calls it, with ndigit clamped to NDIG - 1"
+)]
 fn php_fcvt(value: f64, ndigit: i32) -> Cvt {
     let width = usize::try_from(ndigit).unwrap_or(0);
     if value == 0.0 {
@@ -375,6 +391,10 @@ pub fn php_conv_fp(
     } else {
         php_ecvt(num, precision + 1)
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: precision is clamped to NDIG - 2 above"
+    )]
     let mut out: Vec<u8> = Vec::with_capacity(cvt.digits.len() + 8);
     let mut p = cvt.digits.as_slice();
     let mut decimal_point = cvt.decpt;

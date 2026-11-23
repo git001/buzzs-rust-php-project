@@ -13,6 +13,10 @@
 //!   error messages.
 
 // Number-theoretic code follows the usual mathematical notation (a, b, n, q, r...).
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::many_single_char_names)]
 
 pub mod mpz;

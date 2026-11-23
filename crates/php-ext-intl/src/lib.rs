@@ -13,6 +13,10 @@
 //! [`core`].
 // `vm`, `a` (arguments), `o` (object) and `s` (string value) are the
 // conventional names throughout the binding handlers.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(
     clippy::needless_pass_by_value,
     clippy::unnecessary_wraps,

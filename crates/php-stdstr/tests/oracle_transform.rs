@@ -3,6 +3,8 @@
 //! Oracle tests for `transform.rs`: case mapping, trim, pad, wrap, split,
 //! `strtr`, `str_replace`, `chr`/`ord`, hex, utf8, `str_increment`,
 //! `hebrev`, paths.
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{assoc, case, check_mapped, lit, pure, regenerate, Case, V};
 use php_stdstr::transform::{

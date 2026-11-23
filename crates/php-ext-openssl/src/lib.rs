@@ -42,6 +42,10 @@
 
 // Native handlers must match the VM's `NativeFn` signature even when they
 // cannot fail.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::unnecessary_wraps)]
 
 mod convert;

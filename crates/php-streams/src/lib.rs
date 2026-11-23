@@ -37,6 +37,11 @@
 //! * [`state`] — request globals: INI settings, VM hooks (output, request
 //!   body, executing file), stat cache.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod builtin;
 pub mod context;
 pub mod diag;

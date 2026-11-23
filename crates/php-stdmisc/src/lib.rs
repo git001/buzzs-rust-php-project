@@ -43,6 +43,11 @@
 //!
 //! All `unsafe` code is confined to [`sys`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod browscap;
 pub mod crypt;
 pub mod datetime;

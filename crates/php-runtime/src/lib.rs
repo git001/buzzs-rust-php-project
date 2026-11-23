@@ -33,6 +33,8 @@
 //! where it differs from older releases, e.g. the "Increment on non-numeric
 //! string is deprecated" and NaN-coercion diagnostics.
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub mod array;
 pub mod convert;
 pub mod dump;

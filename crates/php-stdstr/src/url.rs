@@ -8,6 +8,7 @@ use php_memlimit::ByteSink;
 const HEXCHARS: &[u8; 16] = b"0123456789ABCDEF";
 
 fn url_encode_impl(s: &[u8], raw: bool) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(s.len() + s.len() / 2);
     url_encode_into(&mut out, s, raw);
     out
@@ -59,6 +60,7 @@ fn hex_val(c: u8) -> u8 {
 }
 
 fn url_decode_impl(s: &[u8], plus_is_space: bool) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {

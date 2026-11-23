@@ -52,6 +52,11 @@
 //! Reference: `ext/session/{session.c,mod_files.c,mod_user.c,
 //! mod_user_class.c,session.stub.php}`.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod api;
 pub mod class;
 pub mod files;

@@ -345,6 +345,10 @@ impl ClassBuilder {
         let new_ifaces = &interfaces[parent.as_ref().map_or(0, |p| p.interfaces.len())..];
         let cls = Rc::new_cyclic(|weak: &Weak<Class>| {
             // Constants.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: members of the declared class"
+            )]
             let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
             let mut const_map = name_map_with_capacity(nconsts);
             let push_const =
@@ -409,6 +413,10 @@ impl ClassBuilder {
             // Properties.
             let mut props: Vec<Rc<PropInfo>> =
                 parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: members of the declared class"
+            )]
             props.reserve(self.props.len());
             let mut prop_map: NameMap<Rc<PropInfo>> = name_map_with_capacity(
                 parent.as_ref().map_or(0, |p| p.prop_map.len()) + self.props.len(),
@@ -475,6 +483,10 @@ impl ClassBuilder {
             }
             // Methods.
             let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: members of the declared class"
+            )]
             let mut order: Vec<ZStr> = Vec::with_capacity(nmethods);
             for (sig, f, h) in &self.methods {
                 let b = builtin_method(*sig, None, *f, *h);

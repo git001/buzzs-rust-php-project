@@ -3,6 +3,7 @@
 //! Behaviour beyond the phpt ports: profiling, the internal error list,
 //! panics in callbacks, re-entrancy, `transformToXml()` returning null.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::doc_markdown)]
 
 mod common;

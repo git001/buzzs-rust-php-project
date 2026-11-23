@@ -269,6 +269,10 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
         }
         return Ok(ZArray::from_table(out));
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one entry per array argument"
+    )]
     let mut tables = Vec::with_capacity(arrays.len());
     let mut maxlen = 0usize;
     for (i, a) in arrays.iter().enumerate() {
@@ -291,6 +295,10 @@ pub fn array_map<C: RuntimeContext + ?Sized>(
     let mut cb = callback;
     // One argument buffer for all the calls; the callback moves the
     // arguments out of it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one entry per array argument"
+    )]
     let mut params: Vec<Value> = Vec::with_capacity(iters.len());
     for _ in 0..maxlen {
         params.clear();

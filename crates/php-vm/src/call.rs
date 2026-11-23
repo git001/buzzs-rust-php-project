@@ -159,6 +159,10 @@ impl Vm {
             if let Some(buf) = self.call_bufs.args.pop() {
                 install_buffer(&mut call.args, buf);
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             call.args.reserve(n);
             for i in 0..n {
                 call.args.push(call.inline_args[i].take());
@@ -1638,6 +1642,10 @@ impl Vm {
                 if let Some(buf) = self.call_bufs.args.pop() {
                     install_buffer(&mut call.args, buf);
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: number of arguments of the call"
+                )]
                 call.args.reserve(n + 1);
                 for i in 0..n {
                     call.args.push(call.inline_args[i].take());
@@ -1768,6 +1776,10 @@ impl Vm {
                             if let Some(v) = self.call_bufs.args.pop() {
                                 install_buffer(&mut call.args, v);
                             }
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "bounded: number of arguments of the call"
+                            )]
                             call.args.reserve(n + 1);
                             for i in 0..n {
                                 call.args.push(call.inline_args[i].take());
@@ -1861,6 +1873,10 @@ impl Vm {
                         if let Some(buf) = self.call_bufs.args.pop() {
                             install_buffer(&mut call.args, buf);
                         }
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "bounded: number of arguments of the call"
+                        )]
                         call.args.reserve(n + 1);
                         for i in 0..n {
                             call.args.push(call.inline_args[i].take());
@@ -2013,6 +2029,10 @@ impl Vm {
             if let Some(buf) = self.call_bufs.args.pop() {
                 install_buffer(&mut call.args, buf);
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             call.args.reserve(n);
             for i in 0..n {
                 call.args.push(call.inline_args[i].take());
@@ -2041,6 +2061,10 @@ impl Vm {
                     ));
                 }
                 if call.args.len() <= p {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: position of a declared parameter"
+                    )]
                     call.args.resize(p + 1, None);
                 }
                 call.args[p] = Some(value);
@@ -3031,6 +3055,10 @@ impl Vm {
             f.is_ctor = is_ctor;
 
             f.args.clear();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             f.args.resize(passed_argc, None);
 
             for i in 0..passed_argc {
@@ -3077,6 +3105,10 @@ impl Vm {
             let spare = if inline_count > 0 {
                 let n = inline_count as usize;
                 f.args.clear();
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: number of arguments of the call"
+                )]
                 f.args.resize(n, None);
                 let ncv = f.code.cv_names.len();
                 let ops = &f.code.ops;
@@ -3195,6 +3227,10 @@ impl Vm {
                 if let Some(buf) = self.call_bufs.args.pop() {
                     install_buffer(&mut call.args, buf);
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: number of arguments of the call"
+                )]
                 call.args.reserve(n);
                 for i in 0..n {
                     call.args.push(call.inline_args[i].take());
@@ -3212,6 +3248,10 @@ impl Vm {
             if let Some(buf) = self.call_bufs.args.pop() {
                 install_buffer(&mut call.args, buf);
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             call.args.reserve(n);
             for i in 0..n {
                 call.args.push(call.inline_args[i].take());
@@ -3454,8 +3494,16 @@ impl Vm {
         } else {
             let cap = nparams.max(npassed);
             let mut values = self.call_bufs.values.pop().unwrap_or_default();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             values.reserve(cap);
             let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             passed.reserve(cap);
             (values, passed)
         };
@@ -4525,6 +4573,10 @@ impl Vm {
         };
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
@@ -4578,6 +4630,10 @@ impl Vm {
         if !inline {
             let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
             call_args.clear();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             call_args.reserve(n);
             call_args.extend(args.iter_mut().map(|a| Some(std::mem::take(a))));
             let mut call = template.clone();
@@ -4650,6 +4706,10 @@ impl Vm {
     ) -> VmResult<Value> {
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
@@ -4665,6 +4725,10 @@ impl Vm {
             match pos {
                 Some(p) => {
                     if call.args.len() <= p {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "bounded: position of a declared parameter"
+                        )]
                         call.args.resize(p + 1, None);
                     } else if call.args[p].is_some() {
                         return Err(self.make_throw(
@@ -4702,6 +4766,10 @@ impl Vm {
         let mut call = self.pending_for_method(m, Some(o.clone()), object::class_of(o).clone());
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
@@ -4740,6 +4808,10 @@ impl Vm {
         let mut call = call;
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
@@ -4782,6 +4854,10 @@ impl Vm {
         let mut call = self.static_method_call(cls, &ZStr::from(name), false)?;
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;
@@ -4803,6 +4879,10 @@ impl Vm {
         let mut call = PendingCall::new(f);
         let mut call_args = self.call_bufs.args.pop().unwrap_or_default();
         call_args.clear();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         call_args.reserve(args.len());
         call_args.extend(args.into_iter().map(Some));
         call.args = call_args;

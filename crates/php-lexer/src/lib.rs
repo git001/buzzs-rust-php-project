@@ -66,6 +66,10 @@
 //! assert_eq!(err.flatten().unwrap().message, "Invalid numeric literal");
 //! ```
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![warn(missing_docs)]
 
 mod encoding;

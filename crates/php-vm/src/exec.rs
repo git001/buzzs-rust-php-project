@@ -335,6 +335,10 @@ impl Vm {
         let vals: &mut [Value] = if parts.len() <= INLINE {
             &mut inline[..parts.len()]
         } else {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: parts of a compiled rope"
+            )]
             spill.resize(parts.len(), Value::Null);
             spill.as_mut_slice()
         };

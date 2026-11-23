@@ -15,6 +15,8 @@
 //! and php-src master (the reference): `cannot be empty` became `must not be
 //! empty`, and deprecated functions name their replacement.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod harness;
 
 use std::fmt::Write as _;

@@ -28,6 +28,10 @@
 //! `simplexml_import_dom()`/`dom_import_simplexml()`, XSL.
 
 // Handlers follow the VM's `(vm, o, a, …)` naming convention.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::many_single_char_names)]
 
 mod errors;

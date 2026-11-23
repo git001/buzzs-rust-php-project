@@ -21,6 +21,8 @@
 //! include the `"func(): "` prefix — the VM adds it from the active
 //! function name, like `php_error_docref()`/`zend_argument_value_error()`.
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub mod msg;
 pub mod sem;
 pub mod shm;

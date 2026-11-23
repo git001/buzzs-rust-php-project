@@ -14,6 +14,11 @@
 //! The VM registers classes generically from [`classes::class_table`] and
 //! calls into [`dispatch`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod chardata;
 pub mod classes;
 pub mod constants;

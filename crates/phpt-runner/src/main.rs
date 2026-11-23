@@ -2,6 +2,11 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! `phpt-runner`: run php-src `.phpt` tests against a PHP binary.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test tool, not on the request path"
+)]
+
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};

@@ -3,6 +3,8 @@
 //! Oracle tests for `similar_text()`, `levenshtein()`, `soundex()`,
 //! `metaphone()`, `str_word_count()`, `count_chars()` and the
 //! `php_charmask()` warnings (observed through `str_word_count()`).
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{case, check, lit, pure, regenerate, Case, K, V};
 use php_stdstr::analysis::{

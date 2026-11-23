@@ -316,6 +316,27 @@ const CASES: &[(&str, &str, &str)] = &[
                     INSERT INTO t SELECT x, 'abcdefgh' FROM c\");",
         "$r = $db->query('SELECT * FROM t')->fetchAll();",
     ),
+    // Stage 8: one allocation of a size the script picks (clippy.toml).
+    (
+        "string_offset_extend",
+        "",
+        "$s = ''; $s[100000000] = 'x';",
+    ),
+    (
+        "number_format_decimals",
+        "",
+        "$r = number_format(1.5, 100000000);",
+    ),
+    (
+        "number_format_int_decimals",
+        "",
+        "$r = number_format(1, 100000000);",
+    ),
+    (
+        "number_format_thousands_sep",
+        "$s = str_repeat(',', 1 << 20);",
+        "$r = number_format(1e300, 0, '.', $s);",
+    ),
 ];
 
 /// Opens `$m` (mysqli) on the `MYSQL_TEST_*` server and fills a temporary

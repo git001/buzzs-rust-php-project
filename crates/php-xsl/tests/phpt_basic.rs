@@ -3,6 +3,7 @@
 //! Ports of the transformation phpts of `ext/xsl/tests` (output compared
 //! with the original `--EXPECT--` sections).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::doc_markdown, clippy::format_collect, clippy::similar_names)]
 
 mod common;

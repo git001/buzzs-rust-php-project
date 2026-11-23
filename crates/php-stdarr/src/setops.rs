@@ -218,6 +218,10 @@ fn sorted_lists<C: ArrayContext + ?Sized>(
     behavior: Behavior,
     cmps: &mut Cmps<'_, '_, C>,
 ) -> Vec<List> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one entry per array argument"
+    )]
     let mut buckets = Vec::with_capacity(tables.len());
     for a in tables {
         let mut list: List = a.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

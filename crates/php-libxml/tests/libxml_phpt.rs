@@ -4,6 +4,8 @@
 //! the document layer (the DOM calls are replaced by the equivalent
 //! parse options).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 
 use std::cell::RefCell;

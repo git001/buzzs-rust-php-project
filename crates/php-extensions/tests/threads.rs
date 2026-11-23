@@ -7,6 +7,8 @@
 //! served before (`Vm::request_reset`, php-src's per-request
 //! `php_request_shutdown` / `php_request_startup` on a long-lived process).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::cell::RefCell;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;

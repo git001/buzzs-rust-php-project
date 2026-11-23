@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ports of `ext/intl/tests/numberformatter/*.phpt` (php-src master).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_intl::common::set_ini_default_locale;
 use php_intl::error::{Scope, UErrorCode};
 use php_intl::numberformatter::{FormatValue, IntlNumberFormatter};

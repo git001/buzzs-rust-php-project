@@ -4,6 +4,8 @@
 //! returns and yields (`zend_compile_return`, `zend_compile_yield`), the
 //! argument fetch mode of `zend_compile_args` (`Cannot use [] for reading`)
 //! and the declaration order of enum members (ref: `Zend/zend_compile.c`).
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;

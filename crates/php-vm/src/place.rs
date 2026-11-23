@@ -156,6 +156,10 @@ pub(crate) enum WalkErr {
     /// the walk stops after the offset checks and the caller converts the
     /// value and writes its first byte with a silent second walk.
     StringOffsetObject,
+    /// A growth the script sized crossed `memory_limit` (recorded by
+    /// `php_memlimit`): raised as the memory fatal right away, as php-src's
+    /// `zend_string_extend` bails out inside the assignment.
+    OutOfMemory,
 }
 
 /// Result of walking inside a container.
@@ -728,6 +732,17 @@ fn assign_string_offset(
     let mut v = str.as_bytes().to_vec();
     let off = usize::try_from(offset).unwrap_or(0);
     if off >= v.len() {
+        // `$s[N] = 'x'` extends the string to the script's offset
+        // (`zend_string_extend`): checked first, so a huge offset raises the
+        // memory fatal in this op instead of hitting the hard ceiling.
+        let grow = off + 1 - v.len();
+        if php_memlimit::TryGrow::try_grow_exact(&mut v, grow).is_err() {
+            return Err(WalkErr::OutOfMemory);
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: checked by try_grow_exact above"
+        )]
         v.resize(off, b' ');
         v.push(c);
     } else {
@@ -1593,6 +1608,10 @@ fn last_entry(v: &Value, segs: &[RSeg], i: usize, src: &PhpRef) -> Option<usize>
 /// last entry into `src`) leads to: `$t = &$a; $a[] = $t;` makes `$a`
 /// contain itself, like php-src. Returns the assigned value.
 fn store_self_reference(segs: &[RSeg], src: &PhpRef) -> Option<Value> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: length of the compiled access path"
+    )]
     let mut path = Vec::with_capacity(segs.len());
     for seg in segs {
         path.push(match seg {
@@ -1942,6 +1961,10 @@ impl Vm {
         };
         let base = self.resolve_base(&p.base, write, quiet, sw)?;
         let n = p.segs.len();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: length of the compiled access path"
+        )]
         let mut segs = Vec::with_capacity(n);
         let mut undefined = Vec::new();
         for (j, s) in p.segs.iter().enumerate() {
@@ -2121,6 +2144,10 @@ impl Vm {
             WalkErr::StringOffsetObject => {
                 self.make_throw("Error", "Cannot assign an object to a string offset")
             }
+            WalkErr::OutOfMemory => match self.raise_pending_oom() {
+                Err(t) => t,
+                Ok(()) => Throw::Fatal,
+            },
         }
     }
 

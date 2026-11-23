@@ -26,6 +26,10 @@
 //! `csrc/glue.c`.
 
 // Prose mentions XPath, SimpleXML, libxslt… far too often for backticks.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::doc_markdown)]
 
 pub mod callbacks;

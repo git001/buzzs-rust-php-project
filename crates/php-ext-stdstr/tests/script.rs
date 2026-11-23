@@ -3,6 +3,8 @@
 //! End-to-end tests: PHP scripts run on a VM with the `standard`
 //! string/math/url binding. Expected outputs come from PHP itself.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;

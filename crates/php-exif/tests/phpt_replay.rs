@@ -8,6 +8,7 @@
 //! `php-runtime`'s `var_dump`/`print_r`; warnings are printed the way the
 //! CLI does (`"\nWarning: func(): msg in %s on line %d\n"`).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_wrap,

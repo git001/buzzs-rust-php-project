@@ -443,6 +443,10 @@ pub fn var_export(value: &Value, ctx: &mut (impl RuntimeContext + ?Sized)) -> Rt
 /// bytes become `' . "\0" . '`.
 #[must_use]
 pub fn export_string(s: &[u8]) -> Vec<u8> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: the length of an existing string"
+    )]
     let mut out = Vec::with_capacity(s.len() + 2);
     out.push(b'\'');
     for &c in s {

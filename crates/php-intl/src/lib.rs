@@ -6,6 +6,10 @@
 //! (`NumberFormatter`, `IntlDateFormatter`, `Collator`, …) and functions;
 //! the VM wraps them into PHP objects.  Errors follow php-src's intl error
 //! model, see [`error`].
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![deny(unsafe_code)]
 
 pub mod error;

@@ -60,6 +60,11 @@
 //! this crate working.  `LD_PRELOAD=libonig.so.5 file x.txt` reproduces the
 //! failure with file(1) itself.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod capture;
 mod compat;
 mod ffi;

@@ -184,6 +184,10 @@ impl VarStore {
         };
         if let Some(idx) = p {
             if self.slots.len() <= idx as usize {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: compiled variables of the function"
+                )]
                 self.slots
                     .resize(self.names.len().max(idx as usize + 1), None);
             }
@@ -198,6 +202,10 @@ impl VarStore {
     pub fn find_cv(&mut self, cv: usize, name: &[u8]) -> Option<u32> {
         if self.names.get(cv).is_some_and(|n| n.as_bytes() == name) {
             if self.slots.len() <= cv {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: compiled variables of the function"
+                )]
                 self.slots.resize(self.names.len().max(cv + 1), None);
             }
             if let Ok(i) = u32::try_from(cv) {
@@ -378,6 +386,7 @@ impl CallBufs {
     /// Pools pre-filled at startup so that reaching steady state does not
     /// allocate while user code runs (`memory_get_usage()` deltas, e.g.
     /// Zend/tests/bug79514.phpt, must not see the pools grow).
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     pub(crate) fn prewarmed(empty_code: &Rc<OpArray>) -> Self {
         let mut b = CallBufs {
             args: Vec::with_capacity(128),
@@ -433,6 +442,10 @@ impl PendingCall {
     pub fn materialize_args(&mut self) {
         if self.inline_count > 0 {
             let n = self.inline_count as usize;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             self.args.reserve(n);
             for i in 0..n {
                 self.args.push(self.inline_args[i].take());
@@ -611,6 +624,7 @@ pub struct FrameStack {
 }
 
 impl FrameStack {
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     pub fn new() -> Self {
         Self {
             vec: Vec::with_capacity(128),
@@ -618,6 +632,10 @@ impl FrameStack {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: no caller passes a script value"
+    )]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             vec: Vec::with_capacity(cap),
@@ -1121,6 +1139,10 @@ pub(crate) fn refill_with<T>(v: &mut Vec<T>, n: usize, make: impl Fn() -> T) {
         v.clear();
     }
     if n != 0 {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: slots of one compiled function"
+        )]
         v.reserve(n);
         for _ in 0..n {
             v.push(make());
@@ -1142,6 +1164,7 @@ pub(crate) fn move_last_frame(from: &mut Vec<Frame>, to: &mut Vec<Frame>) -> boo
     let Some(last) = from.len().checked_sub(1) else {
         return false;
     };
+    #[expect(clippy::disallowed_methods, reason = "bounded: grows by one element")]
     to.reserve(1);
     let len = to.len();
     // SAFETY: `from[last]` is an initialised element, and `to` has room
@@ -1162,6 +1185,7 @@ pub(crate) fn move_last_frame(from: &mut Vec<Frame>, to: &mut Vec<Frame>) -> boo
 
 impl Frame {
     /// Creates a pre-allocated empty frame for the pool.
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     pub fn new_pooled(empty_code: Rc<OpArray>) -> Self {
         Frame {
             tmps: Vec::with_capacity(16),
@@ -1787,6 +1811,10 @@ impl Frame {
     }
 
     /// Creates a frame sharing an existing variable store.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: compiled variables of the function, else fixed"
+    )]
     pub fn with_vars(
         code: Rc<OpArray>,
         kind: FrameKind,
@@ -1880,6 +1908,10 @@ impl Frame {
         if st.names.is_empty() {
             st.names.share(&self.code);
             if st.slots.len() < self.code.cv_names.len() {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: compiled variables of the function"
+                )]
                 st.slots.resize(self.code.cv_names.len(), None);
             }
         }

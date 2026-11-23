@@ -2,6 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Expectations from php-src master `.phpt` tests for functions/behaviour
 //! that PHP 8.3 (the oracle used elsewhere) does not have.
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::too_many_lines,
     clippy::match_same_arms,

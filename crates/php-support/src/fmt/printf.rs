@@ -333,6 +333,10 @@ impl Out {
         }
         self.buf.extend_from_slice(&add[..copy_len.min(add.len())]);
         if alignment == Align::Left {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "checked: try_grow(m_width) above made room for the padding"
+            )]
             self.buf.resize(self.buf.len() + npad, padding);
         }
         Ok(())
@@ -421,6 +425,7 @@ impl Out {
         let mask = (1u64 << bits) - 1;
         #[allow(clippy::cast_sign_loss)]
         let mut num = number as u64;
+        #[expect(clippy::disallowed_methods, reason = "bounded: constant size")]
         let mut s = Vec::with_capacity(64);
         loop {
             #[allow(clippy::cast_possible_truncation)]
@@ -462,6 +467,10 @@ impl Out {
                 let conv = if fmt == b'f' { b'F' } else { fmt };
                 let dp = if fmt == b'f' { decimal_point } else { b'.' };
                 let (digits, neg) = php_conv_fp(conv, number, false, precision, dp);
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: the digits of one float (precision capped at MAX_FLOAT_PRECISION)"
+                )]
                 let mut s = Vec::with_capacity(digits.len() + 1);
                 if neg {
                     s.push(b'-');
@@ -485,6 +494,10 @@ impl Out {
                 };
                 let digits = zend_gcvt(number, precision, dp, exp_char);
                 let neg = digits.starts_with('-');
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: the digits of one float (precision capped at MAX_FLOAT_PRECISION)"
+                )]
                 let mut s = Vec::with_capacity(digits.len() + 1);
                 if !neg && always_sign {
                     s.push(b'+');
@@ -574,6 +587,10 @@ pub fn php_formatted_print(
 ) -> Result<Vec<u8>, FormatError> {
     let at = |i: usize| format.get(i).copied().unwrap_or(0);
     let n_args = args.len();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: the length of the format string"
+    )]
     let mut out = Out {
         buf: Vec::with_capacity(format.len() + 16),
     };

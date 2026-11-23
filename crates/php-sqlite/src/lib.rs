@@ -30,6 +30,10 @@
 //! [`StreamOps`]: php_streams::stream::StreamOps
 
 // FFI code naturally has `argc`/`argv`, `src`/`dst` pairs.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::similar_names)]
 // "SQLite" is a proper noun, not an identifier.
 #![allow(clippy::doc_markdown)]

@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `addslashes()`, `stripslashes()`, `addcslashes()`,
 //! `stripcslashes()` and `quotemeta()`.
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{case, check, lit, pure, regenerate, Case};
 use php_stdstr::slashes::{addcslashes, addslashes, quotemeta, stripcslashes, stripslashes};

@@ -1371,6 +1371,10 @@ fn lower_numeric(code: &OpArray, i: usize) -> Option<Inst> {
 /// Decodes `code` into its tape: one [`Inst`] per op, at the op's index,
 /// and an [`TOp::Exit`] sentinel after the last one.
 pub(crate) fn lower(code: &OpArray) -> Box<[Inst]> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one slot per compiled op"
+    )]
     let mut tape = Vec::with_capacity(code.ops.len() + 1);
     for (i, op) in code.ops.iter().enumerate() {
         tape.push(lower_op(code, i).unwrap_or_else(|| {

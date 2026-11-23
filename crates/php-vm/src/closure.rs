@@ -91,6 +91,10 @@ impl Vm {
 
     /// Creates a closure for a declared function in the current frame.
     pub(crate) fn make_closure(&mut self, f: &Rc<UserFunction>) -> VmResult<Value> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: variables of the closure's use list"
+        )]
         let mut vars = Vec::with_capacity(f.uses.len());
         for u in &f.uses {
             if u.by_ref {
@@ -459,6 +463,10 @@ impl Vm {
     pub(crate) fn static_init(&mut self, idx: u32, v: Value) -> PhpRef {
         fn put(b: &mut Vec<Option<PhpRef>>, idx: usize, v: Value) -> PhpRef {
             if b.len() <= idx {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: static variable slot of the compiled function"
+                )]
                 b.resize(idx + 1, None);
             }
             b[idx].get_or_insert_with(|| PhpRef::new(v)).clone()
@@ -814,6 +822,10 @@ fn closure_invoke(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             }
         }
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: number of arguments of the call"
+    )]
     let mut args = Vec::with_capacity(a.values.len());
     let mut named = std::mem::take(&mut a.named);
     for (i, v) in std::mem::take(&mut a.values).into_iter().enumerate() {

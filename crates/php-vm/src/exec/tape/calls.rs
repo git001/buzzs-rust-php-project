@@ -773,10 +773,18 @@ pub(super) fn call_native(
     // parameters, not marked as passed.
     let mut values = vm.call_bufs.values.pop().unwrap_or_default();
     let mut passed = vm.call_bufs.passed.pop().unwrap_or_default();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: number of arguments of the call"
+    )]
     values.reserve(n);
     for arg in &vm.frames.vec[live].args {
         values.push(arg.as_ref().map_or(Value::Null, clone_value));
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: number of arguments of the call"
+    )]
     passed.resize(n, true);
     let sig = b.signature();
     let nparams = sig.params.len();

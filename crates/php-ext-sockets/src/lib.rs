@@ -13,6 +13,10 @@
 
 // Native handlers share one signature (`fn(&mut Vm, &mut Args) ->
 // VmResult<Value>`), so infallible ones still return `VmResult`.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::unnecessary_wraps)]
 
 mod conv;

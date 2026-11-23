@@ -127,6 +127,10 @@ struct Attributed {
 
 impl Attributed {
     fn reserve(&mut self, n: usize) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of registered names"
+        )]
         self.list.reserve(n);
         self.index.reserve(n);
     }
@@ -482,6 +486,10 @@ pub(crate) fn internal_functions(vm: &Vm) -> Vec<ZStr> {
     let standard = module_rank(&order, "standard");
     let is_builtin = |n: &[u8]| matches!(vm.functions.get(n), Some(Func::Builtin(_)));
     // (module rank, place in the module, name)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: number of registered functions"
+    )]
     let mut keyed: Vec<(usize, usize, ZStr)> = Vec::with_capacity(vm.functions.len());
     let mut seen: FxHashSet<ZStr> = FxHashSet::default();
     seen.reserve(vm.functions.len());

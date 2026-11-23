@@ -51,6 +51,10 @@
 // The ports deliberately mirror php-src's C functions (one Rust function
 // per C function, same variable names such as `n`/`e`/`d`, `dmp1`/`dmq1`)
 // so they can be reviewed side by side with the reference.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(
     clippy::too_many_lines,
     clippy::many_single_char_names,

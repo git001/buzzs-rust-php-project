@@ -683,6 +683,10 @@ impl<'a> Lower<'a> {
     /// Lowers the whole op array.
     pub(crate) fn run(mut self) -> Lowered {
         let n = self.ops.len();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: one slot per compiled op"
+        )]
         let mut first_z = Vec::with_capacity(n + 1);
         let mut bound = self.func.uses.is_empty();
         for i in 0..n {

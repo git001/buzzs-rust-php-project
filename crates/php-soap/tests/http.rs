@@ -4,6 +4,8 @@
 //! body framing (Content-Length, chunked, close), status handling, cookies,
 //! redirects and digest authentication.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 
 use common::{with_big_stack, TestHost};

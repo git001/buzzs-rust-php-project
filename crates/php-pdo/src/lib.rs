@@ -54,6 +54,11 @@
 //!   `php_sqlite::pdo::PdoSqliteDbh` behind `Pdo\Sqlite::*()` and the
 //!   legacy `sqlite*()` methods ([`DbhDriver::driver_methods`]).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod classes;
 pub mod consts;
 pub mod dbh;

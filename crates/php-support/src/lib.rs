@@ -23,6 +23,8 @@
 //! surfaced as [`Diagnostic`] values; the embedding VM decides how to display
 //! them (and adds the `function(): ` prefix for docref-style messages).
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub mod diag;
 pub mod fmt;
 pub mod ini;

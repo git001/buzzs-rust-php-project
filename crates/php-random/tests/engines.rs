@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Reference values from php-src's ext/random tests and from the PHP oracle.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_random::engine::generated_from_bytes;
 use php_random::legacy::format_uniqid;
 use php_random::state::{StateArray, StateValue};

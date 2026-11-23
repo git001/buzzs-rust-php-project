@@ -42,6 +42,11 @@
 //!   the "The filter.default ini setting is deprecated" condition) and
 //!   [`parse_default_flags_ini`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod constants;
 pub mod email;
 pub mod engine;

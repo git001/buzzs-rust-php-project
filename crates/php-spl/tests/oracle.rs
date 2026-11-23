@@ -5,6 +5,8 @@
 //! (8.3, cached in `*.out`; the scripts avoid 8.3-vs-master differences).
 //! Regenerate with `cargo test -p php-spl --test oracle -- --ignored`.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod harness;
 
 use std::path::{Path, PathBuf};

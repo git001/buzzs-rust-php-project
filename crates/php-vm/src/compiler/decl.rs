@@ -407,6 +407,10 @@ impl Compiler<'_> {
         let s = d.span.start.min(self.source.len());
         let end = d.span.end.min(self.source.len()).max(s);
         names.out.sort_by_key(|r| r.0);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: linear in the source code"
+        )]
         let mut text = Vec::with_capacity(end - s + 16);
         let mut at = s;
         for (a, b, resolved) in names.out {

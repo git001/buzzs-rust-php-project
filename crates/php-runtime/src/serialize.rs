@@ -869,6 +869,10 @@ impl<'a> Parser<'a> {
     /// `unserialize_str()`: decodes the escaped `S:` format (`\xx` hex
     /// escapes).
     fn unescape_s(&self, body: usize, len: usize) -> Option<(Vec<u8>, usize)> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: at most the length of the input string"
+        )]
         let mut out = Vec::with_capacity(len.min(self.max()));
         let mut i = body;
         for _ in 0..len {

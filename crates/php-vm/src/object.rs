@@ -157,6 +157,10 @@ impl ObjectData {
             let mut m = m.borrow_mut();
             let v = m.entry(self.handle).or_default();
             if v.len() <= i {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: property slot of the declared class"
+                )]
                 v.resize(i + 1, false);
             }
             v[i] = unset;
@@ -532,6 +536,7 @@ struct ObjectStore {
 }
 
 impl Default for ObjectStore {
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     fn default() -> Self {
         Self {
             objects: Vec::with_capacity(STORE_INITIAL),
@@ -565,8 +570,16 @@ impl ObjectStore {
     #[cold]
     #[inline(never)]
     fn grow(&mut self) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: doubles the store of live objects"
+        )]
         self.objects.reserve(self.objects.len().max(STORE_INITIAL));
         let cap = self.objects.capacity();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: doubles the store of live objects"
+        )]
         self.free.reserve(cap.saturating_sub(self.free.len()));
     }
 
@@ -775,6 +788,10 @@ fn release_store_slot(handle: u32, anchor: Option<u32>) {
 #[inline]
 #[must_use]
 pub fn copy_slots(defaults: &[Option<Value>]) -> Vec<Option<Value>> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: copies the class's default properties"
+    )]
     let mut slots = Vec::with_capacity(defaults.len());
     slots.extend_from_slice(defaults);
     slots

@@ -1,0 +1,23 @@
+# buzzs-rust-php-project - Copyright (c) 2026 Aleks <al-git001@none.at>
+# Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
+#
+# memory_limit ratchet (crates/php-memlimit/INTEGRATION.md): these methods
+# take a size and abort the process when the allocation fails. A size that
+# a script controls must go through `try_reserve` (or a helper built on it)
+# so that php-memlimit can refuse it and the VM raises "Allowed memory size
+# … exhausted". A call whose size is bounded independently of the script
+# keeps the method under `#[expect(clippy::disallowed_methods, reason = …)]`.
+disallowed-methods = [
+    { path = "std::vec::Vec::with_capacity", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "std::vec::Vec::reserve", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "std::vec::Vec::reserve_exact", reason = "size may come from a script: try_reserve_exact, see php-memlimit INTEGRATION.md" },
+    { path = "std::vec::Vec::resize", reason = "size may come from a script: try_reserve first, see php-memlimit INTEGRATION.md" },
+    { path = "std::string::String::with_capacity", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "std::string::String::reserve", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "std::string::String::reserve_exact", reason = "size may come from a script: try_reserve_exact, see php-memlimit INTEGRATION.md" },
+    { path = "std::collections::VecDeque::with_capacity", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "std::collections::VecDeque::reserve", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "std::collections::VecDeque::resize", reason = "size may come from a script: try_reserve first, see php-memlimit INTEGRATION.md" },
+    { path = "str::repeat", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+    { path = "slice::repeat", reason = "size may come from a script: try_reserve, see php-memlimit INTEGRATION.md" },
+]

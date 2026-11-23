@@ -8,6 +8,11 @@
 //! method with plain Rust types, and failures are described by
 //! [`UriError`] values carrying the PHP class name and message.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod api;
 pub mod error;
 pub mod rfc3986;

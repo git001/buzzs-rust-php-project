@@ -24,6 +24,10 @@
 //! assert_eq!(program.statements.len(), 1);
 //! ```
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![warn(missing_docs)]
 
 pub mod ast;

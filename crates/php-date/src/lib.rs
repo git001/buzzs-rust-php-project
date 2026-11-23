@@ -51,6 +51,10 @@
 // The port keeps timelib's field names (y, m, d, h, i, s, ...) and its
 // long switch-style functions so it can be checked line-by-line against the
 // C sources; these lints would force obscuring that correspondence.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(
     clippy::many_single_char_names,
     clippy::similar_names,

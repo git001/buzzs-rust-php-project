@@ -4,6 +4,7 @@
 //! reproduces the PHP script's logic with a recording handler and compares
 //! the printed output byte for byte with the `--EXPECT--` section.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::many_single_char_names, clippy::too_many_lines)]
 mod common;
 

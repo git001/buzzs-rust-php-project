@@ -4,6 +4,7 @@
 //! regressions, client/server tests) with the test interpreter over the
 //! extension and compares their output with the expected one.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::many_single_char_names,
     clippy::too_many_arguments,

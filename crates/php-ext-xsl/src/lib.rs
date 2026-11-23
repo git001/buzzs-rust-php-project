@@ -15,6 +15,10 @@
 //! error list under `libxml_use_internal_errors(true)`).
 
 // Prose mentions XPath, SimpleXML, libxslt… far too often for backticks.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::doc_markdown)]
 
 pub mod access;

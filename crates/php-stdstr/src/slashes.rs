@@ -10,6 +10,7 @@ use crate::error::Notices;
 ///
 /// Prefixes `'`, `"` and `\` with a backslash and turns NUL into `\0`.
 pub fn addslashes(s: &[u8]) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(s.len() + s.len() / 8);
     for &c in s {
         match c {
@@ -29,6 +30,7 @@ pub fn addslashes(s: &[u8]) -> Vec<u8> {
 /// Removes one level of backslashes; `\0` becomes a NUL byte and a trailing
 /// lone backslash is dropped.
 pub fn stripslashes(s: &[u8]) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let mut it = s.iter();
     while let Some(&c) = it.next() {
@@ -58,6 +60,10 @@ pub fn addcslashes(s: &[u8], characters: &[u8], notices: &mut Notices) -> Vec<u8
         return s.to_vec();
     }
     let mask = charmask(characters, "addcslashes", notices);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most twice the input"
+    )]
     let mut out = Vec::with_capacity(s.len() * 2);
     for &c in s {
         if !mask[usize::from(c)] {
@@ -94,6 +100,7 @@ pub fn addcslashes(s: &[u8], characters: &[u8], notices: &mut Notices) -> Vec<u8
 /// one-to-three digit octal escapes (truncated to a byte); any other escaped
 /// byte is kept without its backslash.
 pub fn stripcslashes(s: &[u8]) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let end = s.len();
     let mut i = 0;
@@ -161,6 +168,10 @@ fn hex_val(c: u8) -> u8 {
 /// Backs `quotemeta(string $string): string`: backslash-escapes
 /// `. \ + * ? [ ^ ] $ ( )`.
 pub fn quotemeta(s: &[u8]) -> Vec<u8> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most twice the input"
+    )]
     let mut out = Vec::with_capacity(s.len() * 2);
     for &c in s {
         if matches!(

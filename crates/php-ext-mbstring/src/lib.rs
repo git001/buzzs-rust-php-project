@@ -11,6 +11,11 @@
 //! handlers, `mb_parse_str`, `mb_send_mail`, `mb_output_handler`, and the
 //! `mb_ereg*` family, which runs on the system Oniguruma (see [`regex`]).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod arrays;
 mod funcs;
 mod gpc;

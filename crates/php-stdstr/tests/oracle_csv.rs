@@ -1,6 +1,8 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `csv.rs` (`str_getcsv`, `fgetcsv`, `fputcsv`).
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{case, check, lit, regenerate, Case, V};
 use php_stdstr::csv::{csv_options, fgetcsv_parse, fputcsv_line, str_getcsv, CsvOptions};

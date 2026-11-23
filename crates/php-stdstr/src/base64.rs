@@ -22,6 +22,7 @@ fn reverse(c: u8) -> i8 {
 /// `php_base64_encode_ex(str, len, flags)`; `padding = false` is
 /// `PHP_BASE64_NO_PADDING`.
 pub fn base64_encode_ex(input: &[u8], padding: bool) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4);
     let mut chunks = input.chunks_exact(3);
     for c in &mut chunks {
@@ -67,6 +68,7 @@ pub fn base64_encode(input: &[u8]) -> Vec<u8> {
 /// wrong padding length.  The VM coerces `$string` to string and `$strict`
 /// to bool.
 pub fn base64_decode(input: &[u8], strict: bool) -> Option<Vec<u8>> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(input.len() / 4 * 3 + 3);
     let mut i: usize = 0;
     let mut padding: usize = 0;

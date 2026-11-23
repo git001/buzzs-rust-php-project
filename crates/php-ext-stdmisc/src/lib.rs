@@ -25,6 +25,11 @@
 //! thread-locals and is reset by request-shutdown hooks; the assert
 //! callback (`ASSERTG(callback)`) lives in the VM's `ext` state.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod browscap;
 mod credits;
 mod crypt;

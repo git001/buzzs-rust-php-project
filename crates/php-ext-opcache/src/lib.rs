@@ -5,6 +5,11 @@
 //!
 //! ref: ext/opcache/zend_accelerator_module.c, ext/opcache/opcache.stub.php
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 use php_opcache::blacklist::Blacklist;
 use php_opcache::file_cache;
 use php_opcache::{CacheLookup, InsertRefused, PreloadStats};

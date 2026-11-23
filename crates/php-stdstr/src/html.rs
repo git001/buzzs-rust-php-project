@@ -732,6 +732,7 @@ fn traverse_for_entities(
 ) -> Vec<u8> {
     let doctype = flags & DOC_TYPE_MASK;
     let end = input.len();
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(end);
     let mut cur = 0;
     while cur < end {
@@ -937,6 +938,7 @@ pub fn escape_html_entities(
     };
 
     let oldlen = old.len();
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(oldlen + oldlen / 4);
     let mut cursor = 0;
     while cursor < oldlen {
@@ -1096,6 +1098,7 @@ pub fn htmlentities(
 /// Inserts `key => value` like `add_assoc_stringl_ex()` (an existing key
 /// keeps its position and gets the new value).
 fn add_assoc(arr: &mut Vec<(Vec<u8>, Vec<u8>)>, key: Vec<u8>, entity: &str) {
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     let mut value = Vec::with_capacity(entity.len() + 2);
     value.push(b'&');
     value.extend_from_slice(entity.as_bytes());

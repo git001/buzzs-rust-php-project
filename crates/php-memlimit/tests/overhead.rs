@@ -8,6 +8,8 @@
 //! owner-thread overhead measures under 5 % (`cargo test --release
 //! -p php-memlimit --test overhead -- --nocapture`).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::time::{Duration, Instant};

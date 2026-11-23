@@ -13,6 +13,11 @@
 //! (`unixtojd`, `easter_date`, the default year of `easter_days`) take
 //! closures so that the caller supplies the time-zone logic.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod easter;
 pub mod french;
 pub mod gregor;

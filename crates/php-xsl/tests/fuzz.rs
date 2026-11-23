@@ -4,6 +4,7 @@
 //! nothing may panic, crash or leave the processor in a transforming
 //! state. (Run under valgrind to check memory safety.)
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::doc_markdown)]
 
 mod common;

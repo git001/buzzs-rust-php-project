@@ -127,6 +127,8 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# memory_limit ratchet, see clippy.toml
+disallowed_methods = "deny"
 
 [profile.release]
 lto = "thin"

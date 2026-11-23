@@ -14,6 +14,10 @@
 
 // Native handlers must match `NativeFn` (`fn(&mut Vm, &mut Args) -> VmResult<Value>`)
 // and object hooks their `ClassHooks` signatures, even when they cannot fail.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::unnecessary_wraps)]
 // Handlers follow php-src's short names: `a` (args), `o` (object), `b`
 // (first remaining argument), `c` (connection).

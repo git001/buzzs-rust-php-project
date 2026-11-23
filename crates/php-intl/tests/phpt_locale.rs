@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Expectations hand-ported from ext/intl/tests (locale_*.phpt).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_intl::locale::{self, LookupEntry};
 use php_intl::UErrorCode;
 

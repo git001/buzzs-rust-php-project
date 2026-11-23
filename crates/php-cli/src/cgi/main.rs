@@ -17,6 +17,11 @@
 //! `SCRIPT_FILENAME`/`PATH_TRANSLATED` (the test file), `HTTP_COOKIE`,
 //! `CONTENT_TYPE` and `CONTENT_LENGTH` set and the body on standard input.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 #[allow(dead_code)]
 #[path = "../config.rs"]
 mod config;

@@ -477,6 +477,10 @@ impl Vm {
             };
             if let Some(p) = pos {
                 if call.args.len() <= p {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: position of a declared parameter"
+                    )]
                     call.args.resize(p + 1, None);
                 } else if call.args[p].is_some() {
                     return Err(self.make_throw(

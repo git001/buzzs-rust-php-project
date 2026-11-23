@@ -785,6 +785,10 @@ impl Compiler<'_> {
             InterpPart::Expr { expr, .. } if is_plain_cv_part(expr) => Some(expr.span.line),
             _ => None,
         });
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: linear in the source code"
+        )]
         let mut ops = Vec::with_capacity(parts.len());
         for (i, p) in parts.iter().enumerate() {
             match p {
@@ -1816,6 +1820,10 @@ impl Compiler<'_> {
         values: &[Option<ArrayItem>],
         line: u32,
     ) -> CResult<()> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: linear in the source code"
+        )]
         let mut ops = Vec::with_capacity(values.len());
         for v in values.iter().flatten() {
             let op = self.compile_expr(&v.value)?;

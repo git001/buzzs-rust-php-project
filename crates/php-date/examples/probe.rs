@@ -14,6 +14,8 @@
 //! * `diff <tz> <a> <b> <format>` — `$a->diff($b)->format($format)`
 //! * `cff <tz> <cff-format> <str> <format>` — `createFromFormat` then `format()`
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::io::{self, BufRead, Write};
 
 #[path = "../tests/common/mod.rs"]

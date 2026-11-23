@@ -6,6 +6,11 @@
 //!
 //! Ref: `ext/tokenizer/tokenizer.c`.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod feedback;
 
 use php_lexer::{token_get_all_with, LexerOptions, TokenInfo, TokenKind};

@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `strcmp()` & friends, `strnatcmp()`/`strnatcasecmp()`
 //! and `substr_compare()`.
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{case, check, lit, pure, regenerate, Case};
 use php_stdstr::compare::{strcasecmp, strcmp, strnatcmp, strncasecmp, strncmp, substr_compare};

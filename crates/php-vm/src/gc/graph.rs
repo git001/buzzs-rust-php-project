@@ -110,6 +110,7 @@ impl Nodes {
             _ => {
                 // The first chunk grows like a `Vec` (small graphs stay
                 // small); later ones are allocated whole.
+                #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
                 let mut c = if self.chunks.is_empty() {
                     Vec::new()
                 } else {
@@ -187,6 +188,10 @@ impl Graph {
             return;
         };
         if self.obj_index.len() <= h {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: handle of a live object"
+            )]
             self.obj_index.resize(h + 1, NONE);
         }
         self.obj_index[h] = i;

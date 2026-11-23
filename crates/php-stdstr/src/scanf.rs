@@ -95,6 +95,10 @@ fn validate_format(format: &[u8], num_vars: i64) -> StdResult<i64> {
     let mut bump = |idx: i64| {
         let idx = usize::try_from(idx).unwrap_or(0);
         if nassign.len() <= idx {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: SCAN_MAX_ARGS, argument count or format length"
+            )]
             nassign.resize(idx + 1, 0);
         }
         nassign[idx] += 1;

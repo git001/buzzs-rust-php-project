@@ -10,6 +10,11 @@
 //! routes all methods to [`php_spl::call_method`]) and installs the SPL
 //! object handlers as [`ClassHooks`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod dispatch;
 pub mod files;
 pub mod funcs;

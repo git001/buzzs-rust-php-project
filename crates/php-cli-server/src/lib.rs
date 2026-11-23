@@ -18,6 +18,11 @@
 //! The `php` binary calls [`maybe_run`] first; it returns `None` unless
 //! `-S` was given.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod cookie;
 pub mod headers;
 pub mod log;

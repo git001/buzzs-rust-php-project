@@ -28,6 +28,11 @@
 //! user callbacks may use the same object again (PHP's own guards such as
 //! "Heap cannot be changed when it is already being modified." apply).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod args;
 pub mod array;
 pub mod classes;

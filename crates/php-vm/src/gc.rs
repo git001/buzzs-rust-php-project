@@ -189,6 +189,7 @@ fn push_persistent<T>(v: &mut Vec<T>, x: T) {
 #[cold]
 #[inline(never)]
 fn reserve_persistent<T>(v: &mut Vec<T>) {
+    #[expect(clippy::disallowed_methods, reason = "bounded: grows by one element")]
     php_memlimit::persistent(|| v.reserve(1));
 }
 
@@ -258,6 +259,10 @@ impl RootBuffer {
     #[inline(never)]
     fn grow_index(&mut self, h: usize) {
         let by_handle = &mut self.by_handle;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: handle of a live object"
+        )]
         php_memlimit::persistent(|| by_handle.resize(h + 1, 0));
     }
 

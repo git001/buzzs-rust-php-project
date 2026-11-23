@@ -4,6 +4,8 @@
 //! line, one token per line as `NAME<TAB>LINE<TAB>HEX(TEXT)`, preceded by a
 //! `== path` header. Used to diff against `/usr/bin/php`.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::fmt::Write as _;
 use std::io::Write as _;
 

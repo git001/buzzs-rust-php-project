@@ -11,6 +11,8 @@
 //! * [`filters`]: operations gd.c implements itself;
 //! * [`info`]: `gd_info()`, `imagetypes()`, the constants.
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub mod ffi;
 pub mod filters;
 pub mod font;

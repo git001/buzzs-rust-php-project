@@ -50,6 +50,7 @@ pub fn valid_var_name(name: &[u8]) -> bool {
 }
 
 fn prefixed(prefix: &[u8], name: &[u8]) -> ZStr {
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut v = Vec::with_capacity(prefix.len() + 1 + name.len());
     v.extend_from_slice(prefix);
     v.push(b'_');

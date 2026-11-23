@@ -99,9 +99,17 @@ impl Vm {
         match pos {
             Some(p) => {
                 if call.args.len() <= p {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: number of arguments of the call"
+                    )]
                     call.args.resize(p + 1, None);
                 }
                 if pfa.placeholders.len() <= p {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: number of arguments of the call"
+                    )]
                     pfa.placeholders.resize(p + 1, false);
                 }
                 if call.args[p].is_some() || pfa.placeholders[p] {
@@ -265,6 +273,10 @@ impl Vm {
         } else {
             argc
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         let mut slots: Vec<Slot> = Vec::with_capacity(new_argc);
         for i in 0..new_argc {
             let s = match call.args.get(i) {

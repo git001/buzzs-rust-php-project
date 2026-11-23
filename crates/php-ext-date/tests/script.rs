@@ -5,6 +5,8 @@
 //! `sun` whose `sunrise`/`sunset` follow php-src master (upper-limb
 //! refraction of -35/60 degrees, changed after 8.3).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;

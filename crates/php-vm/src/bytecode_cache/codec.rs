@@ -174,6 +174,10 @@ impl<'a> Reader<'a> {
             strings: Vec::new(),
         };
         let n = table.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut strings = Vec::with_capacity(n.min(1 << 20));
         for _ in 0..n {
             let flags = table.u8()?;
@@ -446,6 +450,10 @@ impl<T: Codec> Codec for Vec<T> {
     }
     fn decode(r: &mut Reader<'_>) -> DResult<Self> {
         let n = r.count()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: count limited by the cache input"
+        )]
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             out.push(T::decode(r)?);
@@ -478,6 +486,7 @@ impl<T: Codec, const N: usize> Codec for [T; N] {
         self.iter().try_for_each(|v| v.encode(w))
     }
     fn decode(r: &mut Reader<'_>) -> DResult<Self> {
+        #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
         let mut items = Vec::with_capacity(N);
         for _ in 0..N {
             items.push(T::decode(r)?);

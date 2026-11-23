@@ -17,6 +17,11 @@
 //! returned as warning texts for the binding to emit with the
 //! `ftp_xxx(): ` prefix.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod channel;
 mod ftp;
 mod list;

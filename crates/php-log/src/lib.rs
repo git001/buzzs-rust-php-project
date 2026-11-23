@@ -26,6 +26,11 @@
 //! destination needs (asked for only then, as php-src reads them), the
 //! date in the request's timezone and the SAPI logger.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod configured;
 pub mod syslog;
 

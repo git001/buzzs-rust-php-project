@@ -17,6 +17,11 @@
 //! All `unsafe` code is confined to [`ffi`] (declarations) and [`raw`]
 //! (sound wrappers); see their module documentation.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod constants;
 pub mod error;
 pub mod ffi;

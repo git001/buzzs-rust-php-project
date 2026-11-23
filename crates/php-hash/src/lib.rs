@@ -19,6 +19,10 @@
 // Hash algorithms are specified with single-letter state variables
 // (a, b, c, d, e, h, k, ...); renaming them would obscure the
 // correspondence with the reference C code.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::many_single_char_names)]
 
 mod algo;

@@ -14,6 +14,10 @@
 // Every handler has the fixed `NativeFn` signature, so infallible ones still
 // return `VmResult`, and the short names (`a` for the arguments, `s`, `n`,
 // `f`, `l`, `r` …) follow php-src's own variable names.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(clippy::unnecessary_wraps, clippy::many_single_char_names)]
 
 mod formatted;

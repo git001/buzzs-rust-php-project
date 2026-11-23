@@ -36,6 +36,11 @@
 //!   stop with `null` at the first failure.
 //! * `preg_last_error()`: every outcome documents what to store.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod cache;
 mod error;
 mod exec;

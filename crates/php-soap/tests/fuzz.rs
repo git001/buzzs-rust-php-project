@@ -3,6 +3,8 @@
 //! Deterministic mutation fuzzing of the parsers: XML, WSDL/XSD loading,
 //! SOAP request handling, URLs and HTTP headers must never panic.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};

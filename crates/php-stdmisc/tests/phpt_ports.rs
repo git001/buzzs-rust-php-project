@@ -3,6 +3,8 @@
 //! Expectations hand-ported from php-src `.phpt` files that the oracle
 //! fixtures do not already cover.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_runtime::{CollectingContext, Value, ZArray};
 use php_stdmisc::crypt::{crypt, password};
 

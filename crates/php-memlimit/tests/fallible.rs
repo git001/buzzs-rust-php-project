@@ -4,6 +4,8 @@
 //! `ZEND_MM_MAX_ALLOCS`) with the accounting allocator installed. One
 //! `#[test]`, because the limit is process-wide state.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::collections::VecDeque;
 use std::hint::black_box;
 

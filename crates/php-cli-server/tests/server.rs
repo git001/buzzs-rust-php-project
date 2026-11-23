@@ -8,6 +8,8 @@
 //! cargo test -p php-cli-server --test server -- --ignored
 //! ```
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};

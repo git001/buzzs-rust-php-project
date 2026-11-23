@@ -3,6 +3,7 @@
 //! Connection-level features: multi statements, charsets and escaping,
 //! `change_user`, transactions, LOAD DATA LOCAL INFILE, init commands,
 //! compression, async queries and statistics — compared with `/usr/bin/php`.
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,

@@ -578,8 +578,16 @@ impl Vm {
         };
         let nparams = b.params.len();
         let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         values.reserve(nparams);
         let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         passed.reserve(nparams);
         for arg in &mut sent {
             values.push(arg.take().unwrap_or_default());
@@ -688,8 +696,16 @@ impl Vm {
         let (mut values, mut passed) = if quick.is_none() {
             let nparams = b.params.len();
             let mut values = self.call_bufs.values.pop().unwrap_or_default();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             values.reserve(nparams.max(n));
             let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: number of arguments of the call"
+            )]
             passed.reserve(nparams.max(n));
             for arg in &mut call.inline_args[..n] {
                 values.push(arg.take().unwrap_or_default());
@@ -916,8 +932,16 @@ impl Vm {
         let sig = b.signature();
         let (nparams, required) = (sig.params.len(), sig.required as usize);
         let mut values = self.call_bufs.values.pop().unwrap_or_default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         values.reserve(nparams.max(n));
         let mut passed = self.call_bufs.passed.pop().unwrap_or_default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: number of arguments of the call"
+        )]
         passed.reserve(nparams.max(n));
         for arg in sent.iter_mut().take(n) {
             values.push(arg.take().unwrap_or_default());

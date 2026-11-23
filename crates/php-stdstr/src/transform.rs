@@ -182,6 +182,10 @@ pub fn str_pad(input: &[u8], pad_length: i64, pad: &[u8], pad_type: i64) -> StdR
             ))
         }
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: the builtin checks the size first with php_memlimit::try_reserve"
+    )]
     let mut out = Vec::with_capacity(input.len() + num);
     pad_fill(&mut out, left, pad);
     out.extend_from_slice(input);
@@ -235,6 +239,7 @@ pub fn wordwrap(text: &[u8], width: i64, brk: &[u8], cut: bool) -> StdResult<Vec
         return Ok(out);
     }
     let blen = len_i64(brk.len());
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(text.len() + text.len() / 8);
     let copy = |out: &mut Vec<u8>, from: i64, to: i64| {
         out.extend_from_slice(&text[to_usize(from)..to_usize(to)]);
@@ -293,6 +298,10 @@ pub fn chunk_split(s: &[u8], chunklen: i64, end: &[u8]) -> StdResult<Vec<u8>> {
         out.extend_from_slice(end);
         return Ok(out);
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: the builtin checks the size first with php_memlimit::try_reserve"
+    )]
     let mut out = Vec::with_capacity(s.len() + (s.len() / chunklen + 1) * end.len());
     for chunk in s.chunks(chunklen) {
         out.extend_from_slice(chunk);
@@ -305,6 +314,7 @@ pub fn chunk_split(s: &[u8], chunklen: i64, end: &[u8]) -> StdResult<Vec<u8>> {
 /// (or `<br>`) before every `\r\n`, `\n\r`, `\n` and `\r`.
 pub fn nl2br(s: &[u8], is_xhtml: bool) -> Vec<u8> {
     let tag: &[u8] = if is_xhtml { b"<br />" } else { b"<br>" };
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
@@ -329,6 +339,10 @@ pub fn strrev(s: &[u8]) -> Vec<u8> {
 }
 
 /// Backs `str_repeat(string $string, int $times): string`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: the builtin checks the size first with php_memlimit::try_reserve"
+)]
 pub fn str_repeat(s: &[u8], times: i64) -> StdResult<Vec<u8>> {
     if times < 0 {
         return Err(StdError::arg_value(
@@ -443,6 +457,7 @@ pub fn strtr_pairs_with<'a, K: AsRef<[u8]>, V, R: AsRef<[u8]>, E>(
     if minlen > maxlen {
         return Ok(s.to_vec());
     }
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let mut pos = 0;
     let mut old_pos = 0;
@@ -480,6 +495,7 @@ fn replace_all(haystack: &[u8], needle: &[u8], rep: &[u8], ci: bool) -> (Vec<u8>
     } else {
         (haystack, needle)
     };
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(haystack.len());
     let mut count = 0;
     let mut p = 0;
@@ -615,6 +631,10 @@ pub fn ord(s: &[u8], notices: &mut Notices) -> i64 {
 /// Backs `bin2hex(string $string): string` (lower-case hex).
 pub fn bin2hex(s: &[u8]) -> Vec<u8> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most twice the input"
+    )]
     let mut out = Vec::with_capacity(s.len() * 2);
     for &b in s {
         out.push(HEX[usize::from(b >> 4)]);
@@ -634,6 +654,7 @@ pub fn hex2bin(s: &[u8], notices: &mut Notices) -> Option<Vec<u8>> {
         return None;
     }
     let digit = |c: u8| char::from(c).to_digit(16);
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len() / 2);
     for pair in s.chunks_exact(2) {
         if let (Some(h), Some(l)) = (digit(pair[0]), digit(pair[1])) {
@@ -653,6 +674,10 @@ pub fn hex2bin(s: &[u8], notices: &mut Notices) -> Option<Vec<u8>> {
 /// UTF-8.  The `Function utf8_encode() is deprecated` diagnostic comes from
 /// the function's `#[\Deprecated]` attribute and is emitted by the VM.
 pub fn utf8_encode(s: &[u8]) -> Vec<u8> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: at most twice the input"
+    )]
     let mut out = Vec::with_capacity(s.len() * 2);
     for &c in s {
         if c < 0x80 {
@@ -668,6 +693,7 @@ pub fn utf8_encode(s: &[u8]) -> Vec<u8> {
 /// `php_utf8_decode()`; backs the (deprecated) `utf8_decode()`: UTF-8 →
 /// Latin-1, with `?` for invalid sequences and code points above U+00FF.
 pub fn utf8_decode(s: &[u8]) -> Vec<u8> {
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(s.len());
     let mut pos = 0;
     while pos < s.len() {
@@ -840,6 +866,7 @@ pub fn hebrev(s: &[u8], max_chars: i64) -> Vec<u8> {
         }
     }
 
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(n);
     let mut begin = n - 1;
     let mut end = n - 1;

@@ -2156,6 +2156,10 @@ impl Vm {
                 })?;
             }
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: properties of the declared class"
+        )]
         let mut out = Vec::with_capacity(cls.props.len());
         for pi in &cls.props {
             let v = match &pi.default {

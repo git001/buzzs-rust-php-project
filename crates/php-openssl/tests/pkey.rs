@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Asymmetric key handling, checked against `/usr/bin/php` output.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::*;
 use php_openssl::{KeyArg, Level, OpenSsl, PhpArray, PhpValue, Throw};

@@ -199,6 +199,13 @@ let out = input.repeat(mult);
   crosses the limit and the VM raises it after the builtin returns. Call
   `try_reserve` only where a single allocation could exceed the hard ceiling
   (any size the script picks).
+- The root `clippy.toml` denies the sized methods that abort on failure
+  (`Vec::with_capacity`, `reserve`, `reserve_exact`, `resize`,
+  `String::with_capacity`, `str::repeat`, `slice::repeat` …). A call whose
+  size the script picks uses the checks above; any other call states why
+  its size is bounded: `#[expect(clippy::disallowed_methods, reason =
+  "bounded: …")]`. Crates not reviewed yet carry one crate-wide `expect`,
+  to be removed once their calls are reviewed.
 - Keep the non-limit errors (`Possible integer overflow in memory allocation`)
   in the bindings; they are not limit checks.
 - A library that allocates unconditionally (bcmath's `bc_num`, hash's

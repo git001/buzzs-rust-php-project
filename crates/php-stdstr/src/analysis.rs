@@ -153,6 +153,7 @@ pub fn soundex(s: &[u8]) -> Vec<u8> {
         0, b'1', b'2', b'3', 0, b'1', b'2', 0, 0, b'2', b'2', b'4', b'5', b'5', 0, b'1', b'2',
         b'6', b'2', b'3', 0, b'1', 0, b'2', 0, b'2',
     ];
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     let mut out = Vec::with_capacity(4);
     let mut last = 0xffu8; // (size_t)-1: never equal to a table code
     for &b in s {
@@ -173,6 +174,7 @@ pub fn soundex(s: &[u8]) -> Vec<u8> {
             }
         }
     }
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     out.resize(4, b'0');
     out
 }

@@ -658,6 +658,10 @@ impl ZStr {
             // SAFETY: unique (caller) and external (just checked).
             let mut v = unsafe { self.take_vec() };
             if exact {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: the length of an existing string"
+                )]
                 v.reserve_exact(other.len());
             }
             v.extend_from_slice(other);

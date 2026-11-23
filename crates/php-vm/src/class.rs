@@ -268,6 +268,10 @@ impl ClassDecl {
     /// (`zend_compile_class_const_decl`, `zend_compile_enum_case`), which
     /// `ReflectionClass::getConstants()` shows.
     pub fn own_constants(&self) -> Vec<OwnConstant> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: members of the declared class"
+        )]
         let mut order = Vec::with_capacity(self.consts.len() + self.cases.len());
         let mut next_case = 0;
         for (i, c) in self.consts.iter().enumerate() {

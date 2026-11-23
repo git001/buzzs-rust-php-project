@@ -5,6 +5,7 @@
 //! it and the value decoded by the server are compared with the expected
 //! output.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(
     clippy::many_single_char_names,
     clippy::too_many_arguments,

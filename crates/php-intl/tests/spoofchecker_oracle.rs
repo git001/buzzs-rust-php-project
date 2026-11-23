@@ -3,6 +3,7 @@
 //! `Spoofchecker` checked against fixtures from `/usr/bin/php` (8.3 has
 //! only the ICU checks; skeleton and bidi methods are covered by the phpt
 //! ports in `phpt_spoofchecker.rs`).
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::too_many_lines)]
 
 mod common;

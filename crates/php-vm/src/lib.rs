@@ -14,6 +14,8 @@
 //! [`Vm::run_script`]. [`Vm::new`] creates the bare VM of the engine's own
 //! tests.
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub use php_parser::ast;
 
 mod attrs;
@@ -195,6 +197,10 @@ impl Vm {
         let mut vm = Vm::with_ini(ini, stdout);
         vm.functions.reserve(room.functions);
         vm.classes.reserve(room.classes);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: classes registered at startup"
+        )]
         vm.class_order.reserve(room.classes);
         vm.constants.reserve(room.constants);
         for n in ["error_reporting", "precision", "serialize_precision"] {
@@ -711,6 +717,10 @@ impl php_support::ini::IniParserCallback for DefineCollector {
 /// line is parsed as INI (comments, constants such as `E_ALL`,
 /// expressions, quoting).
 pub fn parse_cli_define(arg: &[u8]) -> Vec<(String, String)> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: linear in the command-line argument"
+    )]
     let mut line = Vec::with_capacity(arg.len() + 4);
     match arg.iter().position(|&c| c == b'=') {
         Some(p) => {

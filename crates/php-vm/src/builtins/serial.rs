@@ -617,6 +617,10 @@ impl Vm {
                 lock: saved_lock,
             };
             let d = ser_init();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: one entry per value to serialize"
+            )]
             let mut out = Vec::with_capacity(values.len());
             for v in values {
                 let mut s = Serializer {
@@ -1765,6 +1769,10 @@ fn mark_destructed(o: &Obj) {
 
 /// Decodes the escaped `S:` format.
 fn unescape(data: &[u8], body: usize, len: usize) -> Option<(Vec<u8>, usize)> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: length checked against the remaining input"
+    )]
     let mut out = Vec::with_capacity(len);
     let mut i = body;
     for _ in 0..len {

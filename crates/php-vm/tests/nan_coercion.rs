@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Master NaN coercion diagnostics and array/object cast callback regressions.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::io::Write;

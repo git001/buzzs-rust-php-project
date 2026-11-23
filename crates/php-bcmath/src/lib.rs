@@ -25,6 +25,11 @@
 //! assert_eq!((r.value().as_str(), r.scale()), ("0.375", 3));
 //! ```
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod bigint;
 mod error;
 mod functions;

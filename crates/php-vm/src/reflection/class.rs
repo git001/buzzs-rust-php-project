@@ -733,6 +733,10 @@ pub(crate) fn bind_args(
         match pos {
             Some(p) => {
                 if call.args.len() <= p {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: position of a declared parameter"
+                    )]
                     call.args.resize(p + 1, None);
                 } else if call.args[p].is_some() {
                     return Err(vm.make_throw(

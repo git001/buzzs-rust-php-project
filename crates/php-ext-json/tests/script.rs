@@ -2,6 +2,7 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! End-to-end tests: PHP scripts run on a VM with the `json` extension.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::needless_raw_string_hashes)]
 
 use std::cell::RefCell;

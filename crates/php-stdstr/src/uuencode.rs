@@ -30,6 +30,7 @@ pub fn convert_uuencode(src: &[u8]) -> Vec<u8> {
     let enc_c2 = |i: usize| enc(((at(i) << 4) & 0o60) | ((at(i + 1) >> 4) & 0o17));
     let enc_c3 = |i: usize| enc(((at(i + 1) << 2) & 0o74) | ((at(i + 2) >> 6) & 0o3));
 
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(src.len() / 2 * 3 + 46);
     let e = src.len();
     let mut s = 0usize;
@@ -87,6 +88,7 @@ pub fn uudecode_raw(src: &[u8]) -> Option<Vec<u8>> {
     let at = |i: usize| src.get(i).copied().unwrap_or(0);
     let e = src.len();
     let mut s = 0usize;
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(src.len() * 3 / 4 + 1);
     let mut total_len = 0usize;
     while s < e {
@@ -129,6 +131,10 @@ pub fn uudecode_raw(src: &[u8]) -> Option<Vec<u8>> {
             }
         }
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: total_len never exceeds the decoded input"
+    )]
     out.resize(total_len, 0);
     Some(out)
 }

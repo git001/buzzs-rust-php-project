@@ -3,6 +3,8 @@
 //! Behaviour that the PHP 8.3 oracle cannot check (no ext/bz2 there, no
 //! running VM, php-src master fixes) — exercised directly.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use std::path::PathBuf;
 use std::rc::Rc;
 

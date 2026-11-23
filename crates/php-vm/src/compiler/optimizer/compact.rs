@@ -23,6 +23,10 @@ pub(crate) fn remove_nops(op_array: &mut OpArray) -> bool {
     }
 
     let old_len = op_array.ops.len();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one slot per compiled op"
+    )]
     let mut remap = Vec::with_capacity(old_len + 1);
     let mut new_idx = 0u32;
 
@@ -81,7 +85,15 @@ pub(crate) fn remove_nops(op_array: &mut OpArray) -> bool {
     op_array.live_tmps.retain(|live| live.start < live.end);
 
     // 4. Compact ops and lines
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one slot per compiled op"
+    )]
     let mut new_ops = Vec::with_capacity(new_idx as usize);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one slot per compiled op"
+    )]
     let mut new_lines = Vec::with_capacity(new_idx as usize);
     for (op, line) in op_array.ops.drain(..).zip(op_array.lines.drain(..)) {
         if !matches!(op, Op::Nop) {
@@ -283,6 +295,10 @@ pub(crate) fn compact_tmps(op_array: &mut OpArray) -> bool {
 pub(crate) fn compact_literals(op_array: &mut OpArray) -> bool {
     let old_literals = &op_array.literals;
     let mut unique_literals = Vec::new();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: one slot per literal of the compiled function"
+    )]
     let mut remap = Vec::with_capacity(old_literals.len());
 
     for old_val in old_literals {

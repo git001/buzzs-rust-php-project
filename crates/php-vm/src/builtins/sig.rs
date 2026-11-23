@@ -526,7 +526,15 @@ pub fn parse_sig_borrowed(sig: &str) -> Sig<&str> {
         }
     }
     let count = n + spill.len();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: parameters of a builtin signature"
+    )]
     let mut params = Vec::with_capacity(count);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: parameters of a builtin signature"
+    )]
     let mut defaults = Vec::with_capacity(count);
     let mut required = 0u32;
     let mut variadic = false;

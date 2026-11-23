@@ -167,6 +167,7 @@ impl<'a> Scanner<'a> {
         let mut reach = vec![false; len + 2];
         reach[start] = true;
         let mut best = start;
+        #[expect(clippy::disallowed_methods, reason = "bounded: constant size")]
         let mut alts = Vec::with_capacity(3);
         for p in start..=len {
             if !reach[p] {
@@ -356,6 +357,7 @@ impl<'a> Scanner<'a> {
     fn candidates(&self, c: usize) -> Vec<(u8, M)> {
         use State as S;
         let st = self.state;
+        #[expect(clippy::disallowed_methods, reason = "bounded: constant size")]
         let mut v: Vec<(u8, M)> = Vec::with_capacity(12);
         let one = |cond: bool| if cond { M::Len(1) } else { M::No };
         let ch = self.at(c);
@@ -772,6 +774,10 @@ impl<'a> Scanner<'a> {
     /// `zend_ini_escape_string()` with `quote_type == '"'`, which also
     /// counts the newlines inside the string.
     fn escape(&mut self, start: usize, end: usize) -> Vec<u8> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: a slice of the INI source"
+        )]
         let mut out = Vec::with_capacity(end - start);
         let mut s = start;
         while s < end {

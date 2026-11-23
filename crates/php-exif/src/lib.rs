@@ -44,6 +44,11 @@
 //! malformed input yields the same warnings as php-src and never panics
 //! (see `tests/fuzz.rs`).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod avif;
 mod budget;
 pub mod diag;

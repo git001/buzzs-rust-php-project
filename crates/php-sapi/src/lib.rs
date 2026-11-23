@@ -7,6 +7,11 @@
 //! the VM keeps it, and extensions read it instead of asking a particular
 //! SAPI.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod module;
 pub mod panic;
 mod upload;

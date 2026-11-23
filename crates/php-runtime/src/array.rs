@@ -636,6 +636,10 @@ mod int_keys {
 impl HashData {
     /// Room for `table_size` buckets and their index
     /// (`zend_hash_real_init_mixed_ex` allocates `HT_SIZE_EX(nTableSize)`).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: nTableSize is a size hint or a doubling of the stored elements; callers reserve script-sized hints first (array_fill in php-ext-stdarr reserves memory::hash_data, unserialize uses try_with_capacity_mixed)"
+    )]
     fn new(table_size: u32) -> Self {
         HashData {
             buckets: Vec::with_capacity(table_size as usize),
@@ -1024,6 +1028,10 @@ impl HashTable {
 
     /// `zend_hash_real_init_packed_ex`: room for `nTableSize` values up
     /// front, so appends below the table size never reallocate.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: nTableSize is a size hint; callers reserve script-sized hints first (array_fill, array_pad, range in php-ext-stdarr reserve memory::packed_data)"
+    )]
     fn real_init_packed(&mut self) {
         self.store = Store::Packed(Vec::with_capacity(self.table_size as usize));
     }
@@ -1037,6 +1045,10 @@ impl HashTable {
     /// Grows the storage to hold `nTableSize` elements after the table size
     /// changed (the `perealloc` of `arData` in `zend_hash_packed_grow` and
     /// `zend_hash_do_resize`); never shrinks.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: the table size just doubled while more than half of it is in use"
+    )]
     fn reserve_table(&mut self) {
         let ts = self.table_size as usize;
         match &mut self.store {
@@ -1190,6 +1202,10 @@ impl HashTable {
         let buckets = match std::mem::replace(&mut self.store, Store::Uninit) {
             Store::Uninit => Vec::new(),
             Store::Packed(v) => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: the packed storage being converted already holds nTableSize slots"
+                )]
                 let mut buckets = Vec::with_capacity((self.table_size as usize).max(v.len()));
                 buckets.extend(v.into_iter().enumerate().map(|(i, val)| Bucket {
                     val,
@@ -2406,6 +2422,10 @@ impl HashTable {
     /// The second half of `zend_hash_sort_internal`: stores the sorted
     /// elements back, renumbering them (a packed list) or rebuilding the
     /// hash index.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: nTableSize of the table being sorted, whose storage has that size"
+    )]
     fn sort_finish(&mut self, items: Vec<SortItem>, renumber: bool, flooded: bool) {
         self.internal_ptr = 0;
         let n = items.len();
@@ -2507,6 +2527,10 @@ impl HashTable {
         }
         let flooded = self.is_flooded();
         let store = std::mem::replace(&mut self.store, Store::Uninit);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: nTableSize of the table being sorted, whose storage has that size"
+        )]
         let mut buckets: Vec<Bucket> = Vec::with_capacity(self.table_size as usize);
         buckets.extend(into_entries(store).map(|(k, v)| Bucket::new(k, v, INVALID)));
         let n = buckets.len();
@@ -2527,6 +2551,10 @@ impl HashTable {
             match std::mem::replace(&mut self.store, Store::Uninit) {
                 Store::Hash(d) => {
                     let cap = (self.table_size as usize).max(d.buckets.len());
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "bounded: nTableSize of the table being sorted, whose storage has that size"
+                    )]
                     let mut vals: Vec<Option<Value>> = Vec::with_capacity(cap);
                     vals.extend(d.buckets.into_iter().filter_map(|b| b.val).map(Some));
                     self.next_free = idx_key(vals.len());
@@ -2993,11 +3021,19 @@ impl Clone for HashTable {
         match &self.store {
             Store::Uninit => {}
             Store::Packed(v) => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: a copy of the source's storage (nTableSize slots)"
+                )]
                 let mut vals = Vec::with_capacity(cap.max(v.len()));
                 vals.extend(v.iter().map(|s| s.as_ref().map(&dup_val)));
                 out.store = Store::Packed(vals);
             }
             Store::Hash(d) => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded: a copy of the source's storage (nTableSize slots)"
+                )]
                 let mut buckets = Vec::with_capacity(cap.max(d.buckets.len()));
                 buckets.extend(d.buckets.iter().map(|b| match &b.val {
                     Some(v) => Bucket::new(b.key.clone(), dup_val(v), INVALID),

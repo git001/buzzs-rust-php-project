@@ -9,6 +9,8 @@
 //! messages are cached in `tests/fixtures/construct_exports.tsv`
 //! (regenerate with `cargo test -p php-parser --test constructs -- --ignored`).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_parser::ast::{ExprKind, StmtKind};
 use php_parser::export::assert_message;
 use php_parser::ParseOptions;

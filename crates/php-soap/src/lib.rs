@@ -28,6 +28,10 @@
 // Long functions with many parameters follow the structure of the C code
 // they port (one Rust function per C function), which keeps them reviewable
 // against the reference.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
 #![allow(
     clippy::wrong_self_convention,
     clippy::wildcard_imports,

@@ -886,6 +886,10 @@ pub fn unpack(
                             len -= argb % 2;
                         }
                         let mut nibbleshift = if ty == b'h' { 0 } else { 4 };
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "bounded: at most twice the input"
+                        )]
                         let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
                         let mut ipos = p;
                         let mut first = true;

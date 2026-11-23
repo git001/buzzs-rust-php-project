@@ -43,6 +43,7 @@ fn tag_find(tag: &[u8], set: &[u8]) -> bool {
         return false;
     }
     let at = |i: usize| tag.get(i).copied().unwrap_or(0).to_ascii_lowercase();
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut norm = Vec::with_capacity(tag.len() + 1);
     let mut state = 0;
     let mut t = 0;
@@ -94,6 +95,7 @@ pub fn strip_tags_ex(buf: &[u8], allow: Option<&[u8]>, allow_tag_spaces: bool) -
     });
     let end = buf.len();
     let at = |i: usize| buf.get(i).copied().unwrap_or(0);
+    #[expect(clippy::disallowed_methods, reason = "bounded: at most the input size")]
     let mut out = Vec::with_capacity(buf.len());
     let mut tbuf: Vec<u8> = Vec::new();
     let mut lc = 0u8;

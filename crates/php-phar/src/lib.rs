@@ -54,6 +54,11 @@
 //! [`stub::set_flavor`] and [`sys::set_entry_time_override`] exist so the
 //! tests can compare byte for byte against a PHP 8.3 build.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod archive;
 mod bz2;
 pub mod compress;

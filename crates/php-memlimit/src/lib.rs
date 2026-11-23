@@ -43,6 +43,8 @@
 //!
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
 
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
+
 pub mod c_heap;
 mod counting;
 mod grow;

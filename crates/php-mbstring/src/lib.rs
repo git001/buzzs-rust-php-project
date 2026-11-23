@@ -36,6 +36,11 @@
 //!
 //! Ref: `ext/mbstring/` (`mbstring.c`, `php_unicode.c`, `libmbfl/`).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod codecs;
 pub mod convert;
 pub mod detect;

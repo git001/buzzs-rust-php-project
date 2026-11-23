@@ -18,6 +18,11 @@
 //!
 //! PHP-level warnings raised inside mysqlnd are queued in [`diag`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod auth;
 pub mod charset;
 pub mod codec;

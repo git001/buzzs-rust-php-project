@@ -33,6 +33,11 @@
 //! assert_eq!(r.get_int(0, 10), Ok(0));
 //! ```
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 pub mod csprng;
 pub mod engine;
 pub mod error;

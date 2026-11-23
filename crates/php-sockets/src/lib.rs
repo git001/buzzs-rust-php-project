@@ -32,6 +32,11 @@
 //! provides [`Sockets::import_fd`], [`Socket::export_protocol`] and the
 //! ownership flag.  `socket_wsaprotocol_info_*()` do not exist on Linux.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod constants;
 mod conversions;
 mod options;

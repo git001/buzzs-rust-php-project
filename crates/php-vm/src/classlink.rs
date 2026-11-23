@@ -2882,6 +2882,10 @@ fn build_class(
         + traits.iter().map(|t| t.consts.len()).sum::<usize>()
         + decl.consts.len()
         + decl.cases.len();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: members of the declared class"
+    )]
     let mut consts: Vec<Rc<ClassConst>> = Vec::with_capacity(nconsts);
     let mut const_map: NameMap<usize> = name_map_with_capacity(nconsts);
     let add_const =
@@ -3098,10 +3102,18 @@ fn build_class(
         .count();
     let ninstance_decls = all_props.len() - nstatic_decls;
     let mut props: Vec<Rc<PropInfo>> = parent.as_ref().map(|p| p.props.clone()).unwrap_or_default();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: members of the declared class"
+    )]
     props.reserve(ninstance_decls);
     let mut prop_map: NameMap<Rc<PropInfo>> =
         name_map_with_capacity(parent.as_ref().map_or(0, |p| p.prop_map.len()) + ninstance_decls);
     let nstatics = parent.as_ref().map_or(0, |p| p.static_props.len()) + nstatic_decls;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: members of the declared class"
+    )]
     let mut static_props: Vec<StaticProp> = Vec::with_capacity(nstatics);
     let mut static_map: NameMap<usize> = name_map_with_capacity(nstatics);
     if let Some(p) = &parent {
@@ -3403,6 +3415,10 @@ fn build_class(
         + parent.as_ref().map_or(0, |p| p.method_order.len())
         + niface_methods;
     let mut methods: NameMap<Rc<Method>> = name_map_with_capacity(nmethods);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: members of the declared class"
+    )]
     let mut method_order: Vec<ZStr> = Vec::with_capacity(nmethods);
     // Own methods first (for get_class_methods order), then trait methods,
     // then inherited ones.

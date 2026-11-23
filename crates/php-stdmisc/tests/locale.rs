@@ -3,6 +3,8 @@
 //! Locale-dependent oracle tests. The locale is process-global, so
 //! everything runs sequentially inside one test.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 
 use common::{export, fields, fixture_lines, show, unhex};

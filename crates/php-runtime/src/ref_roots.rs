@@ -188,6 +188,10 @@ pub fn unstash(s: Stash) {
     let _ = BUF.try_with(|b| {
         if let Ok(mut b) = b.try_borrow_mut() {
             let newer = std::mem::take(&mut b.entries);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "bounded: the entries of two existing buffers"
+            )]
             let mut entries = Vec::with_capacity(s.0.len() + newer.len());
             let mut index = Index::with_capacity_and_hasher(s.0.len() + newer.len(), FxBuildHasher);
             for w in s.0.into_iter().chain(newer) {

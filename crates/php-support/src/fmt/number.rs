@@ -229,7 +229,20 @@ pub fn number_format_double(d: f64, dec: i32, dec_point: &[u8], thousand_sep: &[
         Some(p) if dec > 0 => (&tmp[..p], &tmp[p + 1..]),
         _ => (tmp.as_slice(), &[][..]),
     };
-    let mut out = Vec::with_capacity(tmp.len() + tmp.len() / 3 * thousand_sep.len() + 2);
+    let want = usize::try_from(dec).unwrap_or(0);
+    // `dec` and the separators come from the script: check the result's
+    // size first, as php-src allocates it at once (`zend_string_alloc`).
+    // Over `memory_limit` the violation is recorded and the VM raises it
+    // after the call; the empty result is discarded.
+    let size = (tmp.len() / 3)
+        .saturating_mul(thousand_sep.len())
+        .saturating_add(tmp.len() + 2)
+        .saturating_add(dec_point.len())
+        .saturating_add(want);
+    let mut out = Vec::new();
+    if php_memlimit::TryGrow::try_grow_exact(&mut out, size).is_err() {
+        return Vec::new();
+    }
     if is_negative {
         out.push(b'-');
     }
@@ -237,8 +250,11 @@ pub fn number_format_double(d: f64, dec: i32, dec_point: &[u8], thousand_sep: &[
     if dec > 0 {
         out.extend_from_slice(dec_point);
         out.extend_from_slice(frac_part);
-        let want = usize::try_from(dec).unwrap_or(0);
         if frac_part.len() < want {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "checked: try_grow_exact above made room for the decimals"
+            )]
             out.resize(out.len() + want - frac_part.len(), b'0');
         }
     }
@@ -267,14 +283,29 @@ pub fn number_format_long(num: i64, dec: i64, dec_point: &[u8], thousand_sep: &[
         }
     }
     let digits = tmpnum.to_string();
-    let mut out = Vec::with_capacity(digits.len() * 2);
+    let decimals = usize::try_from(dec).unwrap_or(0);
+    // As in `number_format_double`: `dec` and the separators come from the
+    // script, so the result's size is checked first.
+    let size = (digits.len() / 3)
+        .saturating_mul(thousand_sep.len())
+        .saturating_add(digits.len() + 1)
+        .saturating_add(dec_point.len())
+        .saturating_add(decimals);
+    let mut out = Vec::new();
+    if php_memlimit::TryGrow::try_grow_exact(&mut out, size).is_err() {
+        return Vec::new();
+    }
     if is_negative {
         out.push(b'-');
     }
     group(digits.as_bytes(), thousand_sep, &mut out);
     if dec > 0 {
         out.extend_from_slice(dec_point);
-        out.resize(out.len() + usize::try_from(dec).unwrap_or(0), b'0');
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "checked: try_grow_exact above made room for the decimals"
+        )]
+        out.resize(out.len() + decimals, b'0');
     }
     out
 }
@@ -291,6 +322,9 @@ pub enum Number {
 /// `number_format(num, decimals, decimal_separator, thousands_separator)`
 /// after argument parsing (`decimals` must already be checked to fit in an
 /// `int`; PHP throws "must be between" otherwise).
+///
+/// A result past `memory_limit` is not built: the violation is recorded
+/// (`php_memlimit::try_reserve`) and an empty string returned.
 #[allow(clippy::cast_possible_truncation)]
 pub fn number_format(num: Number, dec: i32, dec_point: &[u8], thousand_sep: &[u8]) -> Vec<u8> {
     match num {

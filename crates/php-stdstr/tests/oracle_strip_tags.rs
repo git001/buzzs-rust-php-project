@@ -3,6 +3,8 @@
 //! Oracle tests for `strip_tags()`: hand-picked inputs from the php-src
 //! `.phpt` files plus a deterministic random corpus over the characters
 //! the state machine cares about.
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{check, lit, pure, regenerate, Case};
 use php_stdstr::strip_tags::{allowed_tags_from_list, strip_tags};

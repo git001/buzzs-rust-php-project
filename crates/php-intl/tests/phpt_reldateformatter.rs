@@ -2,6 +2,8 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Ports of `ext/intl/tests/reldateformatter/*.phpt` (php-src master).
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_intl::error::UErrorCode;
 use php_intl::numfmt::{style, Number, NumberFormatter};
 use php_intl::reldateformatter::{

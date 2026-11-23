@@ -134,6 +134,7 @@ pub fn substr_replace(s: &[u8], replacement: &[u8], offset: i64, length: Option<
         l = len - f;
     }
     let (f, l) = (to_usize(f), to_usize(l));
+    #[expect(clippy::disallowed_methods, reason = "bounded: linear in the input")]
     let mut out = Vec::with_capacity(s.len() - l + replacement.len());
     out.extend_from_slice(&s[..f]);
     out.extend_from_slice(replacement);

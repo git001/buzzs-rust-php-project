@@ -4,6 +4,7 @@
 //! security preferences, error reporting, stream includes, EXSLT,
 //! XInclude, SimpleXML/modern-DOM inputs.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::doc_markdown, clippy::format_collect, clippy::similar_names)]
 
 mod common;

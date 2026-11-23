@@ -200,6 +200,7 @@ pub fn long_to_base(arg: i64, base: u32) -> Vec<u8> {
     }
     let mut value = u64::from_ne_bytes(arg.to_ne_bytes());
     let base = u64::from(base);
+    #[expect(clippy::disallowed_methods, reason = "bounded: fixed size")]
     let mut out = Vec::with_capacity(64);
     loop {
         out.push(DIGITS[usize::try_from(value % base).unwrap_or(0)]);

@@ -9,6 +9,7 @@
 //! exercise engine behaviour (class inheritance, casts to int, dynamic
 //! properties, memory limits, 32-bit builds) are listed in [`ENGINE_ONLY`].
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::too_many_lines)]
 
 #[path = "phpt_port/functions.rs"]

@@ -1,6 +1,8 @@
 // buzzs-rust-php-project - Copyright (c) 2025-2026 David Buzz <davidbuzz@gmail.com>
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! Oracle tests for `version_compare()`.
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 mod common;
 use common::{case, check, lit, pure, regenerate, Case};
 use php_stdstr::versioning::{version_compare, version_compare_op};

@@ -22,6 +22,11 @@
 //! `open_basedir` checks are left to the VM; helpers for the exact texts are
 //! provided ([`fd_type_warning`], [`stream_cast_warning`]).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod sys;
 
 use std::fmt;

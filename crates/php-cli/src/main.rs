@@ -2,6 +2,11 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The `php` command line interface (`sapi/cli/php_cli.c`).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod config;
 mod getopt;
 mod memcap;

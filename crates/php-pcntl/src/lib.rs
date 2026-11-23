@@ -44,6 +44,11 @@
 //! `pcntl_setqos_class()` do not exist on Linux builds of PHP (the VM must
 //! not register them: calling them is "Call to undefined function").
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "memory_limit ratchet: calls not reviewed yet (roadmap 76)"
+)]
+
 mod constants;
 pub mod signals;
 mod sys;

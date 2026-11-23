@@ -3,6 +3,7 @@
 //! Ports of the `php:function` / `registerPHPFunctions()` /
 //! `registerPHPFunctionNS()` phpts.
 
+#![expect(clippy::disallowed_methods, reason = "test code")]
 #![allow(clippy::doc_markdown, clippy::format_collect, clippy::similar_names)]
 
 mod common;

@@ -105,6 +105,10 @@ impl Vm {
     /// rejecting mismatched types and duplicates, then creates the cases.
     fn enum_build_backed_table(&mut self, cls: &Rc<Class>) -> VmResult<()> {
         let cases: Vec<Rc<ClassConst>> = cls.consts.iter().filter(|c| c.is_case).cloned().collect();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded: cases of the declared enum"
+        )]
         let mut values: Vec<Value> = Vec::with_capacity(cases.len());
         for c in &cases {
             let existing = c.value.borrow().clone();

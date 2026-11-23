@@ -38,6 +38,10 @@ impl FormatArg for FArg {
 }
 
 fn convert_args(vm: &mut Vm, vals: &[Value]) -> VmResult<Vec<FArg>> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: number of arguments of the call"
+    )]
     let mut out = Vec::with_capacity(vals.len());
     for v in vals {
         let v = v.deref();

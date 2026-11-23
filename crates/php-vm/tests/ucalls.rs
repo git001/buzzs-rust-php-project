@@ -4,6 +4,8 @@
 //! (`i_init_func_execute_data`), `RECV` skipping and in-place verification,
 //! the `ZEND_INIT_METHOD_CALL` run-time cache and closure variable binding.
 //! Expected outputs are php-src's (`/usr/bin/php -n`).
+#![expect(clippy::disallowed_methods, reason = "test code")]
+
 use php_vm::{Vm, VmOptions};
 use std::cell::RefCell;
 use std::fmt::Write as _;

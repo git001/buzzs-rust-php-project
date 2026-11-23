@@ -6,6 +6,11 @@
 //! The binary (`src/main.rs`) is a thin CLI over this library; the modules are public so the
 //! integration tests can exercise the parser and matchers directly.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test tool, not on the request path"
+)]
+
 pub mod baseline;
 pub mod bytes;
 pub mod cgi;

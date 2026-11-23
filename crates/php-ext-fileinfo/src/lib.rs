@@ -16,6 +16,7 @@
 
 // Native handlers share one `fn(&mut Vm, &mut Args) -> VmResult<Value>`
 // signature, even those that cannot fail.
+#![cfg_attr(test, allow(clippy::disallowed_methods, reason = "test code"))]
 #![allow(clippy::unnecessary_wraps)]
 
 mod cdf;
