@@ -8,7 +8,7 @@
 
 use std::io::{self, Read, Write};
 
-use crate::ffi::RawStream;
+use crate::ffi::{Heap, RawStream};
 use crate::{
     BZ_DATA_ERROR, BZ_FINISH, BZ_FINISH_OK, BZ_IO_ERROR, BZ_OK, BZ_RUN, BZ_RUN_OK,
     BZ_SEQUENCE_ERROR, BZ_STREAM_END, BZ_UNEXPECTED_EOF,
@@ -130,9 +130,9 @@ impl<F: Read + Write> BzFile<F> {
     pub fn open(handle: F, mode: &str) -> Option<Self> {
         let m = OpenMode::parse(mode);
         let strm = if m.writing {
-            RawStream::compress_init(m.block_size_100k, 30).ok()?
+            RawStream::compress_init(m.block_size_100k, 30, Heap::System).ok()?
         } else {
-            RawStream::decompress_init(m.small).ok()?
+            RawStream::decompress_init(m.small, Heap::System).ok()?
         };
         Some(BzFile {
             handle,

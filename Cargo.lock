@@ -59,16 +59,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
-name = "bzip2-sys"
-version = "0.1.13+1.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
-dependencies = [
- "cc",
- "pkg-config",
-]
-
-[[package]]
 name = "cc"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -197,6 +187,12 @@ dependencies = [
  "getrandom",
  "libc",
 ]
+
+[[package]]
+name = "libbz2-rs-sys"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32f454fd6831a29c0e827ed075bca2a15be201bd57f4168f0fd1041124eab17e"
 
 [[package]]
 name = "libc"
@@ -351,7 +347,7 @@ version = "0.1.0"
 name = "php-bz2"
 version = "0.1.0"
 dependencies = [
- "bzip2-sys",
+ "libbz2-rs-sys",
  "libc",
  "php-memlimit",
  "php-streams",
@@ -1270,7 +1266,7 @@ dependencies = [
 name = "php-phar"
 version = "0.1.0"
 dependencies = [
- "bzip2-sys",
+ "libbz2-rs-sys",
  "libc",
  "php-hash",
  "php-runtime",

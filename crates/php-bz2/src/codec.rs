@@ -3,7 +3,7 @@
 //! `bzcompress()` and `bzdecompress()`.
 
 use crate::error::{arg_value_error, Result};
-use crate::ffi::RawStream;
+use crate::ffi::{Heap, RawStream};
 use crate::{BZ_FINISH, BZ_FINISH_OK, BZ_OK, BZ_OUTBUFF_FULL, BZ_STREAM_END};
 use php_memlimit::TryGrow;
 
@@ -26,7 +26,7 @@ fn buff_to_buff_compress(
     block_size: i32,
     work_factor: i32,
 ) -> std::result::Result<Vec<u8>, i32> {
-    let mut z = RawStream::compress_init(block_size, work_factor)?;
+    let mut z = RawStream::compress_init(block_size, work_factor, Heap::System)?;
     let mut dest = Vec::new();
     if !fallible_resize(&mut dest, dest_len) {
         z.end();
@@ -111,7 +111,7 @@ pub fn bzdecompress(data: &[u8], small: bool) -> Result<Output> {
             &format!("must have a length less than or equal to {}", u32::MAX),
         ));
     }
-    let Ok(mut z) = RawStream::decompress_init(small) else {
+    let Ok(mut z) = RawStream::decompress_init(small, Heap::System) else {
         return Ok(Output::False);
     };
     // In most cases bz2 offers at least 2:1 compression. Both this buffer

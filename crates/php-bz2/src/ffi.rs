@@ -2,17 +2,17 @@
 // Licensed under the BSD-3-Clause, the license PHP master uses; see LICENSE.
 //! The only module that talks to libbz2 (through `bzip2-sys`).
 //!
-//! `bzip2-sys` links the system `libbz2` when pkg-config knows it and
-//! otherwise builds the bundled bzip2 1.0.8 sources — the same release
-//! distributions ship, so compressed output is identical to PHP's. A
-//! `bz_stream` keeps a back pointer checked on every call, so it is boxed;
-//! buffers are passed as slices per call and the raw pointers never outlive
-//! the call.
+//! `libbz2-rs-sys` is the Rust port of bzip2 1.0.8 (a c2rust translation),
+//! so compressed output is byte-identical to PHP's libbz2. A `bz_stream`
+//! keeps a back pointer checked on every call, so it is boxed; buffers are
+//! passed as slices per call and the raw pointers never outlive the call.
+//!
+//! Where libbz2's own state lives follows php-src (see [`Heap`]).
 
-use std::ffi::{c_char, c_int, c_uint};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 
-use bzip2_sys as bz;
+use libbz2_rs_sys as bz;
 
 /// What one `BZ2_bzCompress()`/`BZ2_bzDecompress()` call did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,36 @@ pub struct Step {
 enum Kind {
     Compress,
     Decompress,
+}
+
+/// Which allocator libbz2 uses for its state (up to ~7.6 MB at block size 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heap {
+    /// The request's counted heap: the `bzip2.*` stream filters, which
+    /// php-src sets up with `php_bz2_alloc` (emalloc, under `memory_limit`).
+    Request,
+    /// Plain malloc, outside `memory_limit`: `bzcompress()`, `bzdecompress()`
+    /// and BZFILE streams, which php-src leaves on libbz2's default
+    /// allocator (`bzalloc = NULL`, ext/bz2/bz2.c).
+    System,
+}
+
+/// libbz2's default `bzalloc` (`malloc(items * size)`), for [`Heap::System`].
+unsafe extern "C" fn system_alloc(_opaque: *mut c_void, items: c_int, size: c_int) -> *mut c_void {
+    let (Ok(items), Ok(size)) = (usize::try_from(items), usize::try_from(size)) else {
+        return ptr::null_mut();
+    };
+    let Some(bytes) = items.checked_mul(size) else {
+        return ptr::null_mut();
+    };
+    // SAFETY: malloc has no preconditions; NULL becomes BZ_MEM_ERROR.
+    unsafe { libc::malloc(bytes) }
+}
+
+/// libbz2's default `bzfree`, for [`Heap::System`].
+unsafe extern "C" fn system_free(_opaque: *mut c_void, address: *mut c_void) {
+    // SAFETY: libbz2 only frees pointers it got from `system_alloc`.
+    unsafe { libc::free(address) }
 }
 
 /// A compression or decompression stream.
@@ -49,7 +79,16 @@ impl std::fmt::Debug for RawStream {
 
 // The stream must live at a stable address (libbz2 keeps a back pointer).
 #[allow(clippy::unnecessary_box_returns)]
-fn fresh() -> Box<bz::bz_stream> {
+fn fresh(heap: Heap) -> Box<bz::bz_stream> {
+    // NULL callbacks select libbz2-rs-sys's Rust allocator, which the
+    // request's memory counter sees.
+    let (bzalloc, bzfree) = match heap {
+        Heap::Request => (None, None),
+        Heap::System => (
+            Some(system_alloc as unsafe extern "C" fn(_, _, _) -> _),
+            Some(system_free as unsafe extern "C" fn(_, _)),
+        ),
+    };
     Box::new(bz::bz_stream {
         next_in: ptr::null_mut(),
         avail_in: 0,
@@ -60,8 +99,8 @@ fn fresh() -> Box<bz::bz_stream> {
         total_out_lo32: 0,
         total_out_hi32: 0,
         state: ptr::null_mut(),
-        bzalloc: None,
-        bzfree: None,
+        bzalloc,
+        bzfree,
         opaque: ptr::null_mut(),
     })
 }
@@ -72,10 +111,11 @@ fn clamp(len: usize) -> c_uint {
 
 impl RawStream {
     /// `BZ2_bzCompressInit(block_size_100k, 0, work_factor)`.
-    pub fn compress_init(block_size_100k: i32, work_factor: i32) -> Result<Self, i32> {
-        let mut strm = fresh();
-        // SAFETY: `strm` is a zeroed, boxed bz_stream with default
-        // allocators; libbz2 validates the numeric parameters.
+    pub fn compress_init(block_size_100k: i32, work_factor: i32, heap: Heap) -> Result<Self, i32> {
+        let mut strm = fresh(heap);
+        // SAFETY: `strm` is a zeroed, boxed bz_stream whose allocator
+        // callbacks are NULL or a matching malloc/free pair; libbz2
+        // validates the numeric parameters.
         let ret =
             unsafe { bz::BZ2_bzCompressInit(&raw mut *strm, block_size_100k, 0, work_factor) };
         if ret == bz::BZ_OK {
@@ -90,8 +130,8 @@ impl RawStream {
     }
 
     /// `BZ2_bzDecompressInit(0, small)`.
-    pub fn decompress_init(small: bool) -> Result<Self, i32> {
-        let mut strm = fresh();
+    pub fn decompress_init(small: bool, heap: Heap) -> Result<Self, i32> {
+        let mut strm = fresh(heap);
         // SAFETY: as for compress_init.
         let ret = unsafe { bz::BZ2_bzDecompressInit(&raw mut *strm, 0, c_int::from(small)) };
         if ret == bz::BZ_OK {
@@ -202,12 +242,12 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let mut c = RawStream::compress_init(4, 0).unwrap();
+        let mut c = RawStream::compress_init(4, 0, Heap::System).unwrap();
         let mut out = vec![0u8; 700];
         let st = c.compress(b"hello hello hello", &mut out, bz::BZ_FINISH);
         assert_eq!(st.status, bz::BZ_STREAM_END);
         assert_eq!(&out[..4], b"BZh4");
-        let mut d = RawStream::decompress_init(false).unwrap();
+        let mut d = RawStream::decompress_init(false, Heap::Request).unwrap();
         let mut back = vec![0u8; 64];
         let st2 = d.decompress(&out[..st.produced], &mut back);
         assert_eq!(st2.status, bz::BZ_STREAM_END);
@@ -218,10 +258,10 @@ mod tests {
     #[test]
     fn bad_params() {
         assert_eq!(
-            RawStream::compress_init(10, 0).unwrap_err(),
+            RawStream::compress_init(10, 0, Heap::Request).unwrap_err(),
             bz::BZ_PARAM_ERROR
         );
-        let mut d = RawStream::decompress_init(true).unwrap();
+        let mut d = RawStream::decompress_init(true, Heap::System).unwrap();
         let mut out = [0u8; 8];
         assert_eq!(
             d.decompress(b"xyz", &mut out).status,

@@ -11,9 +11,9 @@ php-runtime = { path = "../php-runtime" }
 php-hash = { path = "../php-hash" }
 php-streams = { path = "../php-streams" }
 php-zlib = { path = "../php-zlib" }
-# php-bz2 is still uncommitted work of another agent; bind libbz2 directly
-# (bzip2-sys is already in the workspace lock file) until its API settles.
-bzip2-sys = "0.1"
+# Binds libbz2 directly for the two default-parameter stream filters it
+# needs (the libbz2-rs-sys Rust port, as php-bz2).
+libbz2-rs-sys = { version = "0.2.6", default-features = false, features = ["rust-allocator"] }
 libc = "0.2"
 
 [lints]

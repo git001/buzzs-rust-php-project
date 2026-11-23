@@ -9,7 +9,7 @@
 
 use std::ffi::{c_char, c_int, c_uint};
 
-use bzip2_sys as bz;
+use libbz2_rs_sys as bz;
 
 struct Stream {
     strm: Box<bz::bz_stream>,

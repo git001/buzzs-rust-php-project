@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bzip2-sys = "0.1"
+libbz2-rs-sys = { version = "0.2.6", default-features = false, features = ["rust-allocator"] }
 libc = "0.2"
 php-memlimit = { path = "../php-memlimit" }
 php-streams = { path = "../php-streams" }

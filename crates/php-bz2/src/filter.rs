@@ -14,7 +14,7 @@ use php_streams::filter::{
 use php_streams::value::Value;
 
 use crate::conv::{find, try_get_long, type_name};
-use crate::ffi::RawStream;
+use crate::ffi::{Heap, RawStream};
 use crate::{
     BZ_FINISH, BZ_FINISH_OK, BZ_FLUSH, BZ_FLUSH_OK, BZ_OK, BZ_RUN, BZ_RUN_OK, BZ_STREAM_END,
 };
@@ -112,7 +112,7 @@ impl StreamFilter for DecompressFilter {
                     break;
                 }
                 if self.state == State::Uninitialized {
-                    match RawStream::decompress_init(self.small) {
+                    match RawStream::decompress_init(self.small, Heap::Request) {
                         Ok(s) => self.strm = Some(s),
                         Err(_) => return FilterStatus::ErrFatal,
                     }
@@ -192,7 +192,7 @@ pub struct CompressFilter {
 impl CompressFilter {
     /// Creates the filter; `None` if libbz2 rejects the parameters.
     pub fn new(block_size: i32, work_factor: i32, write_seekable: Seekable) -> Option<Self> {
-        let strm = RawStream::compress_init(block_size, work_factor).ok()?;
+        let strm = RawStream::compress_init(block_size, work_factor, Heap::Request).ok()?;
         Some(CompressFilter {
             strm,
             block_size,
@@ -272,7 +272,7 @@ impl StreamFilter for CompressFilter {
     fn seek(&mut self, _env: &mut FilterEnv, _offset: i64, _whence: i32) -> bool {
         self.strm.end();
         self.is_flushed = true;
-        if let Ok(s) = RawStream::compress_init(self.block_size, self.work_factor) {
+        if let Ok(s) = RawStream::compress_init(self.block_size, self.work_factor, Heap::Request) {
             self.strm = s;
             true
         } else {
