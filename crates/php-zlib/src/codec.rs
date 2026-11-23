@@ -9,7 +9,7 @@ use crate::constants::{
     ZLIB_ENCODING_RAW,
 };
 use crate::error::{arg_value_error, Error, Result};
-use crate::ffi::ZStream;
+use crate::ffi::{Heap, ZStream};
 use php_memlimit::TryGrow;
 
 const Z_OK: i32 = 0;
@@ -47,7 +47,7 @@ const ENCODING_MSG: &str =
 /// strategy. `encoding` is the window-bits value (one of the
 /// `ZLIB_ENCODING_*` constants); it and `level` must already be valid.
 pub fn encode_raw(data: &[u8], encoding: i32, level: i32) -> Result<Vec<u8>> {
-    let mut z = ZStream::deflate_init(level, encoding, MAX_MEM_LEVEL, 0)
+    let mut z = ZStream::deflate_init(level, encoding, MAX_MEM_LEVEL, 0, Heap::Request)
         .map_err(|st| Error::Warning(z_error(st).into()))?;
     let mut out = Vec::new();
     if !fallible_resize(&mut out, buffer_size_guess(data.len())) {
@@ -198,7 +198,7 @@ pub fn decode_raw(data: &[u8], encoding: i64, max_len: usize) -> Result<Vec<u8>>
         let mut encoding = encoding;
         loop {
             let enc = i32::try_from(encoding).unwrap_or(15);
-            match ZStream::inflate_init(enc) {
+            match ZStream::inflate_init(enc, Heap::Request) {
                 Ok(mut z) => {
                     let (st, out) = inflate_rounds(&mut z, &input, max_len);
                     status = st;

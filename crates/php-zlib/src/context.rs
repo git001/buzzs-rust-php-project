@@ -21,7 +21,7 @@ use crate::codec::{buffer_size_guess, fallible_resize, oom_error, valid_encoding
 use crate::constants::{z_error, ZLIB_ENCODING_RAW};
 use crate::conv::{find, try_get_long, value_name};
 use crate::error::{arg_type_error, arg_value_error, Error, Result};
-use crate::ffi::ZStream;
+use crate::ffi::{Heap, ZStream};
 
 const Z_OK: i32 = 0;
 const Z_STREAM_END: i32 = 1;
@@ -250,6 +250,7 @@ impl DeflateContext {
             window_bits(encoding, opts.window),
             as_i32(opts.memory),
             as_i32(opts.strategy),
+            Heap::Request,
         )
         .map_err(|_| Error::Warning("Failed allocating zlib.deflate context".into()))?;
         if let Some(d) = dict {
@@ -387,7 +388,7 @@ impl InflateContext {
 
     fn create(encoding: i64, opts: &InflateOptions) -> Result<Self> {
         let mut dict = flatten_dictionary("inflate_init", opts.dictionary.as_ref())?;
-        let mut z = ZStream::inflate_init(window_bits(encoding, opts.window))
+        let mut z = ZStream::inflate_init(window_bits(encoding, opts.window), Heap::Request)
             .map_err(|_| Error::Warning("Failed allocating zlib.inflate context".into()))?;
         if encoding == ZLIB_ENCODING_RAW {
             if let Some(d) = dict.take().filter(|d| !d.is_empty()) {

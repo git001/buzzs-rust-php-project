@@ -14,7 +14,7 @@ use php_streams::filter::{
 use php_streams::value::Value;
 
 use crate::constants::{z_error, MAX_MEM_LEVEL, MAX_WBITS};
-use crate::ffi::ZStream;
+use crate::ffi::{Heap, ZStream};
 
 const Z_OK: i32 = 0;
 const Z_STREAM_END: i32 = 1;
@@ -46,7 +46,7 @@ impl InflateFilter {
     /// Creates the filter with the given `windowBits` (`-15` = raw deflate,
     /// `15` zlib, `31` gzip, `47` auto-detect).
     pub fn new(window_bits: i32, write_seekable: Seekable) -> Option<Self> {
-        let z = ZStream::inflate_init(window_bits).ok()?;
+        let z = ZStream::inflate_init(window_bits, Heap::Request).ok()?;
         Some(InflateFilter {
             z,
             window_bits,
@@ -176,7 +176,7 @@ impl DeflateFilter {
         mem_level: i32,
         write_seekable: Seekable,
     ) -> Option<Self> {
-        let z = ZStream::deflate_init(level, window_bits, mem_level, 0).ok()?;
+        let z = ZStream::deflate_init(level, window_bits, mem_level, 0, Heap::Request).ok()?;
         Some(DeflateFilter {
             z,
             finished: true,

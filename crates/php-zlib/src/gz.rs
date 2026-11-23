@@ -25,7 +25,7 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use crate::constants::{DEF_MEM_LEVEL, MAX_WBITS, Z_DEFAULT_COMPRESSION};
-use crate::ffi::{strerror, ZStream};
+use crate::ffi::{strerror, Heap, ZStream};
 
 const Z_OK: i32 = 0;
 const Z_STREAM_END: i32 = 1;
@@ -370,7 +370,7 @@ impl<F: Read + Write + Seek> GzStream<F> {
             self.inbuf = vec![0; self.want];
             self.out = vec![0; self.want << 1];
             self.size = self.want;
-            if let Ok(z) = ZStream::inflate_init(MAX_WBITS + 16) {
+            if let Ok(z) = ZStream::inflate_init(MAX_WBITS + 16, Heap::System) {
                 self.z = Some(z);
             } else {
                 self.size = 0;
@@ -663,9 +663,13 @@ impl<F: Read + Write + Seek> GzStream<F> {
         self.inbuf = vec![0; self.want << 1];
         if !self.direct {
             self.out = vec![0; self.want];
-            if let Ok(z) =
-                ZStream::deflate_init(self.level, MAX_WBITS + 16, DEF_MEM_LEVEL, self.strategy)
-            {
+            if let Ok(z) = ZStream::deflate_init(
+                self.level,
+                MAX_WBITS + 16,
+                DEF_MEM_LEVEL,
+                self.strategy,
+                Heap::System,
+            ) {
                 self.z = Some(z);
             } else {
                 self.gz_error(Z_MEM_ERROR, Some("out of memory"));

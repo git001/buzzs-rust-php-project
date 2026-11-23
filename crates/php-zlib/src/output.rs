@@ -11,7 +11,7 @@
 
 use crate::codec::buffer_size_guess;
 use crate::constants::{MAX_MEM_LEVEL, ZLIB_ENCODING_DEFLATE, ZLIB_ENCODING_GZIP};
-use crate::ffi::ZStream;
+use crate::ffi::{Heap, ZStream};
 
 /// `PHP_OUTPUT_HANDLER_*` operation flags.
 pub mod flags {
@@ -83,7 +83,7 @@ impl OutputContext {
     }
 
     fn init_stream(&mut self, level: i32, coding: i32) -> bool {
-        if let Ok(z) = ZStream::deflate_init(level, coding, MAX_MEM_LEVEL, 0) {
+        if let Ok(z) = ZStream::deflate_init(level, coding, MAX_MEM_LEVEL, 0, Heap::Request) {
             self.z = Some(z);
             true
         } else {

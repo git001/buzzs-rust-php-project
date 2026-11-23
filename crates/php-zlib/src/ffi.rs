@@ -11,6 +11,7 @@
 //! in a `Box`. Input and output buffers are passed as slices on every call;
 //! the raw pointers stored in the `z_stream` never outlive that call.
 
+use std::alloc::{self, Layout};
 use std::ffi::{c_int, c_uint, CStr};
 use std::ptr;
 
@@ -33,18 +34,74 @@ enum Kind {
     Inflate,
 }
 
-/// zlib's allocator callback. `libz-sys` declares the callback slots as
-/// non-nullable function pointers, so the default (`Z_NULL`) allocator cannot
-/// be requested; this mirrors zlib's own `zcalloc()`.
-extern "C" fn zalloc(_opaque: z::voidpf, items: z::uInt, size: z::uInt) -> z::voidpf {
+/// Which allocator zlib uses for its state (about 268 KiB per deflate
+/// stream at the default memLevel 8, 7 KiB + window per inflate stream).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heap {
+    /// The request's counted heap, as php-src's `php_zlib_alloc`
+    /// (`safe_emalloc`, under `memory_limit`): every ext/zlib path except
+    /// gzFile streams.
+    Request,
+    /// Plain malloc, outside `memory_limit`: gzFile streams, which php-src
+    /// opens through zlib's gzlib (`gzdopen`, libz's own malloc).
+    System,
+}
+
+/// Bytes in front of every [`Heap::Request`] block holding its size (zlib's
+/// free callback gets no size); 16 keeps malloc's alignment.
+const HEADER: usize = 16;
+
+/// `php_zlib_alloc()`: zlib's state on the Rust global allocator, which the
+/// request's memory counter sees. NULL (`Z_MEM_ERROR`) on overflow or when the
+/// allocator refuses.
+extern "C" fn request_alloc(_opaque: z::voidpf, items: z::uInt, size: z::uInt) -> z::voidpf {
+    let Some(bytes) = (items as usize)
+        .checked_mul(size as usize)
+        .and_then(|b| b.checked_add(HEADER))
+    else {
+        return ptr::null_mut();
+    };
+    let Ok(layout) = Layout::from_size_align(bytes, HEADER) else {
+        return ptr::null_mut();
+    };
+    // SAFETY: the layout has a non-zero size (at least HEADER).
+    let base = unsafe { alloc::alloc(layout) };
+    if base.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: `base` is valid for `bytes >= HEADER` bytes and 16-aligned, so
+    // the size fits in front and the payload starts HEADER bytes in.
+    unsafe {
+        base.cast::<usize>().write_unaligned(bytes);
+        base.add(HEADER).cast()
+    }
+}
+
+/// `php_zlib_free()` for [`request_alloc`].
+extern "C" fn request_free(_opaque: z::voidpf, address: z::voidpf) {
+    if address.is_null() {
+        return;
+    }
+    // SAFETY: zlib only frees pointers from `request_alloc`, which sit
+    // HEADER bytes behind a block whose first word is its total size; that
+    // size and alignment rebuild the layout it was allocated with.
+    unsafe {
+        let base = address.cast::<u8>().sub(HEADER);
+        let bytes = base.cast::<usize>().read_unaligned();
+        alloc::dealloc(base, Layout::from_size_align_unchecked(bytes, HEADER));
+    }
+}
+
+/// zlib's own `zcalloc()`, for [`Heap::System`].
+extern "C" fn system_alloc(_opaque: z::voidpf, items: z::uInt, size: z::uInt) -> z::voidpf {
     // SAFETY: calloc has no preconditions; it returns NULL on failure (or on
     // overflow of items * size), which zlib handles as Z_MEM_ERROR.
     unsafe { libc::calloc(items as usize, size as usize) }
 }
 
-/// zlib's free callback (mirrors `zcfree()`).
-extern "C" fn zfree(_opaque: z::voidpf, address: z::voidpf) {
-    // SAFETY: zlib only passes pointers obtained from `zalloc` above.
+/// zlib's own `zcfree()`, for [`Heap::System`].
+extern "C" fn system_free(_opaque: z::voidpf, address: z::voidpf) {
+    // SAFETY: zlib only passes pointers obtained from `system_alloc`.
     unsafe { libc::free(address) }
 }
 
@@ -52,6 +109,7 @@ extern "C" fn zfree(_opaque: z::voidpf, address: z::voidpf) {
 pub struct ZStream {
     strm: Box<z::z_stream>,
     kind: Kind,
+    heap: Heap,
     live: bool,
 }
 
@@ -68,7 +126,11 @@ impl std::fmt::Debug for ZStream {
 
 // The stream must live at a stable address (zlib keeps a back pointer).
 #[allow(clippy::unnecessary_box_returns)]
-fn fresh_stream() -> Box<z::z_stream> {
+fn fresh_stream(heap: Heap) -> Box<z::z_stream> {
+    let (zalloc, zfree): (z::alloc_func, z::free_func) = match heap {
+        Heap::Request => (request_alloc, request_free),
+        Heap::System => (system_alloc, system_free),
+    };
     Box::new(z::z_stream {
         next_in: ptr::null_mut(),
         avail_in: 0,
@@ -102,8 +164,9 @@ impl ZStream {
         window_bits: i32,
         mem_level: i32,
         strategy: i32,
+        heap: Heap,
     ) -> Result<Self, i32> {
-        let mut strm = fresh_stream();
+        let mut strm = fresh_stream(heap);
         // SAFETY: `strm` is a valid, boxed (address-stable) z_stream with
         // allocator callbacks set; zlibVersion() returns a static string.
         let ret = unsafe {
@@ -122,6 +185,7 @@ impl ZStream {
             Ok(ZStream {
                 strm,
                 kind: Kind::Deflate,
+                heap,
                 live: true,
             })
         } else {
@@ -130,8 +194,8 @@ impl ZStream {
     }
 
     /// `inflateInit2()`. Returns the zlib error code on failure.
-    pub fn inflate_init(window_bits: i32) -> Result<Self, i32> {
-        let mut strm = fresh_stream();
+    pub fn inflate_init(window_bits: i32, heap: Heap) -> Result<Self, i32> {
+        let mut strm = fresh_stream(heap);
         // SAFETY: as for deflate_init.
         let ret = unsafe {
             z::inflateInit2_(&raw mut *strm, window_bits, z::zlibVersion(), stream_size())
@@ -140,6 +204,7 @@ impl ZStream {
             Ok(ZStream {
                 strm,
                 kind: Kind::Inflate,
+                heap,
                 live: true,
             })
         } else {
@@ -264,7 +329,7 @@ impl ZStream {
         if self.live {
             self.end();
         }
-        let mut strm = fresh_stream();
+        let mut strm = fresh_stream(self.heap);
         // SAFETY: as for inflate_init.
         let ret = unsafe {
             z::inflateInit2_(&raw mut *strm, window_bits, z::zlibVersion(), stream_size())
@@ -354,7 +419,7 @@ mod tests {
 
     #[test]
     fn roundtrip_raw() {
-        let mut d = ZStream::deflate_init(-1, -15, 9, 0).unwrap();
+        let mut d = ZStream::deflate_init(-1, -15, 9, 0, Heap::Request).unwrap();
         let mut out = vec![0u8; 64];
         let st = d.deflate(b"hello", &mut out, z::Z_FINISH);
         assert_eq!(st.status, z::Z_STREAM_END);
@@ -362,7 +427,7 @@ mod tests {
             &out[..st.produced],
             &[0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00]
         );
-        let mut i = ZStream::inflate_init(-15).unwrap();
+        let mut i = ZStream::inflate_init(-15, Heap::Request).unwrap();
         let mut back = vec![0u8; 16];
         let st2 = i.inflate(&out[..st.produced], &mut back, z::Z_NO_FLUSH);
         assert_eq!(st2.status, z::Z_STREAM_END);
@@ -379,7 +444,7 @@ mod tests {
 
     #[test]
     fn bad_data_sets_msg() {
-        let mut i = ZStream::inflate_init(15).unwrap();
+        let mut i = ZStream::inflate_init(15, Heap::System).unwrap();
         let mut out = [0u8; 8];
         let st = i.inflate(b"abc", &mut out, z::Z_NO_FLUSH);
         assert_eq!(st.status, z::Z_DATA_ERROR);
