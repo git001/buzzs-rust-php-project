@@ -173,14 +173,7 @@ pub type curl_push_callback =
 include!(concat!(env!("OUT_DIR"), "/lazy_curl.rs"));
 
 extern "C" {
-    pub fn curl_global_init_mem(
-        flags: c_long,
-        malloc: unsafe extern "C" fn(usize) -> *mut c_void,
-        free: unsafe extern "C" fn(*mut c_void),
-        realloc: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void,
-        strdup: unsafe extern "C" fn(*const c_char) -> *mut c_char,
-        calloc: unsafe extern "C" fn(usize, usize) -> *mut c_void,
-    ) -> CURLcode;
+    pub fn curl_global_init(flags: c_long) -> CURLcode;
     pub fn curl_version_info(age: c_int) -> *const curl_version_info_data;
 
     pub fn curl_easy_init() -> *mut CURL;

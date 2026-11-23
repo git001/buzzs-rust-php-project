@@ -3547,10 +3547,9 @@ impl Vm {
     /// with `?`) is reported here, at the caller's line, before it unwinds
     /// further. An exception thrown while a violation is pending gives way
     /// to it: it is the builtin's reaction to the allocation that failed
-    /// (a C library's NULL through `php_memlimit::c_heap`, such as
-    /// `curl_multi_init()`'s "Could not initialize"), where php-src's
-    /// emalloc would have bailed out first. Any other result passes
-    /// unchanged.
+    /// (a C library's NULL through `php_memlimit::c_heap`, a fallible
+    /// growth step), where php-src's emalloc would have bailed out first.
+    /// Any other result passes unchanged.
     ///
     /// [`OverLimit`]: php_memlimit::OverLimit
     #[inline]

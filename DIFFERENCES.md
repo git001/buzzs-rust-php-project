@@ -75,29 +75,6 @@ Details: [crates/php-memlimit/INTEGRATION.md](crates/php-memlimit/INTEGRATION.md
   own `malloc` (libgmp) does not count, as in php-src, but only 64 such
   huge blocks can be uncounted at once; beyond that they count.
   Where: `crates/php-memlimit/src/counting.rs`.
-- **libcurl counts (stricter than php-src).** libcurl runs on
-  `php_memlimit::c_heap` (`curl_global_init_mem`); php-src leaves it on
-  malloc. Its memory shows in `memory_get_usage()` and counts towards
-  `memory_limit`; past the limit libcurl gets NULL (`CURLE_OUT_OF_MEMORY`)
-  and the request ends with the "Allowed memory size" fatal. Why: many
-  requests share one process in the threaded servers. Visible in
-  `ext/curl/tests/bug45161.phpt`: a reused handle keeps about 8.7 KB of
-  connection and DNS cache after its first transfer (constant over 1024
-  transfers, not a leak), which the test's 1024-byte margin does not
-  allow. Libraries below libcurl (OpenSSL, nghttp2, libssh) stay on
-  malloc. Where: `crates/php-curl/src/easy.rs` (`global_init`). Test:
-  `crates/php-extensions/tests/curl_alloc_faults.rs` (every allocation of
-  a curl script fails in turn, each run ends cleanly).
-- **sqlite counts (stricter than php-src).** sqlite runs on
-  `php_memlimit::c_heap` (`SQLITE_CONFIG_MALLOC`); php-src leaves it on
-  its default allocator. Its memory (page cache, prepared statements,
-  sorts) shows in `memory_get_usage()` and counts towards `memory_limit`;
-  past the limit sqlite gets NULL (`SQLITE_NOMEM`) and the request ends
-  with the "Allowed memory size" fatal. Why: many requests share one
-  process in the threaded servers. Where: `crates/php-sqlite/src/ffi.rs`
-  (`ensure_init`). Test: `crates/php-extensions/tests/sqlite_alloc_faults.rs`
-  (every allocation of a SQLite3/PDO script fails in turn, each run ends
-  cleanly).
 - **lexbor (DOM) counts but does not fail.** Its allocations go through
   the Rust allocator and count towards `memory_limit` (php-src:
   `femalloc`); a soft-limit overrun is raised after the method returns,

@@ -406,7 +406,6 @@ name = "php-curl"
 version = "0.1.0"
 dependencies = [
  "libc",
- "php-memlimit",
 ]
 
 [[package]]

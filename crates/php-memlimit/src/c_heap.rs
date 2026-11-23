@@ -24,7 +24,7 @@ use std::ptr;
 use crate::current;
 
 /// Usable size of a block from these hooks (0 for NULL), for libraries
-/// that ask a block's size (sqlite's `xSize`).
+/// that ask a block's size.
 ///
 /// # Safety
 ///

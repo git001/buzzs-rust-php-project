@@ -164,85 +164,8 @@ pub(crate) fn errcode_null() -> i32 {
     unsafe { sys::sqlite3_errcode(ptr::null_mut()) }
 }
 
-/// `xMalloc` of sqlite's allocator ([`ensure_init`]).
-unsafe extern "C" fn mem_malloc(n: c_int) -> *mut c_void {
-    let Ok(n) = usize::try_from(n) else {
-        return ptr::null_mut();
-    };
-    // SAFETY: plain allocation; sqlite handles NULL as SQLITE_NOMEM.
-    unsafe { php_memlimit::c_heap::malloc(n) }
-}
-
-/// `xFree` of sqlite's allocator.
-unsafe extern "C" fn mem_free(p: *mut c_void) {
-    // SAFETY: sqlite frees only blocks from `mem_malloc`/`mem_realloc`.
-    unsafe { php_memlimit::c_heap::free(p) }
-}
-
-/// `xRealloc` of sqlite's allocator.
-unsafe extern "C" fn mem_realloc(p: *mut c_void, n: c_int) -> *mut c_void {
-    let Ok(n) = usize::try_from(n) else {
-        return ptr::null_mut();
-    };
-    // SAFETY: `p` is a live block of these methods.
-    unsafe { php_memlimit::c_heap::realloc(p, n) }
-}
-
-/// `xSize` of sqlite's allocator.
-unsafe extern "C" fn mem_size(p: *mut c_void) -> c_int {
-    // SAFETY: sqlite asks only for blocks of these methods.
-    c_int::try_from(unsafe { php_memlimit::c_heap::usable(p) }).unwrap_or(c_int::MAX)
-}
-
-/// `xRoundup` of sqlite's allocator: malloc rounds by itself.
-unsafe extern "C" fn mem_roundup(n: c_int) -> c_int {
-    n
-}
-
-/// `xInit`/`xShutdown` of sqlite's allocator: nothing to set up.
-unsafe extern "C" fn mem_noop(_: *mut c_void) -> c_int {
-    sys::SQLITE_OK
-}
-
-unsafe extern "C" fn mem_shutdown(_: *mut c_void) {}
-
-/// Puts sqlite's allocator on php-memlimit's C hooks and initialises
-/// sqlite, once per process: what a request makes sqlite allocate counts
-/// against its `memory_limit`, and past it sqlite gets NULL
-/// (`SQLITE_NOMEM`). php-src leaves sqlite on its default allocator; see
-/// DIFFERENCES.md. Runs before any call that allocates (`sqlite3_config` must precede
-/// `sqlite3_initialize`, which the first such call runs implicitly). What
-/// initialisation keeps for the process is persistent.
-pub(crate) fn ensure_init() {
-    static INIT: std::sync::Once = std::sync::Once::new();
-    INIT.call_once(|| {
-        let methods = sys::sqlite3_mem_methods {
-            xMalloc: Some(mem_malloc),
-            xFree: Some(mem_free),
-            xRealloc: Some(mem_realloc),
-            xSize: Some(mem_size),
-            xRoundup: Some(mem_roundup),
-            xInit: Some(mem_noop),
-            xShutdown: Some(mem_shutdown),
-            pAppData: ptr::null_mut(),
-        };
-        php_memlimit::persistent(|| {
-            // SAFETY: called once, before sqlite is initialised by this
-            // crate; sqlite copies the methods (SQLITE_CONFIG_MALLOC), whose
-            // functions live for the process. Should another library have initialised sqlite
-            // already, sqlite3_config fails with SQLITE_MISUSE and sqlite
-            // keeps malloc, which the hooks' design tolerates.
-            unsafe {
-                sys::sqlite3_config(sys::SQLITE_CONFIG_MALLOC, &raw const methods);
-                sys::sqlite3_initialize();
-            }
-        });
-    });
-}
-
 /// `sqlite3_mprintf("%q", s)`: doubles single quotes (stops at NUL).
 pub(crate) fn escape_q(s: &[u8]) -> Option<Vec<u8>> {
-    ensure_init();
     let arg = c_string(s);
     // SAFETY: the format string and argument are valid NUL-terminated
     // strings; the result is freed with sqlite3_free after copying.
@@ -377,7 +300,6 @@ impl Drop for BusyGuard<'_> {
 impl Connection {
     /// `sqlite3_open_v2(filename, &db, flags, NULL)`.
     pub fn open(filename: &[u8], flags: i32) -> Result<Rc<Connection>, OpenError> {
-        ensure_init();
         let name = c_string(filename);
         let mut db: *mut sys::sqlite3 = ptr::null_mut();
         // SAFETY: valid C string and out pointer.
