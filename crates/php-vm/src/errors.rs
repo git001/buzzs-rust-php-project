@@ -521,6 +521,18 @@ impl Vm {
         Throw::Fatal
     }
 
+    /// A library reports that a block of `bytes` cannot be allocated: the
+    /// `memory_limit` fatal when the size crosses the limit (recorded, the
+    /// VM reports it where the error leaves the builtin), else the system
+    /// refused it and the message is `zend_out_of_memory`'s.
+    #[cold]
+    pub fn out_of_memory(&mut self, bytes: usize) -> Throw {
+        match php_memlimit::try_reserve(bytes) {
+            Err(over) => Throw::from(over),
+            Ok(()) => self.fatal(&format!("Out of memory (tried to allocate {bytes} bytes)")),
+        }
+    }
+
     /// Reports a fatal error (`E_ERROR`) without user handlers.
     pub(crate) fn report_fatal(&mut self, msg: &str, file: &ZStr, line: u32) {
         self.report_fatal_bytes(msg.as_bytes(), file, line);

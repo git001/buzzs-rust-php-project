@@ -12,7 +12,6 @@ use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilde
 use php_vm::Vm;
 
 use crate::common::{self, bytes, int_or_null, opt_bytes, opt_int, raw_prop, str_or_null, throw};
-use crate::memory;
 
 /// `Uri\WhatWg\Url`.
 const URL_CLASS: &str = api::CLASS_NAME;
@@ -65,7 +64,10 @@ fn url_arg(a: &Args, n: usize) -> Option<WhatWgUrl> {
     }
 }
 
+/// A library result, after the memory check: a parse cut short at
+/// `memory_limit` raises the fatal, not the library's error.
 fn lib<T>(vm: &mut Vm, r: Result<T, UriError>) -> VmResult<T> {
+    php_memlimit::poll()?;
     r.map_err(|e| throw(vm, &e))
 }
 
@@ -85,9 +87,10 @@ fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if state_of(&this).is_some() {
         return Err(common::throw_reinit(vm, URL_CLASS));
     }
-    memory::check(vm, memory::whatwg(a.str(0).as_bytes()))?;
     let base = url_arg(a, 1);
-    match WhatWgUrl::new(a.str(0).as_bytes(), base.as_ref()) {
+    let r = WhatWgUrl::new(a.str(0).as_bytes(), base.as_ref());
+    php_memlimit::poll()?;
+    match r {
         Ok((url, soft)) => {
             pass_errors(vm, a, 2, &soft)?;
             set_state(&this, url);
@@ -104,9 +107,10 @@ fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let cls = common::class(vm, URL_CLASS)?;
     let o = vm.new_object(&cls)?;
-    memory::check(vm, memory::whatwg(a.str(0).as_bytes()))?;
     let base = url_arg(a, 1);
-    match WhatWgUrl::parse(a.str(0).as_bytes(), base.as_ref()) {
+    let r = WhatWgUrl::parse(a.str(0).as_bytes(), base.as_ref());
+    php_memlimit::poll()?;
+    match r {
         Ok((url, soft)) => {
             pass_errors(vm, a, 2, &soft)?;
             set_state(&o, url);
@@ -149,9 +153,6 @@ getters! {
 
 fn to_unicode_string(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let u = this(vm, a)?;
-    // The host goes through IDNA ToUnicode.
-    let host = u.ascii_host().map_or(0, |h| h.len() as u64);
-    memory::check(vm, held(&u) + 8 * host)?;
     Ok(bytes(u.to_unicode_string()))
 }
 
@@ -165,11 +166,6 @@ fn get_host_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // ------------------------------------------------------------ withers
 
-/// What `$this` holds (see [`memory`]).
-fn held(u: &WhatWgUrl) -> u64 {
-    u.serialize().len() as u64
-}
-
 #[allow(clippy::many_single_char_names)] // a: args, u: URL, o: object, ...
 fn with(
     vm: &mut Vm,
@@ -179,11 +175,6 @@ fn with(
     let u = this(vm, a)?;
     let cls = php_vm::object::class_of(&a.this_obj()).clone();
     let o = vm.new_object(&cls)?;
-    let extra = match a.at(0) {
-        Value::Str(s) => memory::whatwg(s.as_bytes()),
-        _ => 0,
-    };
-    memory::check(vm, 2 * held(&u) + extra)?;
     let new = lib(vm, f(&u))?;
     set_state(&o, new);
     Ok(Value::Object(o))
@@ -243,8 +234,9 @@ fn resolve(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let u = this(vm, a)?;
     let cls = php_vm::object::class_of(&a.this_obj()).clone();
     let o = vm.new_object(&cls)?;
-    memory::check(vm, held(&u) + memory::whatwg(a.str(0).as_bytes()))?;
-    match u.resolve(a.str(0).as_bytes()) {
+    let r = u.resolve(a.str(0).as_bytes());
+    php_memlimit::poll()?;
+    match r {
         Ok((url, soft)) => {
             pass_errors(vm, a, 1, &soft)?;
             set_state(&o, url);
@@ -264,9 +256,6 @@ fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(common::throw_invalid_serialization(vm, URL_CLASS, true));
     }
     let data = a.array(0);
-    if let Some(s) = common::unserialize_uri(&data) {
-        memory::check(vm, memory::whatwg(&s))?;
-    }
     let url = common::unserialize_uri(&data)
         .and_then(|s| WhatWgUrl::unserialize(&s).ok())
         .filter(|_| common::unserialize_props_ok(&data));
@@ -374,15 +363,6 @@ fn b_build(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => None,
     };
     let base = url_arg(a, 0);
-    let parts = [&scheme, &path];
-    let opt_parts = [&username, &password, &host, &query, &fragment];
-    let cost = parts.iter().map(|p| memory::whatwg(p)).sum::<u64>()
-        + opt_parts
-            .iter()
-            .filter_map(|p| p.as_deref())
-            .map(memory::whatwg)
-            .sum::<u64>();
-    memory::check(vm, cost)?;
     let c = api::Components {
         scheme: &scheme,
         username: username.as_deref(),

@@ -14,6 +14,20 @@ use super::utf8::{decode_valid_utf8_single, encode_utf8};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdnaError;
 
+/// Room for `n` more elements in `v`, checked against `memory_limit`
+/// (the input sizes these buffers): past it the violation is recorded and
+/// processing stops (the caller raises the fatal).
+fn grow<T>(v: &mut Vec<T>, n: usize) -> Result<(), IdnaError> {
+    php_memlimit::TryGrow::try_grow(v, n).map_err(|_| IdnaError)
+}
+
+/// A buffer for `n` elements, checked as [`grow`].
+fn buffer<T>(n: usize) -> Result<Vec<T>, IdnaError> {
+    let mut v = Vec::new();
+    php_memlimit::TryGrow::try_grow_exact(&mut v, n).map_err(|_| IdnaError)?;
+    Ok(v)
+}
+
 /// The UTS #46 status of a code point and its mapping.
 fn idna_entry(cp: u32) -> (u8, &'static [u32]) {
     if cp > 0x10_FFFE {
@@ -99,18 +113,24 @@ fn compose_pair(a: u32, b: u32) -> Option<u32> {
 }
 
 /// Normalization Form C.
-pub fn nfc(input: &[u32]) -> Vec<u32> {
+///
+/// # Errors
+/// When a buffer would cross `memory_limit`.
+pub fn nfc(input: &[u32]) -> Result<Vec<u32>, IdnaError> {
     if input.iter().all(|&c| c < 0x300) {
-        return input.to_vec();
+        let mut out = buffer(input.len())?;
+        out.extend_from_slice(input);
+        return Ok(out);
     }
-    // Canonical decomposition.
-    let mut d = Vec::with_capacity(input.len());
+    // Canonical decomposition (at most four code points each).
+    let mut d = buffer(input.len())?;
     for &cp in input {
+        grow(&mut d, 4)?;
         decompose_into(cp, &mut d);
     }
     // Canonical ordering (stable sort of non-starter runs).
-    let classes: Vec<u8> = d.iter().map(|&c| ccc(c)).collect();
-    let mut pairs: Vec<(u32, u8)> = d.into_iter().zip(classes).collect();
+    let mut pairs: Vec<(u32, u8)> = buffer(d.len())?;
+    pairs.extend(d.into_iter().map(|c| (c, ccc(c))));
     let mut i = 0;
     while i < pairs.len() {
         if pairs[i].1 == 0 {
@@ -124,7 +144,7 @@ pub fn nfc(input: &[u32]) -> Vec<u32> {
         pairs[start..i].sort_by_key(|p| p.1);
     }
     // Canonical composition.
-    let mut out: Vec<(u32, u8)> = Vec::with_capacity(pairs.len());
+    let mut out: Vec<(u32, u8)> = buffer(pairs.len())?;
     let mut starter: Option<usize> = None;
     for (cp, cc) in pairs {
         if let Some(si) = starter {
@@ -142,7 +162,9 @@ pub fn nfc(input: &[u32]) -> Vec<u32> {
         }
         out.push((cp, cc));
     }
-    out.into_iter().map(|p| p.0).collect()
+    let mut cps = buffer(out.len())?;
+    cps.extend(out.into_iter().map(|p| p.0));
+    Ok(cps)
 }
 
 /// lexbor's `lxb_unicode_idna_validity_criteria_cp` with the flags the URL
@@ -163,7 +185,7 @@ fn valid_label(label: &[u32]) -> bool {
 
 /// The mapping + normalization steps of UTS #46 processing.
 fn process(input: &[u8]) -> Result<Vec<u32>, IdnaError> {
-    let mut mapped = Vec::with_capacity(input.len());
+    let mut mapped = buffer(input.len())?;
     let mut p = 0;
     while p < input.len() {
         let cp = decode_valid_utf8_single(input, &mut p);
@@ -171,13 +193,14 @@ fn process(input: &[u8]) -> Result<Vec<u32>, IdnaError> {
             return Err(IdnaError);
         }
         let (status, map) = idna_entry(cp);
+        grow(&mut mapped, map.len().max(1))?;
         match status {
             s if s == IDNA_IGNORED => {}
             s if s == IDNA_MAPPED => mapped.extend_from_slice(map),
             _ => mapped.push(cp),
         }
     }
-    Ok(nfc(&mapped))
+    nfc(&mapped)
 }
 
 /// Splits processed code points into labels the way lexbor's
@@ -307,6 +330,7 @@ pub fn punycode_encode(cps: &[u32]) -> Result<(Vec<u8>, bool), IdnaError> {
         return Ok((out, true));
     }
     if b > 0 {
+        grow(&mut out, 1)?;
         out.push(b'-');
     }
     let mut n = INITIAL_N;
@@ -344,10 +368,12 @@ pub fn punycode_encode(cps: &[u32]) -> Result<(Vec<u8>, bool), IdnaError> {
                     if q < t {
                         break;
                     }
+                    grow(&mut out, 1)?;
                     out.push(encode_digit(t + (q - t) % (BASE - t)));
                     q = (q - t) / (BASE - t);
                     k += BASE;
                 }
+                grow(&mut out, 1)?;
                 out.push(encode_digit(q));
                 let hh = u32::try_from(h).map_err(|_| IdnaError)?;
                 bias = adapt(delta, hh + 1, h == b);
@@ -372,6 +398,7 @@ pub fn punycode_decode(input: &[u32]) -> Result<Vec<u32>, IdnaError> {
             if c >= 0x80 {
                 return Err(IdnaError);
             }
+            grow(&mut out, 1)?;
             out.push(c);
         }
         pos = d + 1;
@@ -419,6 +446,7 @@ pub fn punycode_decode(input: &[u32]) -> Result<Vec<u32>, IdnaError> {
         }
         n += i / h;
         i %= h;
+        grow(&mut out, 1)?;
         out.insert(i as usize, n);
         i += 1;
     }
@@ -461,11 +489,11 @@ mod tests {
 
     #[test]
     fn nfc_composes() {
-        assert_eq!(nfc(&[0x61, 0x308]), vec![0xE4]);
-        assert_eq!(nfc(&[0x1100, 0x1161, 0x11A8]), vec![0xAC01]);
-        assert_eq!(nfc(&[0x212B]), vec![0xC5]);
-        assert_eq!(nfc(&[0x61, 0x323, 0x302]), vec![0x1EAD]);
-        assert_eq!(nfc(&[0x61, 0x302, 0x323]), vec![0x1EAD]);
+        assert_eq!(nfc(&[0x61, 0x308]).unwrap(), vec![0xE4]);
+        assert_eq!(nfc(&[0x1100, 0x1161, 0x11A8]).unwrap(), vec![0xAC01]);
+        assert_eq!(nfc(&[0x212B]).unwrap(), vec![0xC5]);
+        assert_eq!(nfc(&[0x61, 0x323, 0x302]).unwrap(), vec![0x1EAD]);
+        assert_eq!(nfc(&[0x61, 0x302, 0x323]).unwrap(), vec![0x1EAD]);
     }
 
     #[test]

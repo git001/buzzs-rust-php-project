@@ -73,7 +73,6 @@ fn fmt_diags(d: &[Diagnostic]) -> Vec<String> {
             let l = match d.level {
                 Level::Warning => "W",
                 Level::Notice => "N",
-                Level::Error => "E",
             };
             format!("{l} {}", d.message_lossy())
         })
@@ -163,7 +162,6 @@ fn exif_read_data_matches_oracle() {
             required_sections: sections,
             as_arrays: parts[2] == "1",
             read_thumbnail: parts[3] == "1",
-            memory: None,
         };
         let f = File::open(&path).expect("open");
         let (v, d) = exif_read_data(f, &origin(&path), &opts, &cfg, &BuiltinConverter);
@@ -199,7 +197,7 @@ fn exif_thumbnail_matches_oracle() {
         let path = root().join("fixtures").join(parts[0]);
         let want_dims = parts[1] == "whT";
         let f = File::open(&path).expect("open");
-        let (r, d) = exif_thumbnail(f, &origin(&path), want_dims, None, &cfg, &BuiltinConverter);
+        let (r, d) = exif_thumbnail(f, &origin(&path), want_dims, &cfg, &BuiltinConverter);
         let data = r
             .as_ref()
             .map_or(Value::Bool(false), |t| Value::string(t.data.as_slice()));

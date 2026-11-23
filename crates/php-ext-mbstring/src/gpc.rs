@@ -85,7 +85,7 @@ fn encoding_handler(
     };
     // val_list + len_list of the C implementation.
     let seps_count = res.iter().filter(|b| h.separators.contains(b)).count();
-    crate::mem::check(vm, crate::mem::zstr(res.len()), (seps_count + 1) * 2 * 16)?;
+    crate::mem::check((seps_count + 1) * 2 * 16)?;
     // Split and url-decode into (name, value) pairs.
     let mut list: Vec<Vec<u8>> = Vec::new();
     for var in tokens(res, h.separators) {

@@ -109,6 +109,11 @@ impl<R: Read + Seek> PhpStream<R> {
         // Never allocate more than what can actually be there.
         let avail = self.len().saturating_sub(self.pos);
         let cap = usize::try_from(avail).unwrap_or(usize::MAX).min(n);
+        // The file sizes the block: checked against `memory_limit`.
+        if php_memlimit::TryGrow::try_grow_exact(&mut out, cap).is_err() {
+            self.eof_flag = true;
+            return out;
+        }
         out.resize(cap, 0);
         let got = self.read(&mut out);
         out.truncate(got);
@@ -139,7 +144,20 @@ impl<R: Read + Seek> PhpStream<R> {
     /// Reads everything from the current position to the end.
     pub fn read_to_end(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
-        let _ = self.inner.read_to_end(&mut out);
+        // In blocks whose growth is checked against `memory_limit`: past
+        // it the read stops with what it has (the violation is recorded).
+        let mut block = [0u8; 8192];
+        loop {
+            match self.inner.read(&mut block) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if php_memlimit::TryGrow::try_grow(&mut out, n).is_err() {
+                        break;
+                    }
+                    out.extend_from_slice(&block[..n]);
+                }
+            }
+        }
         self.pos += out.len() as u64;
         self.did_read = true;
         self.eof_flag = true;
@@ -151,6 +169,11 @@ impl<R: Read + Seek> PhpStream<R> {
     pub fn gets(&mut self) -> Option<Vec<u8>> {
         let mut line = Vec::new();
         while let Some(c) = self.getc() {
+            // A line as long as the file: its growth is checked against
+            // `memory_limit`, past it the line ends there.
+            if php_memlimit::TryGrow::try_grow(&mut line, 1).is_err() {
+                break;
+            }
             line.push(c);
             if c == b'\n' {
                 break;

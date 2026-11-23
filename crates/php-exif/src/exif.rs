@@ -29,7 +29,7 @@ use std::io::{Read, Seek};
 
 use php_runtime::{ArrayKey, HashTable, Value, ZArray};
 
-use crate::budget::{Budget, MemoryLimit};
+use crate::budget;
 use crate::diag::{Diagnostic, Level};
 use crate::encoding::EncodingConverter;
 use crate::fmt::{hex_u32, hex_u64, pad_left, php_f};
@@ -845,7 +845,6 @@ struct ImageInfo<'c, R: Read + Seek> {
     ifd_nesting_level: i32,
     ifd_count: i32,
     num_errors: i32,
-    budget: Budget,
 }
 
 impl<'c, R: Read + Seek> ImageInfo<'c, R> {
@@ -888,7 +887,6 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
             ifd_nesting_level: 0,
             ifd_count: 0,
             num_errors: 0,
-            budget: Budget::new(None),
         }
     }
 
@@ -899,7 +897,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
     /// `exif_error_docref()` with its error-count limit.
     fn error(&mut self, level: Level, msg: impl Into<Vec<u8>>) {
         // Once the memory limit is hit PHP has bailed out: nothing follows.
-        if self.budget.is_exhausted() {
+        if budget::exhausted() {
             return;
         }
         self.num_errors += 1;
@@ -1030,16 +1028,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
                 }
             }
         }
-        let value_size = match &data.value {
-            IifValue::None => 0,
-            IifValue::Bytes(b) => b.len() as u64 + 1,
-            IifValue::Nums(n) if n.len() > 1 => n.len() as u64 * 8,
-            IifValue::Nums(_) => 0,
-        };
-        if !self
-            .budget
-            .alloc(32 + data.name.len() as u64 + 1 + value_size)
-        {
+        if budget::exhausted() {
             return;
         }
         self.info_list[section].push(data);
@@ -1194,7 +1183,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
         let mut last_marker = M_PSEUDO;
         let mut comment_correction = 1;
         loop {
-            if self.budget.is_exhausted() {
+            if budget::exhausted() {
                 return false;
             }
             if last_marker == M_COM && comment_correction != 0 {
@@ -1242,7 +1231,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
                 return false;
             }
             // Every section is retained (plus its file_section entry).
-            if !self.budget.alloc(itemlen as u64 + 32) {
+            if !budget::reserve(itemlen as u64 + 32) {
                 return false;
             }
             let mut data = vec![0u8; itemlen];
@@ -1378,7 +1367,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
     ) -> bool {
         let count = self.ifd_count;
         self.ifd_count += 1;
-        if self.budget.is_exhausted() {
+        if budget::exhausted() {
             return false;
         }
         if count > MAX_IFD_TAGS {
@@ -1475,11 +1464,10 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
                     ));
                     return false;
                 }
-                if !self.budget.alloc(byte_count) {
+                if !budget::reserve(byte_count) {
                     return false;
                 }
                 let buf = self.stream.read_vec(byte_count as usize);
-                self.budget.free(byte_count);
                 self.stream.seek_set(i128::from(fpos));
                 if buf.len() as u64 != byte_count {
                     self.warn(ERROR_FILEEOF);
@@ -1853,7 +1841,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
             self.warn(ERROR_THUMBEOF);
             return;
         };
-        if !self.budget.alloc(self.thumbnail.size) {
+        if !budget::reserve(self.thumbnail.size) {
             return;
         }
         self.thumbnail.data = Some(info.buf[p..p + self.thumbnail.size as usize].to_vec());
@@ -1886,7 +1874,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
             }
         }
         let new_move = new_size;
-        if !self.budget.alloc(new_size as u64) {
+        if !budget::reserve(new_size as u64) {
             return;
         }
         let mut data = vec![0u8; new_size + old.len()];
@@ -2018,7 +2006,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
 
     fn read_tiff_thumbnail(&mut self) {
         if self.thumbnail.data.is_none() && self.thumbnail_in_file() {
-            if !self.budget.alloc(self.thumbnail.size) {
+            if !budget::reserve(self.thumbnail.size) {
                 return;
             }
             self.stream.seek_set(i128::from(self.thumbnail.offset));
@@ -2039,7 +2027,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
         self.ifd_count += 1;
         if count > MAX_IFD_TAGS
             || self.ifd_nesting_level > MAX_IFD_NESTING_LEVEL
-            || self.budget.is_exhausted()
+            || budget::exhausted()
         {
             return false;
         }
@@ -2076,7 +2064,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
             ));
             return false;
         }
-        if !self.budget.alloc(dir_size as u64 + 32) {
+        if !budget::reserve(dir_size as u64 + 32) {
             return false;
         }
         let mut data = vec![0u8; dir_size];
@@ -2150,7 +2138,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
                 ));
                 return false;
             }
-            if !self.budget.alloc(ifd_size - dir_size as u64) {
+            if !budget::reserve(ifd_size - dir_size as u64) {
                 return false;
             }
             data.resize(ifd_size as usize, 0);
@@ -2234,7 +2222,7 @@ impl<'c, R: Read + Seek> ImageInfo<'c, R> {
                 if limit < 36 || limit > fs {
                     break;
                 }
-                if !self.budget.alloc(limit) {
+                if !budget::reserve(limit) {
                     break;
                 }
                 let mut data = vec![0u8; limit as usize];
@@ -2654,8 +2642,6 @@ pub struct ReadOptions {
     pub as_arrays: bool,
     /// `$read_thumbnail`.
     pub read_thumbnail: bool,
-    /// The `memory_limit` to emulate (`None` = unlimited).
-    pub memory: Option<MemoryLimit>,
 }
 
 /// The decoded thumbnail returned by [`exif_thumbnail`].
@@ -2675,7 +2661,6 @@ fn read_from_stream<'c, R: Read + Seek>(
     reader: R,
     origin: &StreamOrigin,
     read_thumbnail: bool,
-    memory: Option<MemoryLimit>,
     cfg: &'c ExifConfig,
     conv: &'c dyn EncodingConverter,
 ) -> (ImageInfo<'c, R>, bool) {
@@ -2685,7 +2670,6 @@ fn read_from_stream<'c, R: Read + Seek>(
         stream.seek_set(0);
     }
     let mut ii = ImageInfo::new(stream, cfg, conv);
-    ii.budget = Budget::new(memory);
     let ok = 'read: {
         match origin {
             StreamOrigin::File {
@@ -2733,12 +2717,10 @@ pub fn exif_read_data<R: Read + Seek>(
         .required_sections
         .as_deref()
         .map_or(0, parse_required_sections);
-    let (mut ii, ok) =
-        read_from_stream(reader, origin, opts.read_thumbnail, opts.memory, cfg, conv);
+    let (mut ii, ok) = read_from_stream(reader, origin, opts.read_thumbnail, cfg, conv);
     let sections_str = section_list(ii.sections_found);
     ii.sections_found |= FOUND_COMPUTED | FOUND_FILE;
-    if let Some(fatal) = ii.budget.exhausted.take() {
-        ii.diags.push(fatal);
+    if budget::exhausted() {
         let _ = ii.stream.into_inner();
         return (Value::Bool(false), ii.diags);
     }
@@ -2853,21 +2835,7 @@ pub fn exif_read_data<R: Read + Seek>(
         ii.iif_add_int(sec::COMPUTED, "Thumbnail.Width", w);
     }
 
-    // The result array: buckets and strings.
-    for list in &ii.info_list {
-        for d in list {
-            let elems = match &d.value {
-                IifValue::Nums(n) if n.len() > 1 => 56 + 32 * n.len() as u64,
-                IifValue::Bytes(b) => 24 + b.len() as u64,
-                _ => 0,
-            };
-            if !ii.budget.alloc(32 + d.name.len() as u64 + 24 + elems) {
-                break;
-            }
-        }
-    }
-    if let Some(fatal) = ii.budget.exhausted.take() {
-        ii.diags.push(fatal);
+    if budget::exhausted() {
         let _ = ii.stream.into_inner();
         return (Value::Bool(false), ii.diags);
     }
@@ -2901,13 +2869,11 @@ pub fn exif_thumbnail<R: Read + Seek>(
     reader: R,
     origin: &StreamOrigin,
     want_dimensions: bool,
-    memory: Option<MemoryLimit>,
     cfg: &ExifConfig,
     conv: &dyn EncodingConverter,
 ) -> (Option<ThumbnailResult>, Vec<Diagnostic>) {
-    let (mut ii, ok) = read_from_stream(reader, origin, true, memory, cfg, conv);
-    if let Some(fatal) = ii.budget.exhausted.take() {
-        ii.diags.push(fatal);
+    let (mut ii, ok) = read_from_stream(reader, origin, true, cfg, conv);
+    if budget::exhausted() {
         let _ = ii.stream.into_inner();
         return (None, ii.diags);
     }

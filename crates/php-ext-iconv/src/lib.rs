@@ -68,23 +68,15 @@ fn raise(vm: &mut Vm, a: &Args, d: Diagnostic) -> VmResult<()> {
         // A fallible allocation recorded the violation: the VM raises the
         // delayed fatal right after this call.
         Diagnostic::OutOfMemory { .. } if php_memlimit::is_pending() => Ok(()),
-        Diagnostic::OutOfMemory { requested } => {
-            let limit = ini::configured_memory_limit(vm);
-            Err(vm.fatal(&format!(
-                "Allowed memory size of {limit} bytes exhausted (tried to allocate {requested} bytes)"
-            )))
-        }
+        Diagnostic::OutOfMemory { requested } => Err(vm.out_of_memory(requested)),
         Diagnostic::Fatal(m) => Err(vm.fatal(&m)),
     }
 }
 
-/// Raises the outcome's diagnostic, then maps its value (`None` → `false`)
-/// and checks the result against `memory_limit` (`input_len`: bytes of
-/// the live argument strings).
+/// Raises the outcome's diagnostic, then maps its value (`None` → `false`).
 fn finish<T>(
     vm: &mut Vm,
     a: &Args,
-    input_len: usize,
     out: Outcome<T>,
     ok: impl FnOnce(T) -> Value,
 ) -> VmResult<Value> {
@@ -97,9 +89,7 @@ fn finish<T>(
     if let Some(d) = out.diagnostic {
         raise(vm, a, d)?;
     }
-    let v = out.value.map_or(Value::Bool(false), ok);
-    ini::check_memory(vm, input_len, &v)?;
-    Ok(v)
+    Ok(out.value.map_or(Value::Bool(false), ok))
 }
 
 /// A `?string` argument as bytes.
@@ -116,17 +106,17 @@ fn int_value(n: i64) -> Value {
 
 fn iconv_fn(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (from, to, s) = (a.str(0), a.str(1), a.str(2));
-    let st = ini::state(vm, s.len());
+    let st = ini::state(vm);
     let out = st.iconv(from.as_bytes(), to.as_bytes(), s.as_bytes());
-    finish(vm, a, s.len(), out, bytes)
+    finish(vm, a, out, bytes)
 }
 
 fn iconv_strlen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let enc = opt_str(a, 1);
-    let st = ini::state(vm, s.len());
+    let st = ini::state(vm);
     let out = st.strlen(s.as_bytes(), enc.as_ref().map(ZStr::as_bytes));
-    finish(vm, a, 0, out, int_value)
+    finish(vm, a, out, int_value)
 }
 
 fn iconv_substr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -137,11 +127,7 @@ fn iconv_substr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => Some(a.int(2)),
     };
     let enc = opt_str(a, 3);
-    let mut st = ini::state(vm, s.len());
-    // php-iconv's substr() swallows its allocation failures and returns a
-    // truncated string; PHP bails out instead, which the result check in
-    // `finish` reproduces.
-    st.memory_limit = None;
+    let st = ini::state(vm);
     let out = st.substr(
         s.as_bytes(),
         offset,
@@ -150,29 +136,29 @@ fn iconv_substr(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     );
     // PHP returns "" (not false) when the substring is empty but valid;
     // the library reports that as an allocated empty result.
-    finish(vm, a, s.len(), out, bytes)
+    finish(vm, a, out, bytes)
 }
 
 fn iconv_strpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (h, n) = (a.str(0), a.str(1));
     let offset = a.int(2);
     let enc = opt_str(a, 3);
-    let st = ini::state(vm, h.len() + n.len());
+    let st = ini::state(vm);
     let out = st.strpos(
         h.as_bytes(),
         n.as_bytes(),
         offset,
         enc.as_ref().map(ZStr::as_bytes),
     );
-    finish(vm, a, 0, out, int_value)
+    finish(vm, a, out, int_value)
 }
 
 fn iconv_strrpos(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (h, n) = (a.str(0), a.str(1));
     let enc = opt_str(a, 2);
-    let st = ini::state(vm, h.len() + n.len());
+    let st = ini::state(vm);
     let out = st.strrpos(h.as_bytes(), n.as_bytes(), enc.as_ref().map(ZStr::as_bytes));
-    finish(vm, a, 0, out, int_value)
+    finish(vm, a, out, int_value)
 }
 
 /// Extracts `iconv_mime_encode()`'s `$options` (`zend_hash_find_deref`
@@ -208,27 +194,27 @@ fn iconv_mime_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         Value::Array(opts) => mime_prefs(vm, &opts)?,
         _ => MimeEncodePrefs::default(),
     };
-    let st = ini::state(vm, name.len() + value.len());
+    let st = ini::state(vm);
     let out = st.mime_encode(name.as_bytes(), value.as_bytes(), &prefs);
-    finish(vm, a, name.len() + value.len(), out, bytes)
+    finish(vm, a, out, bytes)
 }
 
 fn iconv_mime_decode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let mode = a.int(1);
     let enc = opt_str(a, 2);
-    let st = ini::state(vm, s.len());
+    let st = ini::state(vm);
     let out = st.mime_decode(s.as_bytes(), mode, enc.as_ref().map(ZStr::as_bytes));
-    finish(vm, a, s.len(), out, bytes)
+    finish(vm, a, out, bytes)
 }
 
 fn iconv_mime_decode_headers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     let mode = a.int(1);
     let enc = opt_str(a, 2);
-    let st = ini::state(vm, s.len());
+    let st = ini::state(vm);
     let out = st.mime_decode_headers(s.as_bytes(), mode, enc.as_ref().map(ZStr::as_bytes));
-    finish(vm, a, s.len(), out, |headers| {
+    finish(vm, a, out, |headers| {
         let mut arr = ZArray::with_capacity(headers.len());
         let t = arr.make_mut();
         for (name, value) in headers {
@@ -246,7 +232,7 @@ fn iconv_mime_decode_headers(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn iconv_set_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (kind, charset) = (a.str(0), a.str(1));
-    let mut st = ini::state(vm, 0);
+    let mut st = ini::state(vm);
     let out = st.set_encoding(kind.as_bytes(), charset.as_bytes());
     if let Some(d) = out.diagnostic {
         raise(vm, a, d)?;
@@ -272,9 +258,9 @@ fn iconv_set_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 fn iconv_get_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let kind = a.str(0);
-    let st = ini::state(vm, 0);
+    let st = ini::state(vm);
     let out = st.get_encoding(Some(kind.as_bytes()));
-    finish(vm, a, 0, out, |info| match info {
+    finish(vm, a, out, |info| match info {
         EncodingInfo::All {
             input_encoding,
             output_encoding,
@@ -298,7 +284,7 @@ fn iconv_get_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 /// layer as `handler(string $contents, int $status)`.
 fn ob_iconv_handler(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (data, status) = (a.str(0), a.int(1));
-    let st: Iconv = ini::state(vm, data.len());
+    let st: Iconv = ini::state(vm);
     let op = ObOp {
         start: status & OUTPUT_START != 0,
         clean: status & OUTPUT_CLEAN != 0,

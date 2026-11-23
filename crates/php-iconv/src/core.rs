@@ -18,19 +18,6 @@ pub const UCS4: &[u8] = b"UCS-4LE";
 pub const ASCII: &[u8] = b"ASCII";
 const NB: usize = 4;
 
-/// Optional allocation ceiling standing in for PHP's `memory_limit`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Limit(pub Option<usize>);
-
-impl Limit {
-    pub(crate) fn check(self, size: usize) -> Result<(), IconvErr> {
-        match self.0 {
-            Some(max) if size > max => Err(IconvErr::Alloc(size)),
-            _ => Ok(()),
-        }
-    }
-}
-
 /// `smart_str_falloc(.., fallible)`: makes room for `extra` more bytes
 /// in `buf` under the process-wide `memory_limit` accounting. When that
 /// would cross the limit, the violation is recorded (the VM raises the
@@ -98,12 +85,7 @@ pub struct StringResult {
 }
 
 /// `php_iconv_string()`.
-pub fn iconv_string(
-    input: &[u8],
-    out_charset: &[u8],
-    in_charset: &[u8],
-    limit: Limit,
-) -> StringResult {
+pub fn iconv_string(input: &[u8], out_charset: &[u8], in_charset: &[u8]) -> StringResult {
     let ignore_ilseq = check_ignore(out_charset);
     let mut cd = match open(out_charset, in_charset) {
         Ok(cd) => cd,
@@ -117,12 +99,6 @@ pub fn iconv_string(
     let in_len = input.len();
     let mut inp = input;
     let mut bsz = in_len + 32;
-    if let Err(e) = limit.check(bsz) {
-        return StringResult {
-            err: Some(e),
-            out: None,
-        };
-    }
     let mut buf: Vec<u8> = Vec::new();
     if let Err(e) = reserve_exact(&mut buf, bsz) {
         return StringResult {
@@ -151,10 +127,7 @@ pub fn iconv_string(
             if errno == libc::E2BIG && !inp.is_empty() {
                 bsz += in_len;
                 let extra = bsz - buf.len();
-                if let Err(e) = limit
-                    .check(bsz)
-                    .and_then(|()| reserve_exact(&mut buf, extra))
-                {
+                if let Err(e) = reserve_exact(&mut buf, extra) {
                     return StringResult {
                         err: Some(e),
                         out: None,
@@ -214,14 +187,12 @@ pub(crate) fn appendl(
     s: Option<&[u8]>,
     cd: &mut Cd,
     errno: &mut i32,
-    limit: Limit,
 ) -> Result<(), IconvErr> {
     let mut growth = 128usize;
     if let Some(s) = s {
         let mut inp = s;
         while !inp.is_empty() {
             let start = d.buf.len();
-            limit.check(start + growth)?;
             reserve(&mut d.buf, growth)?;
             d.allocated = true;
             d.buf.resize(start + growth, 0);
@@ -250,7 +221,6 @@ pub(crate) fn appendl(
     } else {
         loop {
             let start = d.buf.len();
-            limit.check(start + growth)?;
             reserve(&mut d.buf, growth)?;
             d.allocated = true;
             d.buf.resize(start + growth, 0);
@@ -281,9 +251,8 @@ pub(crate) fn appendc(
     c: u8,
     cd: &mut Cd,
     errno: &mut i32,
-    limit: Limit,
 ) -> Result<(), IconvErr> {
-    appendl(d, Some(&[c]), cd, errno, limit)
+    appendl(d, Some(&[c]), cd, errno)
 }
 
 /// `_php_iconv_strlen()`.
@@ -320,13 +289,7 @@ pub fn strlen(s: &[u8], enc: &[u8]) -> Result<usize, IconvErr> {
 
 /// `_php_iconv_substr()`.  On success returns the `smart_str` (whose
 /// `allocated` flag decides between a string and `false`).
-pub fn substr(
-    s: &[u8],
-    offset: i64,
-    len: i64,
-    enc: &[u8],
-    limit: Limit,
-) -> Result<SmartStr, IconvErr> {
+pub fn substr(s: &[u8], offset: i64, len: i64, enc: &[u8]) -> Result<SmartStr, IconvErr> {
     let total_len = strlen(s, enc)?;
     #[allow(clippy::cast_possible_wrap)]
     let total = total_len as i64;
@@ -392,7 +355,7 @@ pub fn substr(
                 }
             }
             if let Some(cd) = cd2.as_mut() {
-                if appendl(&mut ret, Some(&buf), cd, &mut errno, limit).is_err() {
+                if appendl(&mut ret, Some(&buf), cd, &mut errno).is_err() {
                     break;
                 }
             }
@@ -410,7 +373,7 @@ pub fn substr(
         return Err(e);
     }
     if let Some(cd) = cd2.as_mut() {
-        let _ = appendl(&mut ret, None, cd, &mut errno, limit);
+        let _ = appendl(&mut ret, None, cd, &mut errno);
     }
     Ok(ret)
 }
@@ -422,9 +385,8 @@ pub fn strpos(
     offset: usize,
     enc: &[u8],
     reverse: bool,
-    limit: Limit,
 ) -> Result<Option<usize>, IconvErr> {
-    let conv = iconv_string(needle, UCS4, enc, limit);
+    let conv = iconv_string(needle, UCS4, enc);
     if let Some(e) = conv.err {
         return Err(e);
     }

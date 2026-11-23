@@ -539,7 +539,7 @@ fn replace_common(vm: &mut Vm, a: &mut Args, base_opts: u32, callable: bool) -> 
             pos += 1;
         }
     }
-    crate::mem::result(vm, crate::mem::zstr(len), bytes(out))
+    Ok(bytes(out))
 }
 
 fn mb_ereg_replace(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -617,7 +617,7 @@ fn mb_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     // The last element.
     let _ = t.push(bytes(cut(s, chunk, len)));
-    crate::mem::result(vm, crate::mem::zstr(len), Value::Array(out))
+    Ok(Value::Array(out))
 }
 
 fn mb_ereg_match(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

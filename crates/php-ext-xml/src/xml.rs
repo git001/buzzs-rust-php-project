@@ -116,7 +116,6 @@ struct VmHandlers<'a> {
     state: &'a ParserState,
     this: Value,
     pending: Option<Throw>,
-    budget: Rc<Budget>,
 }
 
 impl VmHandlers<'_> {
@@ -150,9 +149,7 @@ impl XmlHandlers for VmHandlers<'_> {
     /// soft memory limit was crossed; the VM raises the fatal error once
     /// `xml_parse()` returns).
     fn aborted(&self) -> bool {
-        self.pending.is_some()
-            || self.budget.exhausted.get().is_some()
-            || php_memlimit::is_pending()
+        self.pending.is_some() || php_memlimit::is_pending()
     }
 
     fn start_element(&mut self, name: &[u8], attributes: &[(Vec<u8>, Vec<u8>)]) {
@@ -328,83 +325,12 @@ fn entry_value(entry: StructEntry) -> Value {
 struct RefSink {
     data: PhpRef,
     info: Option<PhpRef>,
-    budget: Rc<Budget>,
-}
-
-/// An approximation of the Zend memory manager's `memory_limit` check for
-/// the arrays `xml_parse_into_struct()` builds (the VM does not account
-/// memory): every entry is charged what PHP would allocate for it.
-struct Budget {
-    limit: Option<u64>,
-    used: std::cell::Cell<u64>,
-    /// Size of the allocation that crossed the limit.
-    exhausted: std::cell::Cell<Option<u64>>,
-}
-
-impl Budget {
-    fn new(vm: &Vm, base: u64) -> Self {
-        let limit = u64::try_from(vm.ini_long("memory_limit"))
-            .ok()
-            .filter(|l| *l > 0);
-        Self {
-            limit,
-            used: std::cell::Cell::new(base),
-            exhausted: std::cell::Cell::new(None),
-        }
-    }
-
-    /// Charges `bytes`; returns false once the limit is exceeded.
-    fn charge(&self, bytes: u64) -> bool {
-        if self.exhausted.get().is_some() {
-            return false;
-        }
-        let used = self.used.get().saturating_add(bytes);
-        self.used.set(used);
-        match self.limit {
-            Some(l) if used > l => {
-                self.exhausted.set(Some(bytes));
-                false
-            }
-            _ => true,
-        }
-    }
-}
-
-/// Bytes PHP allocates for a string of `len` bytes (0/1-byte strings are
-/// interned).
-fn string_cost(len: usize) -> u64 {
-    if len <= 1 {
-        0
-    } else {
-        (24 + len as u64 + 1 + 7) & !7
-    }
-}
-
-/// Bytes PHP allocates for one `$values` entry (a small hash table plus
-/// its slot in the packed outer array and its strings).
-fn entry_cost(entry: &StructEntry) -> u64 {
-    let mut total = 56 + 320 + 16;
-    for (_, v) in &entry.fields {
-        total += match v {
-            StructValue::Str(s) => string_cost(s.len()),
-            StructValue::Int(_) => 0,
-            StructValue::Attributes(attrs) => {
-                let n = attrs.len() as u64;
-                56 + n * 32
-                    + n.next_power_of_two() * 4
-                    + attrs
-                        .iter()
-                        .map(|(k, v)| string_cost(k.len()) + string_cost(v.len()))
-                        .sum::<u64>()
-            }
-        };
-    }
-    total
 }
 
 impl StructSink for RefSink {
     fn push(&mut self, entry: StructEntry) -> Option<i64> {
-        if !self.budget.charge(entry_cost(&entry)) {
+        // `ZEND_HAS_OOM()`: the entries are counted as they are built.
+        if php_memlimit::is_pending() {
             return None;
         }
         let v = entry_value(entry);
@@ -478,7 +404,7 @@ impl StructSink for RefSink {
         let Some(info) = &self.info else {
             return false;
         };
-        if !self.budget.charge(16) {
+        if php_memlimit::is_pending() {
             return false;
         }
         with_array(info, |a| {
@@ -515,21 +441,17 @@ fn run_parse(
     vm: &mut Vm,
     obj: &Obj,
     st: &ParserState,
-    data_len: usize,
     f: impl FnOnce(&XmlParser, &mut VmHandlers<'_>, Option<&mut RefSink>) -> Result<i64, XmlError>,
 ) -> VmResult<Result<i64, XmlError>> {
-    let budget = Rc::new(Budget::new(vm, string_cost(data_len)));
     let mut sink = st.data.borrow().clone().map(|data| RefSink {
         data,
         info: st.info.borrow().clone(),
-        budget: Rc::clone(&budget),
     });
     let mut h = VmHandlers {
         vm,
         state: st,
         this: Value::Object(obj.clone()),
         pending: None,
-        budget: Rc::clone(&budget),
     };
     let r = f(&st.parser, &mut h, sink.as_mut());
     // libxml diagnostics are not displayed for ext/xml parsers; drop any.
@@ -537,19 +459,8 @@ fn run_parse(
     if let Some(t) = h.pending {
         return Err(t);
     }
-    if let (Some(bytes), Some(limit)) = (budget.exhausted.get(), budget.limit) {
-        vm.raise(
-            E_ERROR,
-            &format!(
-                "Allowed memory size of {limit} bytes exhausted (tried to allocate {bytes} bytes)"
-            ),
-        )?;
-    }
     Ok(r)
 }
-
-/// `E_ERROR`.
-const E_ERROR: i64 = 1;
 
 fn xml_parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (obj, st) = state_of(vm, a)?;
@@ -558,7 +469,7 @@ fn xml_parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     }
     let data = a.str(1);
     let is_final = a.bool(2);
-    let r = run_parse(vm, &obj, &st, data.len(), |p, h, sink| {
+    let r = run_parse(vm, &obj, &st, |p, h, sink| {
         p.parse(
             data.as_bytes(),
             is_final,
@@ -594,7 +505,7 @@ fn xml_parse_into_struct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         *st.data.borrow_mut() = Some(d);
     }
     let data = a.str(1);
-    let r = run_parse(vm, &obj, &st, data.len(), |p, h, sink| match sink {
+    let r = run_parse(vm, &obj, &st, |p, h, sink| match sink {
         Some(s) => p.parse_into_struct(data.as_bytes(), h, s),
         None => p.parse(data.as_bytes(), true, h, None),
     })?;
@@ -1071,21 +982,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn budget_trips_once_over_limit() {
-        let b = Budget {
-            limit: Some(1000),
-            used: std::cell::Cell::new(0),
-            exhausted: std::cell::Cell::new(None),
-        };
-        assert!(b.charge(600));
-        assert!(!b.charge(600));
-        assert_eq!(b.exhausted.get(), Some(600));
-        assert!(!b.charge(1));
-        assert_eq!(string_cost(1), 0);
-        assert_eq!(string_cost(8), 40);
-    }
-
-    #[test]
     fn slots_are_distinct() {
         let mut seen: Vec<usize> = KINDS.iter().map(|k| slot(*k)).collect();
         seen.sort_unstable();
@@ -1119,11 +1015,6 @@ mod tests {
         let mut sink = RefSink {
             data: data.clone(),
             info: Some(info.clone()),
-            budget: Rc::new(Budget {
-                limit: None,
-                used: std::cell::Cell::new(0),
-                exhausted: std::cell::Cell::new(None),
-            }),
         };
         let mut e = StructEntry::default();
         e.set("tag", StructValue::Str(b"A".to_vec()));

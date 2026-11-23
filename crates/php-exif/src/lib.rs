@@ -45,7 +45,7 @@
 //! (see `tests/fuzz.rs`).
 
 mod avif;
-pub mod budget;
+mod budget;
 pub mod diag;
 pub mod encoding;
 pub mod exif;

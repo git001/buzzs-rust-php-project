@@ -21,7 +21,7 @@ mod ffi;
 mod filter;
 pub mod mime;
 
-pub use crate::core::{iconv_string, Limit, StringResult, ASCII, UCS4};
+pub use crate::core::{iconv_string, StringResult, ASCII, UCS4};
 pub use crate::error::{charset_too_long, show_error, Diagnostic, IconvErr, CSNMAXLEN};
 pub use crate::filter::IconvFilter;
 pub use crate::mime::{Scheme, MIME_DECODE_CONTINUE_ON_ERROR, MIME_DECODE_STRICT};
@@ -226,10 +226,6 @@ pub struct Iconv {
     pub ini: IconvIni,
     /// Core fallbacks.
     pub core: CoreEncodings,
-    /// Optional allocation ceiling (bytes) emulating `memory_limit` for the
-    /// large buffers PHP allocates; exceeding it yields
-    /// [`Diagnostic::OutOfMemory`].
-    pub memory_limit: Option<usize>,
 }
 
 fn too_long(cs: &[u8]) -> bool {
@@ -240,10 +236,6 @@ impl Iconv {
     /// Fresh module state with default settings.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    fn limit(&self) -> Limit {
-        Limit(self.memory_limit)
     }
 
     /// `get_internal_encoding()`.
@@ -303,7 +295,7 @@ impl Iconv {
         if too_long(from) || too_long(to) {
             return Outcome::fail(charset_too_long());
         }
-        let r = iconv_string(s, to, from, self.limit());
+        let r = iconv_string(s, to, from);
         match (r.err, r.out) {
             (None, Some(out)) => Outcome::ok(out),
             (Some(e), _) => Outcome::fail(show_error(e, to, from)),
@@ -344,7 +336,7 @@ impl Iconv {
             Err(d) => return Outcome::fail(d),
         };
         let length = length.unwrap_or_else(|| i64::try_from(s.len()).unwrap_or(i64::MAX));
-        match crate::core::substr(s, offset, length, cs, self.limit()) {
+        match crate::core::substr(s, offset, length, cs) {
             Ok(r) if r.allocated => Outcome::ok(r.into_vec()),
             Ok(_) => Outcome::falsy(),
             Err(e) => Outcome::fail(show_error(e, UCS4, cs)),
@@ -378,10 +370,7 @@ impl Iconv {
         }
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let off = offset as usize;
-        Self::pos_outcome(
-            crate::core::strpos(haystack, needle, off, cs, false, self.limit()),
-            cs,
-        )
+        Self::pos_outcome(crate::core::strpos(haystack, needle, off, cs, false), cs)
     }
 
     /// `iconv_strrpos(string $haystack, string $needle, ?string $encoding = null): int|false`.
@@ -393,10 +382,7 @@ impl Iconv {
             Ok(cs) => cs,
             Err(d) => return Outcome::fail(d),
         };
-        Self::pos_outcome(
-            crate::core::strpos(haystack, needle, 0, cs, true, self.limit()),
-            cs,
-        )
+        Self::pos_outcome(crate::core::strpos(haystack, needle, 0, cs, true), cs)
     }
 
     fn pos_outcome(r: Result<Option<usize>, IconvErr>, cs: &[u8]) -> Outcome<i64> {
@@ -458,7 +444,6 @@ impl Iconv {
             scheme,
             out_charset,
             in_charset,
-            self.limit(),
         ) {
             Ok(v) => Outcome::ok(v),
             Err(e) => Outcome::fail(show_error(e, out_charset, in_charset)),
@@ -471,7 +456,7 @@ impl Iconv {
             Ok(cs) => cs,
             Err(d) => return Outcome::fail(d),
         };
-        match mime::mime_decode(s, cs, mode, self.limit()) {
+        match mime::mime_decode(s, cs, mode) {
             Ok(d) => Outcome::ok(d.text.into_vec()),
             Err(e) => Outcome::fail(show_error(e, cs, b"???")),
         }
@@ -497,7 +482,7 @@ impl Iconv {
         let mut rest = s;
         // `while (enc_str_len_tmp > 0 && !ZEND_HAS_OOM())`
         while !rest.is_empty() && !crate::core::oom_pending() {
-            let decoded = match mime::mime_decode(rest, cs, mode, self.limit()) {
+            let decoded = match mime::mime_decode(rest, cs, mode) {
                 Ok(d) => d,
                 Err(e) => return Outcome::fail(show_error(e, cs, b"???")),
             };
@@ -613,7 +598,7 @@ impl Iconv {
         if !data.is_empty() {
             let out_cs = self.output_encoding();
             let in_cs = self.internal_encoding();
-            let r = iconv_string(data, out_cs, in_cs, self.limit());
+            let r = iconv_string(data, out_cs, in_cs);
             if let Some(e) = r.err {
                 diagnostic = Some(show_error(e, out_cs, in_cs));
             }

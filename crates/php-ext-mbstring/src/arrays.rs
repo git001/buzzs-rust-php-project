@@ -126,17 +126,13 @@ fn mb_convert_encoding(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             };
             let t = c.array(vm, &arr)?;
             let v = t.map_or(Value::Null, |t| Value::Array(ZArray::from_table(t)));
-            mem::result(vm, mem::value_size(&Value::Array(arr)), v)
+            Ok(v)
         }
         other => {
             let s = vm.value_to_string(&other)?;
             let r = state::with(|st| st.convert_encoding_value(s.as_bytes(), to_enc, &from_list));
             state::flush_diagnostics(vm)?;
-            mem::result(
-                vm,
-                mem::zstr(s.as_bytes().len()),
-                r.map_or(Value::Bool(false), bytes),
-            )
+            Ok(r.map_or(Value::Bool(false), bytes))
         }
     }
 }
@@ -467,7 +463,7 @@ fn mb_convert_variables(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let mut strings = Vec::new();
     let mut recursive = false;
     let multi = match &from {
-        OwnedList::Array { items, .. } => items.len() > 1,
+        OwnedList::Array { list, .. } => list.len() > 1,
         OwnedList::Str(s) => s.contains(&b',') || s.eq_ignore_ascii_case(b"auto"),
     };
     if multi {

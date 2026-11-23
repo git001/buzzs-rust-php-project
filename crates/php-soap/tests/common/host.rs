@@ -777,16 +777,6 @@ impl SoapHost for TestHost {
             .map(|p| p.to_string_lossy().into_owned())
     }
 
-    fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
-        let limit = self.memory_limit();
-        if limit > 0 && bytes > limit {
-            return Err(RuntimeError::Fatal(format!(
-                "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
-            )));
-        }
-        Ok(())
-    }
-
     fn now(&mut self) -> i64 {
         self.now
     }

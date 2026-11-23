@@ -143,7 +143,6 @@ pub struct EncodeCtx<'h> {
     cur_uniq_ref: i64,
     decode_depth: u32,
     protected: HashSet<usize>,
-    mem: usize,
     /// The exception a `zend_value_error()` raised while encoding goes on
     /// (`EG(exception)`): the last one thrown wins, like the exception
     /// that ends up in `EG(exception)` when errors chain.
@@ -411,7 +410,6 @@ impl<'h> EncodeCtx<'h> {
             cur_uniq_ref: 0,
             decode_depth: 0,
             protected: HashSet::new(),
-            mem: 0,
             pending_error: None,
         }
     }
@@ -953,8 +951,7 @@ impl<'h> EncodeCtx<'h> {
         if self.decode_depth >= SOAP_MAX_DECODE_DEPTH {
             bail!("Encoding: Nesting level too deep");
         }
-        self.mem += 64 + doc.content(data).len();
-        self.host.memory_check(self.mem)?;
+        self.host.memory_check()?;
         self.decode_depth += 1;
         let r = self.to_zval(encode, doc, data);
         self.decode_depth -= 1;

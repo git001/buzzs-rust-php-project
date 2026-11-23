@@ -27,7 +27,11 @@ fn buff_to_buff_compress(
     work_factor: i32,
 ) -> std::result::Result<Vec<u8>, i32> {
     let mut z = RawStream::compress_init(block_size, work_factor)?;
-    let mut dest = vec![0u8; dest_len];
+    let mut dest = Vec::new();
+    if !fallible_resize(&mut dest, dest_len) {
+        z.end();
+        return Err(crate::BZ_MEM_ERROR);
+    }
     let step = z.compress(source, &mut dest, BZ_FINISH);
     z.end();
     match step.status {

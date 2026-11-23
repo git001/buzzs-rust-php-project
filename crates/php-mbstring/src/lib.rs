@@ -56,4 +56,7 @@ pub mod unicode;
 pub use convert::{ConvertBuf, ErrorMode, BAD_INPUT};
 pub use encoding::{Encoding, EncodingNo};
 pub use error::{Diagnostic, Level, MbError, MbResult};
-pub use state::{EncodingList, HttpInput, Language, MbState, SubstituteArg, SubstituteChar};
+pub use state::{
+    ArrayEntry, EncodingArray, EncodingList, HttpInput, Language, MbState, SubstituteArg,
+    SubstituteChar,
+};

@@ -61,49 +61,9 @@ fn fail(vm: &mut Vm, a: &Args, e: &HashError) -> Throw {
         return t;
     }
     if let Some(bytes) = e.out_of_memory {
-        return out_of_memory(vm, bytes);
+        return vm.out_of_memory(bytes);
     }
     throw_error(vm, &a.func_name(), e)
-}
-
-/// Raises PHP's fatal error for an allocation of `bytes` that does not fit
-/// in `memory_limit`.
-fn out_of_memory(vm: &mut Vm, bytes: usize) -> Throw {
-    let msg = match php_memlimit::try_reserve(bytes) {
-        Err(over) => over.to_string(),
-        // No limit configured (or it fits by accounting but the OS refused).
-        Ok(()) => format!("Out of memory (tried to allocate {bytes} bytes)"),
-    };
-    // Handled here, so the VM's post-call poll does not raise it again.
-    let _ = php_memlimit::take();
-    vm.fatal(&msg)
-}
-
-/// Emulates a non-fallible `emalloc(bytes)` before the library does the
-/// work. Beyond the hard memory ceiling a real allocation is attempted, so
-/// the CLI's hard-limit handler reports `Hard memory limit of N bytes
-/// exhausted` and terminates, as PHP does; below it, a size that does not
-/// fit in `memory_limit` raises the `Allowed memory size` fatal right away
-/// (PHP grants the block and raises the same fatal at its next check, after
-/// doing the doomed work).
-fn emalloc_check(vm: &mut Vm, bytes: usize) -> VmResult<()> {
-    let beyond_hard = php_memlimit::hard_limit()
-        .is_some_and(|hard| bytes > hard.saturating_sub(php_memlimit::usage()));
-    if beyond_hard {
-        // Rust refuses capacities above `isize::MAX` without asking the
-        // allocator, but any such size is far beyond every hard ceiling.
-        let probe_size = bytes.min(isize::MAX.unsigned_abs());
-        let mut probe: Vec<u8> = Vec::new();
-        if probe.try_reserve_exact(probe_size).is_err() {
-            return Err(out_of_memory(vm, bytes));
-        }
-        drop(std::hint::black_box(probe));
-    }
-    if let Err(over) = php_memlimit::try_reserve(bytes) {
-        let _ = php_memlimit::take();
-        return Err(vm.fatal(&over.to_string()));
-    }
-    Ok(())
 }
 
 fn emit(vm: &mut Vm, diags: Vec<Diagnostic>) -> VmResult<()> {
@@ -354,7 +314,7 @@ fn hash_pbkdf2(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         if let Some(size) =
             php_hash::hash_pbkdf2_alloc_size(a.str(0).as_bytes(), a.int(4), a.bool(5))
         {
-            emalloc_check(vm, size)?;
+            php_memlimit::emalloc_check(size)?;
         }
     }
     match php_hash::hash_pbkdf2(

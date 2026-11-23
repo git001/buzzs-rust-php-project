@@ -197,9 +197,83 @@ pub enum SubstituteArg<'a> {
 pub enum EncodingList<'a> {
     /// A comma-separated string (`php_mb_parse_encoding_list`).
     Str(&'a [u8]),
-    /// An array of names (`php_mb_parse_encoding_array`); the VM converts
-    /// each element to a string first.
-    Array(&'a [Vec<u8>]),
+    /// An array of names (`php_mb_parse_encoding_array`), resolved as
+    /// the caller converted its elements.
+    Array(&'a EncodingArray),
+}
+
+/// One element of an encoding-list array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayEntry {
+    /// `"auto"`: the language's detection order.
+    Auto,
+    /// A known encoding.
+    Encoding(&'static Encoding),
+}
+
+/// An encoding-list array resolved element by element, as
+/// `php_mb_parse_encoding_array` does: the list keeps the encodings, not
+/// the names (one pointer per element); only the first invalid name is
+/// kept, for the error, and nothing after it is read.
+#[derive(Debug, Clone, Default)]
+pub struct EncodingArray {
+    entries: Vec<ArrayEntry>,
+    invalid: Option<Vec<u8>>,
+}
+
+impl EncodingArray {
+    /// An empty list.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The list of `names` (tests and callers that have them at hand).
+    #[must_use]
+    pub fn from_names<'n>(names: impl IntoIterator<Item = &'n [u8]>) -> Self {
+        let mut list = Self::new();
+        for name in names {
+            if !list.push(name) {
+                break;
+            }
+        }
+        list
+    }
+
+    /// Room for one more element, checked against `memory_limit` (the
+    /// array is script-sized).
+    ///
+    /// # Errors
+    /// The recorded violation.
+    pub fn reserve(&mut self) -> Result<(), php_memlimit::OverLimit> {
+        php_memlimit::TryGrow::try_grow(&mut self.entries, 1)
+    }
+
+    /// Resolves the element `name`; `false` when it names no encoding
+    /// (the caller then stops converting elements).
+    pub fn push(&mut self, name: &[u8]) -> bool {
+        if name.eq_ignore_ascii_case(b"auto") {
+            self.entries.push(ArrayEntry::Auto);
+        } else if let Some(enc) = encoding::by_cname(name) {
+            self.entries.push(ArrayEntry::Encoding(enc));
+        } else {
+            self.invalid = Some(name.to_vec());
+            return false;
+        }
+        true
+    }
+
+    /// The number of elements read (the invalid one included).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len() + usize::from(self.invalid.is_some())
+    }
+
+    /// Whether no element was read.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// The per-request state of the mbstring extension.
@@ -826,29 +900,31 @@ impl MbState {
     /// `php_mb_parse_encoding_array`.
     pub(crate) fn parse_encoding_array(
         &self,
-        items: &[Vec<u8>],
+        items: &EncodingArray,
         arg_num: u32,
         arg_name: &'static str,
     ) -> MbResult<Vec<&'static Encoding>> {
+        if let Some(name) = &items.invalid {
+            return Err(MbError::arg_value(
+                arg_num,
+                arg_name,
+                format!(
+                    "contains invalid encoding \"{}\"",
+                    String::from_utf8_lossy(name)
+                ),
+            ));
+        }
         let mut list = Vec::new();
         let mut included_auto = false;
-        for item in items {
-            if item.eq_ignore_ascii_case(b"auto") {
-                if !included_auto {
-                    included_auto = true;
-                    list.extend(self.language.detect_order.iter().map(|&n| encoding::get(n)));
+        for entry in &items.entries {
+            match *entry {
+                ArrayEntry::Auto => {
+                    if !included_auto {
+                        included_auto = true;
+                        list.extend(self.language.detect_order.iter().map(|&n| encoding::get(n)));
+                    }
                 }
-            } else if let Some(enc) = encoding::by_cname(item) {
-                list.push(enc);
-            } else {
-                return Err(MbError::arg_value(
-                    arg_num,
-                    arg_name,
-                    format!(
-                        "contains invalid encoding \"{}\"",
-                        String::from_utf8_lossy(item)
-                    ),
-                ));
+                ArrayEntry::Encoding(enc) => list.push(enc),
             }
         }
         Ok(list)

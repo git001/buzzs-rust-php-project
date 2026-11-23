@@ -268,12 +268,15 @@ impl DeflateContext {
             return Ok(Vec::new());
         }
         let flush = as_i32(flush_mode);
-        let mut out = vec![0u8; buffer_size_guess(data.len()).max(64)];
+        let mut out = Vec::new();
+        if !fallible_resize(&mut out, buffer_size_guess(data.len()).max(64)) {
+            return Err(oom_error());
+        }
         let mut used = 0usize;
         let mut pos = 0usize;
         let status = loop {
-            if used == out.len() {
-                out.resize(out.len() + 64, 0);
+            if used == out.len() && !fallible_resize(&mut out, used + 64) {
+                return Err(oom_error());
             }
             let step = self.z.deflate(&data[pos..], &mut out[used..], flush);
             pos += step.consumed;

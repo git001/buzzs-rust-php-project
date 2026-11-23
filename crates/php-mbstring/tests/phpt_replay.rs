@@ -21,7 +21,7 @@
 
 mod common;
 use common::{coerce_int, coerce_str, dispatch, parse, unhex, values, V};
-use php_mbstring::{EncodingList, Level, MbState};
+use php_mbstring::{EncodingArray, EncodingList, Level, MbState};
 use std::collections::BTreeMap;
 
 /// Tests whose 8.3 recording differs from php-src master behaviour.
@@ -220,11 +220,12 @@ fn convert_variables(st: &mut MbState, args: &[V]) -> Option<(V, V)> {
     let from = match args.get(1)? {
         V::S(x) => EncodingList::Str(x),
         v @ V::K(_) => {
-            from_vals = values(v)
+            let names = values(v)
                 .iter()
                 .filter_map(coerce_str)
                 .map(|x| common::s(&x).to_vec())
                 .collect::<Vec<_>>();
+            from_vals = EncodingArray::from_names(names.iter().map(Vec::as_slice));
             EncodingList::Array(&from_vals)
         }
         _ => return None,
@@ -259,11 +260,12 @@ fn replay(st: &mut MbState, f: &str, args: &[V]) -> Option<V> {
             let from = match args.get(2) {
                 Some(V::S(x)) => Some(EncodingList::Str(x)),
                 Some(v @ (V::K(_) | V::A(_))) => {
-                    from_vals = values(v)
+                    let names = values(v)
                         .iter()
                         .filter_map(coerce_str)
                         .map(|x| common::s(&x).to_vec())
                         .collect::<Vec<_>>();
+                    from_vals = EncodingArray::from_names(names.iter().map(Vec::as_slice));
                     Some(EncodingList::Array(&from_vals))
                 }
                 _ => None,

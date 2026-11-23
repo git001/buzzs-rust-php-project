@@ -716,21 +716,11 @@ impl SoapHost for VmHost<'_> {
         r.map(MethodCall::Returned).map_err(|t| to_rt(self.vm, t))
     }
 
-    fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
+    fn memory_check(&mut self) -> RtResult<()> {
         // The accounting allocator records crossing `memory_limit`; the VM
         // only notices at its next safe point, so long native loops poll
         // here (PHP raises the fatal inside the allocator).
-        let mut msg = php_memlimit::take().map(|over| over.to_string());
-        if msg.is_none() {
-            if let Some(limit) = php_memlimit::limit() {
-                if limit > 0 && bytes > limit {
-                    msg = Some(format!(
-                        "Allowed memory size of {limit} bytes exhausted (tried to allocate 65536 bytes)"
-                    ));
-                }
-            }
-        }
-        let Some(msg) = msg else {
+        let Some(msg) = php_memlimit::take().map(|over| over.to_string()) else {
             return Ok(());
         };
         if server_context() {
@@ -748,7 +738,7 @@ impl SoapHost for VmHost<'_> {
         if bytes > 0 {
             let _ = php_memlimit::try_reserve(bytes);
         }
-        self.memory_check(0)
+        self.memory_check()
     }
 
     fn load_resource(&mut self, url: &str, context: Option<&Value>) -> Result<Vec<u8>, String> {

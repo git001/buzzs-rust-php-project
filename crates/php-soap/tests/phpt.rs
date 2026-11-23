@@ -19,7 +19,8 @@ use common::{output_matches, phpt_sections, soap_tests_dir, with_big_stack, Test
 
 /// Tests whose scripts need engine features the test interpreter lacks
 /// (sessions, references, `__get`/`__set`, Reflection, `unserialize`,
-/// visibility-mangled dumps, pcntl, process spawning, generators, …).
+/// visibility-mangled dumps, pcntl, process spawning, generators,
+/// `memory_limit` (the `oom_*` tests need the counting allocator), …).
 /// They are exercised by the phpt runner once the extension is wired into
 /// the VM.
 const ENGINE_DEPENDENT: &[&str] = &[
@@ -61,6 +62,8 @@ const ENGINE_DEPENDENT: &[&str] = &[
     "oom_soapclient_call.phpt",
     "oom_soapclient_soapcall.phpt",
     "oom_soapserver_handle_array.phpt",
+    "oom_soapserver_handle_headers.phpt",
+    "oom_soapserver_handle_parameters.phpt",
     "server003.phpt",
     "server009.phpt",
     "server030.phpt",

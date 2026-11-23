@@ -80,6 +80,13 @@ Details: [crates/php-memlimit/INTEGRATION.md](crates/php-memlimit/INTEGRATION.md
   `femalloc`); a soft-limit overrun is raised after the method returns,
   only the hard ceiling fails an allocation. Test: gh25118.
   Where: `crates/php-dom/src/lexbor.rs`.
+- **exif keeps no JPEG sections.** `exif_read_data()` hands each JPEG
+  section to its handler and frees it; php-src keeps every section of the
+  file until the call ends. A file of many small sections
+  (oom_exif_scan_jpeg_header: 2 MiB of empty markers, `memory_limit=8M`)
+  ends with the "Allowed memory size" fatal in php-src and is read in Buzz.
+  Where: `crates/php-exif/src/exif.rs`. Test: `oom_phpt_replays` in
+  `crates/php-exif/tests/phpt_replay.rs`.
 - **Address-space cap.** `php` and `php-cgi` set `RLIMIT_AS` to the larger
   of 4 GiB and 75 % of RAM plus swap (`PHPRUST_MAX_AS_MB` overrides), so
   runaway native code fails instead of exhausting the machine; C PHP has

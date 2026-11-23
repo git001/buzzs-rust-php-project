@@ -229,12 +229,10 @@ pub trait SoapHost: RuntimeContext {
     /// `zend_call_method_if_exists_ex` (honours `__call`).
     fn call_method(&mut self, obj: &Obj, name: &[u8], args: &[Value]) -> RtResult<MethodCall>;
 
-    /// Memory accounting: `bytes` is the estimated size of the data the
-    /// current SOAP operation holds. The engine returns its memory-limit
-    /// fatal error when the limit would be exceeded (PHP's
-    /// `Allowed memory size of N bytes exhausted`).
-    fn memory_check(&mut self, bytes: usize) -> RtResult<()> {
-        let _ = bytes;
+    /// `ZEND_HAS_OOM()` for long native loops: the engine returns its
+    /// memory-limit fatal error (`Allowed memory size of N bytes
+    /// exhausted`) once an allocation crossed the limit.
+    fn memory_check(&mut self) -> RtResult<()> {
         Ok(())
     }
 

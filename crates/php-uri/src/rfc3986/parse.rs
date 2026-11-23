@@ -119,8 +119,13 @@ impl Parser<'_> {
         self.s.get(i).copied()
     }
 
+    /// Keeps a path segment. Past `memory_limit` (one segment per `/`, so
+    /// the input sizes the list) the segment is dropped and the violation
+    /// stays recorded: the caller raises the fatal instead of using the URI.
     fn push_segment(&mut self, first: usize, after: usize) {
-        self.uri.segments.push(self.s[first..after].to_vec());
+        if php_memlimit::TryGrow::try_grow(&mut self.uri.segments, 1).is_ok() {
+            self.uri.segments.push(self.s[first..after].to_vec());
+        }
     }
 
     fn pct_encoded(&self, i: usize) -> R {

@@ -21,7 +21,6 @@ mod exif;
 mod image;
 mod io;
 
-use php_exif::budget::MemoryLimit;
 use php_exif::{Diagnostic, Level};
 use php_runtime::Value;
 use php_support::ini::{Access, IniDirective, ModifyHandler};
@@ -58,29 +57,16 @@ pub fn register_image_handler(m: &mut ModuleBuilder<'_>, handler: &'static Image
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Exif;
 
-/// The `memory_limit` the parsers must respect (`None` = unlimited), with
-/// the script's current usage from `php-memlimit`.
-pub(crate) fn memory_limit(_vm: &Vm) -> Option<MemoryLimit> {
-    php_memlimit::limit().map(|limit| MemoryLimit {
-        limit: limit as u64,
-        used: php_memlimit::usage() as u64,
-    })
-}
-
-/// Raises the library diagnostics in order, as `func(): message`; the
-/// out-of-memory `E_ERROR` aborts the script.
+/// Raises the library diagnostics in order, as `func(): message`.
 pub(crate) fn emit(vm: &mut Vm, diags: &[Diagnostic]) -> VmResult<()> {
     // The real allocations crossed `memory_limit` while parsing: the stream
     // adapter stopped feeding the parser, so its late diagnostics are
     // artefacts; PHP would have died at that allocation.
-    if let Some(over) = php_memlimit::take() {
-        return Err(vm.fatal(&over.to_string()));
-    }
+    php_memlimit::poll()?;
     for d in diags {
         match d.level {
             Level::Warning => vm.php_warning_bytes(&d.message)?,
             Level::Notice => vm.php_error_bytes(Level::Notice.code(), &d.message)?,
-            Level::Error => return Err(vm.fatal(&d.message_lossy())),
         }
     }
     Ok(())

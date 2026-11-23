@@ -138,6 +138,9 @@ pub(crate) fn validation_error(vm: &mut Vm, e: &UrlValidationError) -> VmResult<
 pub(crate) fn validation_errors(vm: &mut Vm, errors: &[UrlValidationError]) -> VmResult<Value> {
     let mut ht = HashTable::with_capacity(errors.len());
     for e in errors {
+        // Each error copies the rest of the input as its context
+        // (quadratic in the input, as in php-src): stop at the limit.
+        php_memlimit::poll()?;
         let v = validation_error(vm, e)?;
         let _ = ht.push(v);
     }

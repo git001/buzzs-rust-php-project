@@ -447,6 +447,34 @@ pub fn would_fit(bytes: usize) -> bool {
     current().would_fit(bytes)
 }
 
+/// An `emalloc(bytes)` that a library would make unconditionally, checked
+/// before the library does the work (bcmath's `bc_num`, hash's `pbkdf2`
+/// output): a size past the hard ceiling is really allocated, so the hard
+/// ceiling's handler reacts as `zend_mm_hard_limit_error` does (GH-17398);
+/// below it the size is checked against `memory_limit` like any growth.
+/// php-src grants such a block and raises the fatal at its next check,
+/// after the doomed work; this raises it before.
+///
+/// # Errors
+///
+/// The recorded [`OverLimit`], also when the system refuses the block.
+pub fn emalloc_check(bytes: usize) -> Result<(), OverLimit> {
+    let beyond_hard = hard_limit().is_some_and(|hard| bytes > hard.saturating_sub(usage()));
+    if beyond_hard {
+        // Rust refuses capacities above `isize::MAX` without asking the
+        // allocator, but any such size is far beyond every hard ceiling.
+        let mut probe: Vec<u8> = Vec::new();
+        if probe
+            .try_reserve_exact(bytes.min(isize::MAX.unsigned_abs()))
+            .is_err()
+        {
+            return Err(refused(bytes));
+        }
+        drop(std::hint::black_box(probe));
+    }
+    try_reserve(bytes)
+}
+
 /// [`CountingAlloc::set_hard_limit_handler`] for the whole process: on
 /// [`GLOBAL`] and on every thread's own allocator, also one attached before.
 pub fn set_hard_limit_handler(handler: HardLimitHandler) -> bool {

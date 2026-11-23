@@ -4,7 +4,7 @@
 //! `getimagesizefromstring()`, `image_type_to_mime_type()`,
 //! `image_type_to_extension()`, `iptcparse()` and `iptcembed()`.
 
-use php_exif::imagesize::{getimagesize_limited, getimagesizefromstring_limited};
+use php_exif::imagesize;
 use php_exif::ImageSizeOutcome;
 use php_ext_streams::{bridge, res};
 use php_runtime::{Value, ZArray, ZStr};
@@ -12,8 +12,8 @@ use php_streams::wrapper::{REPORT_ERRORS, STREAM_MUST_SEEK};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
+use crate::emit;
 use crate::io::StreamIo;
-use crate::{emit, memory_limit};
 
 /// Finishes `php_getimagesize_from_stream()`: fills `$image_info`, raises
 /// the diagnostics and returns the result array (or `false`).
@@ -38,7 +38,6 @@ fn getimagesize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if path.is_empty() {
         return Err(vm.throw("ValueError", php_streams::open::EMPTY_PATH_ERROR));
     }
-    let memory = memory_limit(vm);
     let out = bridge::run(vm, || {
         let mut opened = None;
         let mut s = php_streams::open::open_wrapper(
@@ -48,7 +47,7 @@ fn getimagesize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             &mut opened,
             None,
         )?;
-        let r = getimagesize_limited(StreamIo(&mut s), &path, want_info, memory);
+        let r = imagesize::getimagesize(StreamIo(&mut s), &path, want_info);
         s.close();
         Some(r)
     })?;
@@ -65,7 +64,7 @@ fn getimagesizefromstring(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if want_info {
         vm.try_array_init_arg(a, 1)?;
     }
-    let out = getimagesizefromstring_limited(data.as_bytes(), want_info, memory_limit(vm));
+    let out = imagesize::getimagesizefromstring(data.as_bytes(), want_info);
     finish(vm, a, &out)
 }
 

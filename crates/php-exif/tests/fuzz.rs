@@ -98,18 +98,10 @@ fn exercise(data: &[u8]) {
             required_sections: None,
             as_arrays: arrays,
             read_thumbnail: thumb,
-            memory: None,
         };
         let _ = exif_read_data(Cursor::new(data), &origin, &opts, &cfg, &BuiltinConverter);
     }
-    let _ = exif_thumbnail(
-        Cursor::new(data),
-        &origin,
-        true,
-        None,
-        &cfg,
-        &BuiltinConverter,
-    );
+    let _ = exif_thumbnail(Cursor::new(data), &origin, true, &cfg, &BuiltinConverter);
     let _ = exif_imagetype(Cursor::new(data), b"x");
     let o = getimagesizefromstring(data, true);
     let _ = o.to_value();

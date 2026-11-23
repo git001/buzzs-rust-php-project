@@ -138,8 +138,10 @@ fn setcookie_common(vm: &mut Vm, a: &Args, raw: bool) -> VmResult<Value> {
     }
     validate(vm, a, &func, raw, &c)?;
     let value = if a.has(1) { a.str(1) } else { ZStr::from("") };
-    check_memory(vm, &value, raw)?;
     let line = cookie_line(&a.str(0), &value, &c, raw);
+    // The value's URL-encoded copy is counted as it grows; past the limit
+    // the header is not sent (the fatal leaves this call).
+    php_memlimit::poll()?;
     // `sapi_header_op()` fails (with its warning) once headers were sent.
     let sent = vm.headers_sent;
     vm.call_value(
@@ -231,55 +233,6 @@ fn cookie_line(name: &ZStr, value: &ZStr, c: &Cookie, raw: bool) -> Vec<u8> {
         buf.extend_from_slice(b"; Partitioned");
     }
     buf
-}
-
-/// `memory_limit` in bytes (`None` = unlimited).
-fn memory_limit(vm: &Vm) -> Option<u64> {
-    let raw = vm.ini_string("memory_limit")?;
-    let s = std::str::from_utf8(&raw).ok()?.trim();
-    let (digits, mult) = match s.as_bytes().last()? {
-        b'k' | b'K' => (&s[..s.len() - 1], 1u64 << 10),
-        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
-        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
-        _ => (s, 1),
-    };
-    let n: i64 = digits.trim().parse().ok()?;
-    u64::try_from(n)
-        .ok()
-        .filter(|&n| n > 0)
-        .map(|n| n.saturating_mul(mult))
-}
-
-/// Models the allocations of building the `Set-Cookie` header (the VM
-/// does not account memory): the value, its URL-encoded copy and the
-/// header copy on top of the idle 2 MiB heap must fit in `memory_limit`,
-/// else the engine's out-of-memory fatal error is raised.
-fn check_memory(vm: &mut Vm, value: &ZStr, raw: bool) -> VmResult<()> {
-    let Some(limit) = memory_limit(vm) else {
-        return Ok(());
-    };
-    let encoded: u64 = if raw {
-        value.len() as u64
-    } else {
-        value
-            .as_bytes()
-            .iter()
-            .map(|&c| {
-                if c.is_ascii_alphanumeric() || b"-_.~".contains(&c) {
-                    1
-                } else {
-                    3
-                }
-            })
-            .sum()
-    };
-    let need = (2u64 << 20) + value.len() as u64 + 2 * encoded;
-    if need > limit {
-        return Err(vm.fatal(&format!(
-            "Allowed memory size of {limit} bytes exhausted (tried to allocate {encoded} bytes)"
-        )));
-    }
-    Ok(())
 }
 
 fn setcookie(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {

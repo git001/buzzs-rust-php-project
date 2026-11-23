@@ -10,7 +10,6 @@ use php_vm::ext::{acc, class_flags, Args, ClassBuilder, ClassHooks, ModuleBuilde
 use php_vm::Vm;
 
 use crate::common::{self, bytes, int_or_null, opt_bytes, opt_int, raw_prop, str_or_null, throw};
-use crate::memory;
 
 /// `Uri\Rfc3986\Uri`.
 pub(crate) const URI_CLASS: &str = api::CLASS_NAME;
@@ -74,7 +73,10 @@ fn base_arg(a: &Args, n: usize) -> Option<Rfc3986Uri> {
     }
 }
 
+/// A library result, after the memory check: a parse cut short at
+/// `memory_limit` raises the fatal, not the library's error.
 fn lib<T>(vm: &mut Vm, r: Result<T, UriError>) -> VmResult<T> {
+    php_memlimit::poll()?;
     r.map_err(|e| throw(vm, &e))
 }
 
@@ -85,7 +87,6 @@ fn construct(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     if state_of(&this).is_some() {
         return Err(common::throw_reinit(vm, URI_CLASS));
     }
-    memory::check(vm, memory::rfc3986(a.str(0).as_bytes()))?;
     let base = base_arg(a, 1);
     let uri = Rfc3986Uri::new(a.str(0).as_bytes(), base.as_ref());
     let uri = lib(vm, uri)?;
@@ -97,7 +98,6 @@ fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     // `object_init_ex()` happens before parsing.
     let cls = common::class(vm, URI_CLASS)?;
     let o = vm.new_object(&cls)?;
-    memory::check(vm, memory::rfc3986(a.str(0).as_bytes()))?;
     let base = base_arg(a, 1);
     match Rfc3986Uri::parse(a.str(0).as_bytes(), base.as_ref()) {
         Some(uri) => {
@@ -110,19 +110,10 @@ fn parse(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 
 // ------------------------------------------------------------ getters
 
-/// What `$this` holds (see [`memory`]).
-fn held(u: &Rfc3986Uri) -> u64 {
-    memory::rfc3986(&u.to_raw_string())
-}
-
 macro_rules! getters {
-    ($($name:ident($normalized:expr) => $body:expr;)*) => {
+    ($($name:ident => $body:expr;)*) => {
         $(fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let u = this(vm, a)?;
-            if $normalized {
-                // Normalization works on a full copy of the URI.
-                memory::check(vm, 2 * held(&u))?;
-            }
             #[allow(clippy::redundant_closure_call)]
             Ok(($body)(&u))
         })*
@@ -130,27 +121,27 @@ macro_rules! getters {
 }
 
 getters! {
-    get_scheme(true) => |u: &Rfc3986Uri| opt_bytes(u.scheme());
-    get_raw_scheme(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_scheme());
-    get_user_info(true) => |u: &Rfc3986Uri| opt_bytes(u.user_info());
-    get_raw_user_info(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_user_info());
-    get_username(true) => |u: &Rfc3986Uri| opt_bytes(u.username());
-    get_raw_username(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_username());
-    get_password(true) => |u: &Rfc3986Uri| opt_bytes(u.password());
-    get_raw_password(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_password());
-    get_host(true) => |u: &Rfc3986Uri| opt_bytes(u.host());
-    get_raw_host(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_host());
-    get_port(true) => |u: &Rfc3986Uri| opt_int(u.port());
-    get_path(true) => |u: &Rfc3986Uri| bytes(u.path());
-    get_raw_path(false) => |u: &Rfc3986Uri| bytes(u.raw_path());
-    get_query(true) => |u: &Rfc3986Uri| opt_bytes(u.query());
-    get_raw_query(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_query());
-    get_fragment(true) => |u: &Rfc3986Uri| opt_bytes(u.fragment());
-    get_raw_fragment(false) => |u: &Rfc3986Uri| opt_bytes(u.raw_fragment());
-    to_string(true) => |u: &Rfc3986Uri| bytes(u.to_string_normalized());
-    to_raw_string(false) => |u: &Rfc3986Uri| bytes(u.to_raw_string());
-    debug_info(false) => |u: &Rfc3986Uri| common::debug_info(u.debug_info());
-    serialize(false) => |u: &Rfc3986Uri| common::serialized(u.serialize());
+    get_scheme => |u: &Rfc3986Uri| opt_bytes(u.scheme());
+    get_raw_scheme => |u: &Rfc3986Uri| opt_bytes(u.raw_scheme());
+    get_user_info => |u: &Rfc3986Uri| opt_bytes(u.user_info());
+    get_raw_user_info => |u: &Rfc3986Uri| opt_bytes(u.raw_user_info());
+    get_username => |u: &Rfc3986Uri| opt_bytes(u.username());
+    get_raw_username => |u: &Rfc3986Uri| opt_bytes(u.raw_username());
+    get_password => |u: &Rfc3986Uri| opt_bytes(u.password());
+    get_raw_password => |u: &Rfc3986Uri| opt_bytes(u.raw_password());
+    get_host => |u: &Rfc3986Uri| opt_bytes(u.host());
+    get_raw_host => |u: &Rfc3986Uri| opt_bytes(u.raw_host());
+    get_port => |u: &Rfc3986Uri| opt_int(u.port());
+    get_path => |u: &Rfc3986Uri| bytes(u.path());
+    get_raw_path => |u: &Rfc3986Uri| bytes(u.raw_path());
+    get_query => |u: &Rfc3986Uri| opt_bytes(u.query());
+    get_raw_query => |u: &Rfc3986Uri| opt_bytes(u.raw_query());
+    get_fragment => |u: &Rfc3986Uri| opt_bytes(u.fragment());
+    get_raw_fragment => |u: &Rfc3986Uri| opt_bytes(u.raw_fragment());
+    to_string => |u: &Rfc3986Uri| bytes(u.to_string_normalized());
+    to_raw_string => |u: &Rfc3986Uri| bytes(u.to_raw_string());
+    debug_info => |u: &Rfc3986Uri| common::debug_info(u.debug_info());
+    serialize => |u: &Rfc3986Uri| common::serialized(u.serialize());
 }
 
 fn get_uri_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -173,13 +164,11 @@ fn get_host_type(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn with(
     vm: &mut Vm,
     a: &Args,
-    extra: u64,
     f: impl FnOnce(&Rfc3986Uri) -> Result<Rfc3986Uri, UriError>,
 ) -> VmResult<Value> {
     let u = this(vm, a)?;
     let cls = php_vm::object::class_of(&a.this_obj()).clone();
     let o = vm.new_object(&cls)?;
-    memory::check(vm, 2 * held(&u) + extra)?;
     let new = lib(vm, f(&u))?;
     set_state(&o, new);
     Ok(Value::Object(o))
@@ -187,64 +176,37 @@ fn with(
 
 fn with_scheme(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = str_or_null(a, 0);
-    with(
-        vm,
-        a,
-        memory::rfc3986(v.as_deref().unwrap_or_default()),
-        |u| u.with_scheme(v.as_deref()),
-    )
+    with(vm, a, |u| u.with_scheme(v.as_deref()))
 }
 
 fn with_user_info(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = str_or_null(a, 0);
-    with(
-        vm,
-        a,
-        memory::rfc3986(v.as_deref().unwrap_or_default()),
-        |u| u.with_user_info(v.as_deref()),
-    )
+    with(vm, a, |u| u.with_user_info(v.as_deref()))
 }
 
 fn with_host(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = str_or_null(a, 0);
-    with(
-        vm,
-        a,
-        memory::rfc3986(v.as_deref().unwrap_or_default()),
-        |u| u.with_host(v.as_deref()),
-    )
+    with(vm, a, |u| u.with_host(v.as_deref()))
 }
 
 fn with_port(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = int_or_null(a, 0);
-    with(vm, a, 0, |u| u.with_port(v))
+    with(vm, a, |u| u.with_port(v))
 }
 
 fn with_path(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = a.str(0);
-    with(vm, a, memory::rfc3986(v.as_bytes()), |u| {
-        u.with_path(v.as_bytes())
-    })
+    with(vm, a, |u| u.with_path(v.as_bytes()))
 }
 
 fn with_query(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = str_or_null(a, 0);
-    with(
-        vm,
-        a,
-        memory::rfc3986(v.as_deref().unwrap_or_default()),
-        |u| u.with_query(v.as_deref()),
-    )
+    with(vm, a, |u| u.with_query(v.as_deref()))
 }
 
 fn with_fragment(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let v = str_or_null(a, 0);
-    with(
-        vm,
-        a,
-        memory::rfc3986(v.as_deref().unwrap_or_default()),
-        |u| u.with_fragment(v.as_deref()),
-    )
+    with(vm, a, |u| u.with_fragment(v.as_deref()))
 }
 
 // ------------------------------------------------------------ the rest
@@ -253,8 +215,6 @@ fn equals(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let u = this(vm, a)?;
     let other = base_arg(a, 0);
     let mode = common::comparison_mode(vm, a.opt(1))?;
-    // Both URIs are normalized for the comparison.
-    memory::check(vm, 2 * (held(&u) + other.as_ref().map_or(0, held)))?;
     Ok(Value::Bool(other.is_some_and(|o| u.equals(&o, mode))))
 }
 
@@ -262,7 +222,6 @@ fn resolve(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let u = this(vm, a)?;
     let cls = php_vm::object::class_of(&a.this_obj()).clone();
     let o = vm.new_object(&cls)?;
-    memory::check(vm, held(&u) + 2 * memory::rfc3986(a.str(0).as_bytes()))?;
     let r = lib(vm, u.resolve(a.str(0).as_bytes()))?;
     set_state(&o, r);
     Ok(Value::Object(o))
@@ -274,9 +233,6 @@ fn unserialize(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         return Err(common::throw_invalid_serialization(vm, URI_CLASS, true));
     }
     let data = a.array(0);
-    if let Some(s) = common::unserialize_uri(&data) {
-        memory::check(vm, memory::rfc3986(&s))?;
-    }
     let uri = common::unserialize_uri(&data)
         .and_then(|s| Rfc3986Uri::unserialize(&s).ok())
         .filter(|_| common::unserialize_props_ok(&data));
@@ -371,7 +327,6 @@ fn b_build(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         _ => None,
     };
     let base = base_arg(a, 0);
-    memory::check(vm, memory::rfc3986(&s("path").unwrap_or_default()))?;
     let uri = Rfc3986Uri::build_from_components(
         base.as_ref(),
         s("scheme").as_deref(),

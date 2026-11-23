@@ -138,15 +138,18 @@ interrupt check.
 Also poll before calling user callbacks from builtins if convenient
 (`oom_soft_limit_in_callback.phpt`); not required for correctness.
 
-## 4. Bindings: replace estimates with `try_reserve`
+## 4. Bindings: checks on the real allocations, no estimates
 
-Every per-binding model of `memory_limit` (search for `"Allowed memory size"`:
-php-ext-stdarr `memory.rs`, php-ext-stdstr, php-ext-pcre `memory.rs`,
-php-ext-json, php-ext-uri `memory.rs`, php-ext-zlib `mem.rs`,
-php-ext-mbstring `mem.rs`, php-exif `budget.rs`, php-ext-hash, php-ext-iconv,
-php-ext-bcmath, php-ext-filter, php-ext-stdmisc `head.rs`, php-soap) should
-stop reading the `memory_limit` INI and raising the fatal itself. Instead,
-before a script-sized allocation:
+No binding reads the `memory_limit` INI or writes the "Allowed memory
+size" message: `OverLimit`'s `Display` in this crate is the only text, and
+the VM reports it with the file and line of the call. The per-binding
+estimates (json, bcmath, iconv, uri, xml, head, soap, zlib/bz2, exif,
+mbstring) were removed in memlimit-fallible stage 5; where they protected
+the process from unchecked growth, that growth is now checked itself
+(zlib/bz2 output buffers, uri path segments and IDNA buffers, exif stream
+reads). gmp's address-space guard is not a limit check (DIFFERENCES.md).
+
+Before an allocation whose size the script picks:
 
 ```rust
 // str_repeat: PHP allocates zend_string header (24) + len + 1
@@ -174,6 +177,18 @@ let out = input.repeat(mult);
   (any size the script picks).
 - Keep the non-limit errors (`Possible integer overflow in memory allocation`)
   in the bindings; they are not limit checks.
+- A library that allocates unconditionally (bcmath's `bc_num`, hash's
+  `pbkdf2` output) checks the size first with
+  `php_memlimit::emalloc_check(bytes)`: past the hard ceiling the block is
+  really allocated, so the hard-limit handler reacts as php-src does;
+  below it, the soft limit. A library that reports a failed block maps it
+  with `Vm::out_of_memory(bytes)`: the memory fatal over the limit, else
+  "Out of memory (tried to allocate N bytes)".
+- A library that is not linked against the VM takes `php-memlimit` itself
+  (php-iconv, php-uri, php-exif, php-zlib, php-bz2): its buffers grow with
+  `TryGrow`, and past the limit it stops with what it has. The binding then
+  calls `php_memlimit::poll()?` before it turns a library error into an
+  exception, so the fatal wins.
 - Memory that php-src obtains from a library's own `malloc` (not `emalloc`)
   is invisible to `memory_limit` and `memory_get_usage()`. Run such code in
   `php_memlimit::uncounted(|| ...)`: huge blocks (> 2 MiB − 4 KiB) allocated

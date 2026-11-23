@@ -3,7 +3,7 @@
 //! `_php_iconv_mime_encode()` / `_php_iconv_mime_decode()` and the
 //! base64 / quoted-printable helpers they rely on.
 
-use crate::core::{appendc, appendl, oom_pending, open, Limit, SmartStr, ASCII};
+use crate::core::{appendc, appendl, oom_pending, open, SmartStr, ASCII};
 use crate::error::{c_prefix, IconvErr};
 use crate::ffi::Cd;
 
@@ -209,7 +209,6 @@ pub fn mime_encode(
     scheme: Scheme,
     out_charset: &[u8],
     enc: &[u8],
-    limit: Limit,
 ) -> Result<Vec<u8>, IconvErr> {
     let out_charset = c_prefix(out_charset);
     let lfchars = c_prefix(lfchars);
@@ -229,14 +228,14 @@ pub fn mime_encode(
     if buf_size > isize::MAX as usize {
         return Err(IconvErr::Alloc(buf_size));
     }
-    limit.check(buf_size)?;
+    php_memlimit::try_reserve(buf_size).map_err(|_| IconvErr::Alloc(buf_size))?;
     let mut buf: Vec<u8> = vec![0; buf_size.min(4096 + fval.len() * 8)];
 
     let mut ret = SmartStr::default();
     let mut errno = 0;
     let mut char_cnt = max_line_len;
 
-    let _ = appendl(&mut ret, Some(fname), &mut cd_pl, &mut errno, limit);
+    let _ = appendl(&mut ret, Some(fname), &mut cd_pl, &mut errno);
     char_cnt = char_cnt.wrapping_sub(fname.len());
     ret.append(b": ");
     char_cnt = char_cnt.wrapping_sub(2);
@@ -382,7 +381,7 @@ pub struct Decoded {
 
 /// `_php_iconv_mime_decode()`.
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Decoded, IconvErr> {
+pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64) -> Result<Decoded, IconvErr> {
     #[allow(clippy::cast_possible_truncation)]
     let mode = mode as i32;
     let strict = mode & 1 != 0;
@@ -409,21 +408,21 @@ pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Deco
 
     macro_rules! app {
         ($slice:expr) => {
-            appendl(&mut ret, Some($slice), &mut cd_pl, &mut errno, limit)
+            appendl(&mut ret, Some($slice), &mut cd_pl, &mut errno)
         };
     }
     macro_rules! app_ew {
         ($end:expr) => {
             match encoded_word {
-                Some(ew) => appendl(&mut ret, Some(&s[ew..$end]), &mut cd_pl, &mut errno, limit),
+                Some(ew) => appendl(&mut ret, Some(&s[ew..$end]), &mut cd_pl, &mut errno),
                 // C passes a NULL source pointer, which flushes the state.
-                None => appendl(&mut ret, None, &mut cd_pl, &mut errno, limit),
+                None => appendl(&mut ret, None, &mut cd_pl, &mut errno),
             }
         };
     }
     macro_rules! appc {
         ($c:expr) => {
-            appendc(&mut ret, $c, &mut cd_pl, &mut errno, limit)
+            appendc(&mut ret, $c, &mut cd_pl, &mut errno)
         };
     }
 
@@ -632,12 +631,8 @@ pub fn mime_decode(s: &[u8], enc: &[u8], mode: i64, limit: Limit) -> Result<Deco
                                 return Err(IconvErr::Unknown(crate::ffi::last_errno()));
                             };
                             err = match cd.as_mut() {
-                                Some(cd) => {
-                                    appendl(&mut ret, Some(&decoded), cd, &mut errno, limit)
-                                        .and_then(|()| {
-                                            appendl(&mut ret, None, cd, &mut errno, limit)
-                                        })
-                                }
+                                Some(cd) => appendl(&mut ret, Some(&decoded), cd, &mut errno)
+                                    .and_then(|()| appendl(&mut ret, None, cd, &mut errno)),
                                 None => Err(IconvErr::Unknown(crate::ffi::last_errno())),
                             };
                             if err.is_err() {

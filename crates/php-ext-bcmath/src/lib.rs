@@ -46,42 +46,13 @@ pub(crate) fn throw(vm: &mut Vm, e: &BcError) -> Throw {
 }
 
 /// The `emalloc(bytes)` of a `bc_num` that cannot fit (bcmath's
-/// allocations are not fallible). Beyond the hard memory ceiling a real
-/// allocation is attempted, so the CLI's hard-limit handler reports `Hard
-/// memory limit of N bytes exhausted` and terminates, as
-/// `zend_mm_hard_limit_error` does (GH-17398); below it, the size does not
-/// fit in `memory_limit` and raises the `Allowed memory size` fatal.
+/// allocations are not fallible; GH-17398 for the hard ceiling).
 #[cold]
 fn out_of_memory(vm: &mut Vm, bytes: usize) -> Throw {
-    let beyond_hard = php_memlimit::hard_limit()
-        .is_some_and(|hard| bytes > hard.saturating_sub(php_memlimit::usage()));
-    if beyond_hard {
-        // Rust refuses capacities above `isize::MAX` without asking the
-        // allocator, but any such size is far beyond every hard ceiling.
-        let probe_size = bytes.min(isize::MAX.unsigned_abs());
-        let mut probe: Vec<u8> = Vec::new();
-        if probe.try_reserve_exact(probe_size).is_ok() {
-            drop(std::hint::black_box(probe));
-        }
+    match php_memlimit::emalloc_check(bytes) {
+        Err(over) => Throw::from(over),
+        Ok(()) => vm.out_of_memory(bytes),
     }
-    let msg = match php_memlimit::try_reserve(bytes) {
-        Err(over) => over.to_string(),
-        Ok(()) => {
-            // No accounting allocator (library tests) or no limit: keep the
-            // `memory_limit` model.
-            let limit = vm
-                .ini_string("memory_limit")
-                .map_or(128 * 1024 * 1024, |raw| {
-                    php_support::ini::parse_quantity(&raw).0
-                });
-            format!(
-                "Allowed memory size of {limit} bytes exhausted (tried to allocate {bytes} bytes)"
-            )
-        }
-    };
-    // Handled here, so the VM's post-call poll does not raise it again.
-    let _ = php_memlimit::take();
-    vm.fatal(&msg)
 }
 
 /// Maps a library result to a VM result.

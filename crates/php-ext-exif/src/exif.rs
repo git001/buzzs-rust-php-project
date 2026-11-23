@@ -11,8 +11,8 @@ use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
 
 use crate::convert::MbConverter;
+use crate::emit;
 use crate::io::{origin_of, StreamIo};
-use crate::{emit, memory_limit};
 
 /// The `exif.*` settings in effect (validated by the `on_modify`
 /// handlers; a value that still fails, e.g. from `-d`, keeps the default).
@@ -98,7 +98,6 @@ fn exif_read_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         }),
         as_arrays: a.bool(2),
         read_thumbnail: a.bool(3),
-        memory: memory_limit(vm),
     };
     let cfg = config(vm);
     let out = with_source(vm, &src, |io, origin| {
@@ -116,10 +115,9 @@ fn exif_read_data(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
 fn exif_thumbnail(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let src = source_arg(vm, a)?;
     let want_dimensions = a.has(1) || a.has(2);
-    let memory = memory_limit(vm);
     let cfg = config(vm);
     let out = with_source(vm, &src, |io, origin| {
-        php_exif::exif_thumbnail(io, origin, want_dimensions, memory, &cfg, &MbConverter)
+        php_exif::exif_thumbnail(io, origin, want_dimensions, &cfg, &MbConverter)
     })?;
     let Some((thumb, diags)) = out else {
         return Ok(Value::Bool(false));

@@ -23,10 +23,7 @@ pub(crate) fn int_or(a: &Args, n: usize, default: i64) -> i64 {
 /// Converts a codec result to the PHP return value.
 fn result(vm: &mut Vm, r: php_zlib::Result<Vec<u8>>) -> VmResult<Value> {
     match r {
-        Ok(v) => {
-            crate::mem::check(vm, crate::mem::zstr(v.len()))?;
-            Ok(bytes(v))
-        }
+        Ok(v) => Ok(bytes(v)),
         Err(e) => zlib_error(vm, &e),
     }
 }
@@ -38,16 +35,10 @@ fn run(vm: &mut Vm, f: impl FnOnce() -> php_zlib::Result<Vec<u8>>) -> VmResult<V
     result(vm, r)
 }
 
-/// The encoders' output pre-allocation, next to the live input.
-fn check_encode(vm: &mut Vm, len: usize) -> VmResult<()> {
-    crate::mem::check(vm, crate::mem::zstr(len) + crate::mem::zlib_guess(len))
-}
-
 macro_rules! encoder {
     ($name:ident, $lib:path, $default:expr) => {
         fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let data = a.str(0);
-            check_encode(vm, data.len())?;
             let level = int_or(a, 1, -1);
             let encoding = int_or(a, 2, $default);
             run(vm, || $lib(data.as_bytes(), level, encoding))
@@ -75,7 +66,6 @@ decoder!(zlib_decode, php_zlib::zlib_decode);
 
 fn zlib_encode(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let data = a.str(0);
-    check_encode(vm, data.len())?;
     let encoding = a.int(1);
     let level = int_or(a, 2, -1);
     run(vm, || {

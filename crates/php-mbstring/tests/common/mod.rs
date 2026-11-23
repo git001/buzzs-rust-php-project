@@ -15,7 +15,7 @@
 
 use php_mbstring::state::SubstituteArg;
 use php_mbstring::strings::StrstrVariant;
-use php_mbstring::{EncodingList, HttpInput, MbError, MbState, SubstituteChar};
+use php_mbstring::{EncodingArray, EncodingList, HttpInput, MbError, MbState, SubstituteChar};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum V {
@@ -154,9 +154,15 @@ pub fn dispatch(st: &mut MbState, f: &str, a: &[V]) -> V {
             }
         };
     }
-    let list_arg = |v: &V| -> (Option<Vec<Vec<u8>>>, Option<Vec<u8>>) {
+    let list_arg = |v: &V| -> (Option<EncodingArray>, Option<Vec<u8>>) {
         match v {
-            V::A(_) | V::K(_) => (Some(strs(v)), None),
+            V::A(_) | V::K(_) => {
+                let names = strs(v);
+                (
+                    Some(EncodingArray::from_names(names.iter().map(Vec::as_slice))),
+                    None,
+                )
+            }
             V::S(x) => (None, Some(x.clone())),
             _ => (None, None),
         }

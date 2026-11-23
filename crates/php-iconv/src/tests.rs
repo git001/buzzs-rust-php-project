@@ -465,21 +465,6 @@ fn stream_filter_basics() {
 }
 
 #[test]
-fn memory_limit_emulation() {
-    let mut i = ic();
-    i.memory_limit = Some(1024);
-    let big = vec![b'a'; 4096];
-    assert!(matches!(
-        i.iconv(b"UTF-8", b"ISO-8859-1", &big).diagnostic,
-        Some(Diagnostic::OutOfMemory { .. })
-    ));
-    assert!(matches!(
-        i.mime_decode(&big, 0, Some(b"UTF-8")).diagnostic,
-        Some(Diagnostic::OutOfMemory { .. })
-    ));
-}
-
-#[test]
 fn fallible_reserve_makes_room() {
     // Without the accounting allocator installed (test binaries), no
     // `memory_limit` is enforced: the reservation always succeeds.

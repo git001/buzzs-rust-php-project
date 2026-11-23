@@ -6,7 +6,7 @@
 
 use php_mbstring::info::InfoValue;
 use php_mbstring::strings::StrstrVariant;
-use php_mbstring::{EncodingList, HttpInput, SubstituteArg, SubstituteChar};
+use php_mbstring::{EncodingArray, EncodingList, HttpInput, SubstituteArg, SubstituteChar};
 use php_runtime::{Value, ZArray, ZStr};
 use php_vm::ext::{Args, ModuleBuilder, VmResult};
 use php_vm::Vm;
@@ -14,38 +14,35 @@ use php_vm::Vm;
 use crate::mem;
 use crate::state::{self, bytes, call, opt_str, str_list};
 
-/// An encoding-list argument (`array|string`) with its elements already
-/// converted to strings.
+/// An encoding-list argument (`array|string`): a string as given, an
+/// array resolved element by element (`php_mb_parse_encoding_array`).
 pub(crate) enum OwnedList {
     /// A comma-separated list.
     Str(Vec<u8>),
-    /// An array of names; `all` is set for the `mb_list_encodings()` array.
-    Array { items: Vec<Vec<u8>>, all: bool },
+    /// An array; `all` is set for the `mb_list_encodings()` array.
+    Array { list: EncodingArray, all: bool },
 }
 
 impl OwnedList {
     /// Converts an `array|string` argument (`zval_try_get_string` on array
-    /// elements).
+    /// elements, each looked up at once and not kept).
     pub(crate) fn from_value(vm: &mut Vm, v: &Value) -> VmResult<Self> {
         match v {
             Value::Array(arr) => {
                 let all = state::is_all_encodings(arr);
                 // Checked per element: the list may be script-sized.
-                let mut items = Vec::new();
+                let mut list = EncodingArray::new();
                 for (_, item) in arr.iter() {
                     php_memlimit::poll()?;
-                    php_memlimit::TryGrow::try_grow(&mut items, 1)?;
-                    let name = vm.value_to_string(&item.deref())?.as_bytes().to_vec();
+                    list.reserve()?;
+                    let name = vm.value_to_string(&item.deref())?;
                     // php_mb_parse_encoding_array stops at the first
                     // invalid name (before converting later elements).
-                    let valid = name.eq_ignore_ascii_case(b"auto")
-                        || php_mbstring::encoding::by_cname(&name).is_some();
-                    items.push(name);
-                    if !valid {
+                    if !list.push(name.as_bytes()) {
                         break;
                     }
                 }
-                Ok(Self::Array { items, all })
+                Ok(Self::Array { list, all })
             }
             other => Ok(Self::Str(vm.value_to_string(other)?.as_bytes().to_vec())),
         }
@@ -55,7 +52,7 @@ impl OwnedList {
     pub(crate) fn as_list(&self) -> EncodingList<'_> {
         match self {
             Self::Str(s) => EncodingList::Str(s),
-            Self::Array { items, .. } => EncodingList::Array(items),
+            Self::Array { list, .. } => EncodingList::Array(list),
         }
     }
 
@@ -197,13 +194,13 @@ fn mb_str_split(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         let chunk = usize::try_from(len).unwrap_or(usize::MAX);
         let n = s.as_bytes().len().div_ceil(chunk);
         let each = if chunk > 1 { mem::zstr(chunk) } else { 0 };
-        mem::check(vm, 0, mem::packed(n).saturating_add(n.saturating_mul(each)))?;
+        mem::check(mem::packed(n).saturating_add(n.saturating_mul(each)))?;
     }
     let v = call(vm, a, |st| {
         st.mb_str_split(s.as_bytes(), len, opt_bytes(enc.as_ref()))
     })
     .map(str_list)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 fn mb_strlen(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -280,11 +277,7 @@ fn mb_substr_count(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             )
             .0
             .len();
-            mem::check(
-                vm,
-                mem::zstr(h.as_bytes().len()) + mem::zstr(n.as_bytes().len()),
-                mem::zstr(conv),
-            )?;
+            mem::check(mem::zstr(conv))?;
         }
     }
     call(vm, a, |st| {
@@ -318,13 +311,13 @@ fn mb_strcut(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         .and_then(|e| php_mbstring::encoding::by_cname(e.as_bytes()))
         .is_some_and(|e| e.mblen_table.is_none() && e.fixed_width().is_none() && !e.is_utf8());
     if filtered && s.as_bytes().len() > LARGE {
-        mem::check(vm, 0, s.as_bytes().len().saturating_mul(4))?;
+        mem::check(s.as_bytes().len().saturating_mul(4))?;
     }
     let v = call(vm, a, |st| {
         st.mb_strcut(s.as_bytes(), start, len, opt_bytes(enc.as_ref()))
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 fn mb_strwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -347,11 +340,7 @@ fn mb_strimwidth(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         )
     })
     .map(bytes)?;
-    mem::result(
-        vm,
-        mem::zstr(s.as_bytes().len()) + mem::zstr(marker.as_bytes().len()),
-        v,
-    )
+    Ok(v)
 }
 
 fn mb_convert_case(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -360,7 +349,7 @@ fn mb_convert_case(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         st.mb_convert_case(s.as_bytes(), mode, opt_bytes(enc.as_ref()))
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 macro_rules! str_enc_fn {
@@ -368,7 +357,7 @@ macro_rules! str_enc_fn {
         fn $name(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             let (s, enc) = (a.str(0), opt_str(a, 1));
             let v = call(vm, a, |st| st.$name(s.as_bytes(), opt_bytes(enc.as_ref()))).map(bytes)?;
-            mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+            Ok(v)
         }
     )*};
 }
@@ -396,7 +385,7 @@ fn mb_scrub(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
             out.mark_valid_utf8();
         }
     }
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 macro_rules! trim_fn {
@@ -436,7 +425,7 @@ fn mb_encode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, charset, te, nl, indent) = (a.str(0), opt_str(a, 1), opt_str(a, 2), a.str(3), a.int(4));
     if s.as_bytes().len() > HUGE {
         // Encoded words take up to four times the input.
-        mem::check(vm, 0, s.as_bytes().len().saturating_mul(4))?;
+        mem::check(s.as_bytes().len().saturating_mul(4))?;
     }
     let v = call(vm, a, |st| {
         st.mb_encode_mimeheader(
@@ -448,17 +437,17 @@ fn mb_encode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         )
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 fn mb_decode_mimeheader(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let s = a.str(0);
     if s.as_bytes().len() > HUGE {
         // The decoder's output device is sized for the input.
-        mem::check(vm, 0, s.as_bytes().len())?;
+        mem::check(s.as_bytes().len())?;
     }
     let v = call(vm, a, |st| Ok(st.mb_decode_mimeheader(s.as_bytes()))).map(bytes)?;
-    mem::result(vm, 2 * mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 fn mb_convert_kana(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -486,13 +475,13 @@ fn mb_encode_numericentity(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let map = conversion_map(vm, &map);
     if s.as_bytes().len() > HUGE {
         // Every character may become a `&#xHHHHHH;` entity.
-        mem::check(vm, 0, s.as_bytes().len().saturating_mul(6))?;
+        mem::check(s.as_bytes().len().saturating_mul(6))?;
     }
     let v = call(vm, a, |st| {
         st.mb_encode_numericentity(s.as_bytes(), &map, opt_bytes(enc.as_ref()), hex)
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 fn mb_decode_numericentity(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
@@ -581,7 +570,7 @@ fn mb_str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let (s, len, pad, enc) = (a.str(0), a.int(1), a.str(2), opt_str(a, 4));
     if let Ok(n) = usize::try_from(len) {
         if n > LARGE && !pad.as_bytes().is_empty() {
-            mem::check(vm, 0, mem::zstr(n))?;
+            mem::check(mem::zstr(n))?;
         }
     }
     let v = call(vm, a, |st| {
@@ -594,7 +583,7 @@ fn mb_str_pad(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
         )
     })
     .map(bytes)?;
-    mem::result(vm, mem::zstr(s.as_bytes().len()), v)
+    Ok(v)
 }
 
 /// Registers the functions of this module.

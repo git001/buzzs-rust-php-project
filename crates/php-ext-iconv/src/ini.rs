@@ -27,11 +27,6 @@ pub(crate) const DIRECTIVES: [&str; 3] = [
     "iconv.internal_encoding",
 ];
 
-/// What PHP's heap reports for an idle request; [`state`] subtracts it
-/// (plus the inputs) from `memory_limit` to model the engine's
-/// out-of-memory check for the large buffers iconv allocates.
-const BASE_USAGE: usize = 512 * 1024;
-
 thread_local! {
     /// Bit `i` set: `DIRECTIVES[i]` was changed at runtime (the entry's
     /// `modified` flag, which decides whether `ini_restore()` runs the
@@ -75,68 +70,8 @@ pub(crate) fn register(m: &mut ModuleBuilder<'_>) {
     }
 }
 
-/// Parses `memory_limit` (`zend_ini_parse_quantity`); `None` = unlimited.
-fn memory_limit(vm: &Vm) -> Option<usize> {
-    let raw = vm.ini_string("memory_limit")?;
-    let s = String::from_utf8_lossy(&raw);
-    let s = s.trim();
-    let (digits, mult) = match s.as_bytes().last()? {
-        b'k' | b'K' => (&s[..s.len() - 1], 1usize << 10),
-        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
-        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
-        _ => (s, 1),
-    };
-    let n: i64 = digits.trim().parse().ok()?;
-    usize::try_from(n)
-        .ok()
-        .filter(|&n| n > 0)
-        .map(|n| n.saturating_mul(mult))
-}
-
-/// The configured `memory_limit` in bytes, for the fatal error text.
-pub(crate) fn configured_memory_limit(vm: &Vm) -> usize {
-    memory_limit(vm).unwrap_or(0)
-}
-
-/// Heap size of a `zend_string` of `len` bytes (header + NUL, 8-aligned).
-pub(crate) fn zstr_cost(len: usize) -> usize {
-    (24 + len + 1 + 7) & !7
-}
-
-/// Heap size of a value built by this extension (strings, and arrays of
-/// strings with 32-byte buckets).
-pub(crate) fn value_cost(v: &Value) -> usize {
-    match v {
-        Value::Str(s) => zstr_cost(s.len()),
-        Value::Array(a) => 56 + a.values().map(|e| 32 + value_cost(e)).sum::<usize>(),
-        _ => 0,
-    }
-}
-
-/// Models the engine's `memory_limit` check for a result: the VM does not
-/// account memory, so the idle-request baseline plus the live inputs plus
-/// the result are compared with the limit, raising PHP's out-of-memory
-/// fatal error (`requested` is the size of the result) when they exceed it.
-pub(crate) fn check_memory(vm: &mut Vm, input_len: usize, result: &Value) -> VmResult<()> {
-    let Some(limit) = memory_limit(vm) else {
-        return Ok(());
-    };
-    let cost = value_cost(result);
-    if BASE_USAGE + input_len + cost > limit {
-        return Err(vm.fatal(&format!(
-            "Allowed memory size of {limit} bytes exhausted (tried to allocate {} bytes)",
-            match result {
-                Value::Str(_) => cost,
-                _ => 32,
-            }
-        )));
-    }
-    Ok(())
-}
-
-/// Builds the module state from the current INI values. `input_len` is
-/// the size of the argument strings already held in memory.
-pub(crate) fn state(vm: &Vm, input_len: usize) -> Iconv {
+/// Builds the module state from the current INI values.
+pub(crate) fn state(vm: &Vm) -> Iconv {
     let get = |name: &str| vm.ini_string(name).unwrap_or_default();
     Iconv {
         ini: IconvIni {
@@ -150,8 +85,6 @@ pub(crate) fn state(vm: &Vm, input_len: usize) -> Iconv {
             input_encoding: get("input_encoding"),
             output_encoding: get("output_encoding"),
         },
-        memory_limit: memory_limit(vm)
-            .map(|l| l.saturating_sub(BASE_USAGE).saturating_sub(input_len)),
     }
 }
 

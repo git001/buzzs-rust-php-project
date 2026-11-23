@@ -49,7 +49,11 @@ const ENCODING_MSG: &str =
 pub fn encode_raw(data: &[u8], encoding: i32, level: i32) -> Result<Vec<u8>> {
     let mut z = ZStream::deflate_init(level, encoding, MAX_MEM_LEVEL, 0)
         .map_err(|st| Error::Warning(z_error(st).into()))?;
-    let mut out = vec![0u8; buffer_size_guess(data.len())];
+    let mut out = Vec::new();
+    if !fallible_resize(&mut out, buffer_size_guess(data.len())) {
+        z.end();
+        return Err(oom_error());
+    }
     let step = z.deflate(data, &mut out, Z_FINISH);
     z.end();
     if step.status == Z_STREAM_END {

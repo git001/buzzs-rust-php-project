@@ -175,7 +175,6 @@ fn thumbnail_dimensions_only_when_requested() {
         std::fs::File::open(&path).expect("open"),
         &StreamOrigin::Other,
         true,
-        None,
         &ExifConfig::default(),
         &BuiltinConverter,
     );
@@ -185,42 +184,8 @@ fn thumbnail_dimensions_only_when_requested() {
         std::fs::File::open(&path).expect("open"),
         &StreamOrigin::Other,
         false,
-        None,
         &ExifConfig::default(),
         &BuiltinConverter,
     );
     assert_eq!(t.expect("thumbnail").width, 0);
-}
-
-#[test]
-fn fixtures_fit_in_default_memory_limit() {
-    use php_exif::budget::MemoryLimit;
-    let mem = Some(MemoryLimit {
-        limit: 128 * 1024 * 1024,
-        used: 512 * 1024,
-    });
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exif");
-    for e in std::fs::read_dir(dir).expect("dir").flatten() {
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        let opts = ReadOptions {
-            read_thumbnail: true,
-            memory: mem,
-            ..ReadOptions::default()
-        };
-        let (_, d) = exif_read_data(
-            std::fs::File::open(&p).expect("open"),
-            &StreamOrigin::Other,
-            &opts,
-            &ExifConfig::default(),
-            &BuiltinConverter,
-        );
-        assert!(
-            d.iter().all(|d| d.level != php_exif::diag::Level::Error),
-            "{}",
-            p.display()
-        );
-    }
 }

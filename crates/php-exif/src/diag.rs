@@ -17,9 +17,6 @@ pub enum Level {
     Warning,
     /// `E_NOTICE`.
     Notice,
-    /// `E_ERROR`: only "Allowed memory size ... exhausted"; the VM must
-    /// abort the script (see [`crate::budget`]).
-    Error,
 }
 
 impl Level {
@@ -27,7 +24,6 @@ impl Level {
     #[must_use]
     pub fn code(self) -> i64 {
         match self {
-            Level::Error => 1,
             Level::Warning => 2,
             Level::Notice => 8,
         }
@@ -37,7 +33,6 @@ impl Level {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Level::Error => "Fatal error",
             Level::Warning => "Warning",
             Level::Notice => "Notice",
         }

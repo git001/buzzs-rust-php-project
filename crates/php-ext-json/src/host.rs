@@ -53,12 +53,11 @@ pub(crate) fn rt_throw(vm: &mut Vm, e: RuntimeError) -> Throw {
 /// The VM seen through [`RuntimeContext`] + [`JsonHost`].
 pub(crate) struct VmJsonHost<'a> {
     vm: &'a mut Vm,
-    input_len: usize,
 }
 
 impl<'a> VmJsonHost<'a> {
-    pub(crate) fn new(vm: &'a mut Vm, input_len: usize) -> Self {
-        VmJsonHost { vm, input_len }
+    pub(crate) fn new(vm: &'a mut Vm) -> Self {
+        VmJsonHost { vm }
     }
 }
 
@@ -125,13 +124,7 @@ impl RuntimeContext for VmJsonHost<'_> {
 
 impl JsonHost for VmJsonHost<'_> {
     fn json_reserve(&mut self, buf: &mut Vec<u8>, additional: usize) -> RtResult<()> {
-        if additional > buf.capacity() - buf.len() {
-            let output = buf.len().saturating_add(additional);
-            if let Err(t) = super::check_memory(self.vm, self.input_len, output) {
-                return Err(to_rt(self.vm, t));
-            }
-            php_memlimit::TryGrow::try_grow(buf, additional)?;
-        }
+        php_memlimit::TryGrow::try_grow(buf, additional)?;
         Ok(())
     }
 

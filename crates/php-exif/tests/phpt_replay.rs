@@ -35,6 +35,9 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+// The `oom_*` replays run on the accounting allocator, as the VM does.
+php_memlimit::install_global_allocator!();
+
 // ---------------------------------------------------------------------------
 // EXPECTF matching (run-tests.php semantics).
 
@@ -239,11 +242,7 @@ impl Out {
 
     fn diags(&mut self, func: &str, diags: &[Diagnostic]) {
         for d in diags {
-            if d.level == php_exif::diag::Level::Error {
-                self.echo(format!("\n{}: ", d.level.label()));
-            } else {
-                self.echo(format!("\n{}: {func}(): ", d.level.label()));
-            }
+            self.echo(format!("\n{}: {func}(): ", d.level.label()));
             self.echo(&d.message);
             let file = format!(" in /t/{}.php on line 2\n", self.1);
             self.echo(file);
@@ -283,7 +282,6 @@ fn read(
         required_sections: sections.map(|s| s.as_bytes().to_vec()),
         as_arrays: arrays,
         read_thumbnail: thumb,
-        memory: None,
     };
     let (v, d) = exif_read_data(
         File::open(&path).expect("open"),
@@ -316,7 +314,6 @@ fn thumb(out: &mut Out, rel: &str, dims: bool) -> Option<php_exif::exif::Thumbna
         File::open(&path).expect("open"),
         &file_origin(&path),
         dims,
-        None,
         &ExifConfig::default(),
         &BuiltinConverter,
     );
@@ -843,7 +840,6 @@ fn cases() -> Vec<(&'static str, Script)> {
                 Cursor::new(b"1\n".to_vec()),
                 &StreamOrigin::UnstatableFile,
                 true,
-                None,
                 &ExifConfig::default(),
                 &BuiltinConverter,
             );
@@ -1318,34 +1314,41 @@ fn image_cases() -> Vec<(&'static str, Script)> {
 }
 
 // ---------------------------------------------------------------------------
-// memory_limit emulation (oom_*.phpt).
+// memory_limit (oom_*.phpt), on the accounting allocator.
 
-use php_exif::budget::MemoryLimit;
+const MIB: usize = 1024 * 1024;
 
-const MIB: u64 = 1024 * 1024;
-
-#[allow(clippy::unnecessary_wraps)]
-fn limit(mb: u64) -> Option<MemoryLimit> {
-    // A fresh CLI script uses roughly half a megabyte.
-    Some(MemoryLimit {
-        limit: mb * MIB,
-        used: MIB / 2,
-    })
+/// Request startup with `memory_limit` = `mb` MiB: the input built before
+/// is not counted, as the file on disk in the PHP test.
+fn limit(mb: usize) {
+    php_memlimit::request_start(Some(mb * MIB)).expect("limit");
 }
 
-fn read_limited(o: &mut Out, data: &[u8], arrays: bool, mb: u64) -> Value {
+/// What the VM does as the call returns: the pending violation becomes the
+/// fatal error, and the request ends.
+fn deliver(o: &mut Out) {
+    if let Some(over) = php_memlimit::take() {
+        let file = format!(" in /t/{}.php on line 2\n", o.1);
+        o.echo(format!("\nFatal error: {over}{file}"));
+    }
+    php_memlimit::request_end();
+}
+
+fn read_limited(o: &mut Out, data: &[u8], arrays: bool, mb: usize) -> Value {
+    let opts = ReadOptions {
+        as_arrays: arrays,
+        ..ReadOptions::default()
+    };
+    limit(mb);
     let (v, d) = exif_read_data(
         Cursor::new(data),
         &StreamOrigin::Other,
-        &ReadOptions {
-            as_arrays: arrays,
-            memory: limit(mb),
-            ..ReadOptions::default()
-        },
+        &opts,
         &ExifConfig::default(),
         &BuiltinConverter,
     );
     o.diags("exif_read_data", &d);
+    deliver(o);
     v
 }
 
@@ -1378,6 +1381,17 @@ fn fatal_text(o: &Out) -> bool {
 
 #[test]
 fn oom_phpt_replays() {
+    // A thread of its own, with its own counters and limit (the other
+    // tests of this binary run unlimited).
+    std::thread::spawn(|| {
+        php_memlimit::attach_thread();
+        oom_cases();
+    })
+    .join()
+    .expect("oom cases");
+}
+
+fn oom_cases() {
     let mut failures = Vec::new();
     let mut run = |phpt: &'static str, f: &dyn Fn(&mut Out)| {
         let mut o = Out(Vec::new(), phpt.trim_end_matches(".phpt").to_owned());
@@ -1407,33 +1421,36 @@ fn oom_phpt_replays() {
             o.var_dump(&v);
         }
     });
-    run("oom_exif_scan_jpeg_header.phpt", &|o| {
+    // Buzz keeps no JPEG sections (DIFFERENCES.md): the file is read
+    // where php-src raises the memory fatal.
+    {
         let n = (2 * 1024 * 1024 - 4) / 4;
         let mut j = b"\xFF\xD8".to_vec();
         for _ in 0..n {
             j.extend_from_slice(b"\xFF\xE9\x00\x02");
         }
         j.extend_from_slice(b"\xFF\xD9");
-        let v = read_limited(o, &j, false, 8);
-        if !fatal_text(o) {
-            o.var_dump(&v);
-        }
-    });
+        let mut o = Out(Vec::new(), "oom_exif_scan_jpeg_header".to_owned());
+        let v = read_limited(&mut o, &j, false, 8);
+        assert!(!fatal_text(&o), "{}", String::from_utf8_lossy(&o.0));
+        assert!(matches!(v, Value::Array(_) | Value::Bool(_)), "{v:?}");
+    }
     for (phpt, size) in [
         ("oom_exif_thumbnail_large_file_001.phpt", 12 * 1024 * 1024),
         ("oom_exif_thumbnail_large_file_002.phpt", 20 * 1024 * 1024),
     ] {
         run(phpt, &move |o| {
             let t = big_thumbnail_tiff(size);
+            limit(8);
             let (r, d) = exif_thumbnail(
                 Cursor::new(t),
                 &StreamOrigin::Other,
                 false,
-                limit(8),
                 &ExifConfig::default(),
                 &BuiltinConverter,
             );
             o.diags("exif_thumbnail", &d);
+            deliver(o);
             if !fatal_text(o) {
                 o.var_dump(&thumb_value(r.as_ref()));
             }
@@ -1445,15 +1462,16 @@ fn oom_phpt_replays() {
         let off = 8 + 2 + 2 * 12 + 4 + 2;
         t[off + 8..off + 12].copy_from_slice(&1u32.to_le_bytes());
         t[off + 12 + 8..off + 12 + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        limit(128);
         let (r, d) = exif_thumbnail(
             Cursor::new(t),
             &StreamOrigin::Other,
             false,
-            limit(128),
             &ExifConfig::default(),
             &BuiltinConverter,
         );
         o.diags("exif_thumbnail", &d);
+        deliver(o);
         o.var_dump(&thumb_value(r.as_ref()));
     });
     run("oom_exif_numeric_metadata.phpt", &|o| {
@@ -1482,8 +1500,10 @@ fn oom_phpt_replays() {
     });
     run("image_oom_getimagesize_xbm.phpt", &|o| {
         let data = vec![b'x'; 12 * 1024 * 1024];
-        let r = php_exif::imagesize::getimagesize_limited(Cursor::new(data), b"x", false, limit(4));
+        limit(4);
+        let r = getimagesize(Cursor::new(data), b"x", false);
         o.diags("getimagesize", &r.diagnostics);
+        deliver(o);
         if !fatal_text(o) {
             o.var_dump(&r.to_value());
         }

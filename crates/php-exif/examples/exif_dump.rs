@@ -32,7 +32,6 @@ fn main() -> std::io::Result<()> {
             .map(|s| s.as_bytes().to_vec()),
         as_arrays: args.get(2).is_some_and(|s| s == "1"),
         read_thumbnail: args.get(3).is_some_and(|s| s == "1"),
-        memory: None,
     };
     let (v, diags) = exif_read_data(
         File::open(path)?,

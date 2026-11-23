@@ -433,6 +433,7 @@ dependencies = [
 name = "php-exif"
 version = "0.1.0"
 dependencies = [
+ "php-memlimit",
  "php-runtime",
 ]
 
@@ -881,6 +882,7 @@ dependencies = [
  "php-filter",
  "php-lexer",
  "php-log",
+ "php-memlimit",
  "php-runtime",
  "php-stdmisc",
  "php-streams",
@@ -1450,6 +1452,9 @@ version = "0.1.0"
 [[package]]
 name = "php-uri"
 version = "0.1.0"
+dependencies = [
+ "php-memlimit",
+]
 
 [[package]]
 name = "php-vm"

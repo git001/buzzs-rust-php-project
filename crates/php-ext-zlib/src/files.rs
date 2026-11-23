@@ -20,10 +20,7 @@ use php_vm::Vm;
 use php_zlib::filter::ZlibFilterFactory;
 use php_zlib::wrapper::{gzopen as lib_gzopen, ZlibWrapper};
 
-use crate::{bytes, mem};
-
-/// `sizeof(zval)`: one element of a packed array.
-const PACKED_SLOT: usize = 16;
+use crate::bytes;
 
 /// `php_stream_gets()` buffer size used by `gzfile()` (`char buf[8192]`,
 /// read with `sizeof(buf) - 1`).
@@ -67,28 +64,19 @@ fn gzfile(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(mut s) = open(vm, a, "rb", use_path)? else {
         return Ok(Value::Bool(false));
     };
-    // Stop once PHP's array would exceed memory_limit.
-    let limit = mem::limit(vm);
-    let (lines, oom) = bridge::run(vm, || {
+    // Stop once the lines read cross memory_limit (`ZEND_HAS_OOM()`).
+    let lines = bridge::run(vm, || {
         let mut lines = Vec::new();
-        let mut size = 0usize;
-        let mut oom = None;
         while let Some(l) = s.get_line(Some(GZFILE_LINE)) {
-            size = size.saturating_add(mem::zstr(l.len()) + PACKED_SLOT);
             lines.push(l);
-            if lines.len() % 1024 == 0 && mem::exceeds(limit, size) {
-                oom = Some(size);
+            if php_memlimit::is_pending() {
                 break;
             }
         }
         s.close();
-        (lines, oom)
+        lines
     })?;
-    if let Some(size) = oom {
-        drop(lines);
-        mem::check(vm, size)?;
-        return Ok(Value::Bool(false));
-    }
+    php_memlimit::poll()?;
     let mut arr = ZArray::with_capacity(lines.len());
     for l in lines {
         let _ = arr.make_mut().push(bytes(l));
@@ -132,14 +120,12 @@ fn gzpassthru(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     Ok(Value::Int(i64::try_from(count).unwrap_or(i64::MAX)))
 }
 
-/// `gzgets()` (`fgets()`, with the memory check on the line read).
+/// `gzgets()` (`fgets()`).
 fn gzgets(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let Some(fgets) = vm.native_function("fgets") else {
         return Ok(Value::Bool(false));
     };
-    let v = (fgets.handler)(vm, a)?;
-    mem::check_str(vm, &v)?;
-    Ok(v)
+    (fgets.handler)(vm, a)
 }
 
 /// Registers the wrapper, the filters and the stream functions.

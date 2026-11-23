@@ -8,7 +8,6 @@
 use std::io::{Read, Seek};
 
 use crate::avif;
-use crate::budget::Budget;
 use crate::diag::Diagnostic;
 use crate::imagesize::{get_wbmp, get_xbm};
 use crate::stream::PhpStream;
@@ -200,7 +199,6 @@ pub(crate) fn getimagetype<R: Read + Seek>(
     stream: &mut PhpStream<R>,
     input: &[u8],
     diags: &mut Vec<Diagnostic>,
-    budget: &mut Budget,
 ) -> i64 {
     let mut ft = [0u8; 12];
     if stream.read(&mut ft[..3]) != 3 {
@@ -280,7 +278,7 @@ pub(crate) fn getimagetype<R: Read + Seek>(
         diags.push(read_error(input));
         return IMAGETYPE_UNKNOWN;
     }
-    if get_xbm(stream, budget).is_some() {
+    if get_xbm(stream).is_some() {
         return IMAGETYPE_XBM;
     }
     crate::handlers::identify(stream).unwrap_or(IMAGETYPE_UNKNOWN)
@@ -292,7 +290,7 @@ pub(crate) fn getimagetype<R: Read + Seek>(
 pub fn exif_imagetype<R: Read + Seek>(reader: R, input: &[u8]) -> (Option<i64>, Vec<Diagnostic>) {
     let mut stream = PhpStream::new(reader);
     let mut diags = Vec::new();
-    let t = getimagetype(&mut stream, input, &mut diags, &mut Budget::new(None));
+    let t = getimagetype(&mut stream, input, &mut diags);
     ((t != IMAGETYPE_UNKNOWN).then_some(t), diags)
 }
 

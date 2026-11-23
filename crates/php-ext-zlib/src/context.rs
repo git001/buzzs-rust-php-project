@@ -112,10 +112,6 @@ fn deflate_add(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     };
     let data = a.str(1);
     let flush = int_or(a, 2, SYNC_FLUSH);
-    crate::mem::check(
-        vm,
-        crate::mem::zstr(data.len()) + crate::mem::zlib_guess(data.len()),
-    )?;
     let r = object::internal::<DeflateState, _>(&o, |s| s.0.add(data.as_bytes(), flush));
     match r {
         Some(Ok(v)) => Ok(bytes(v)),
@@ -152,10 +148,7 @@ fn inflate_add(vm: &mut Vm, a: &mut Args) -> VmResult<Value> {
     let flush = int_or(a, 2, SYNC_FLUSH);
     let r = with_inflate(vm, a, |c| c.add(data.as_bytes(), flush))?;
     match r {
-        Ok(v) => {
-            crate::mem::check(vm, crate::mem::zstr(v.len()))?;
-            Ok(bytes(v))
-        }
+        Ok(v) => Ok(bytes(v)),
         Err(e) => zlib_error(vm, &e),
     }
 }
