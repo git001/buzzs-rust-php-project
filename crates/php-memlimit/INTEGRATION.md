@@ -73,6 +73,7 @@ allocation of a script in turn (`crates/php-extensions/tests/*_alloc_faults.rs`)
 |---|---|---|
 | pcre2 | match data of patterns with more than 32 subpatterns (`php-pcre` `counted_context`) | the same (`gctx_zmm`, `femalloc`) |
 | libcurl | `curl_global_init_mem` (`php-curl` `global_init`) | malloc: Buzz is stricter (DIFFERENCES.md) |
+| sqlite | `SQLITE_CONFIG_MALLOC` (`php-sqlite` `ensure_init`) | malloc: Buzz is stricter (DIFFERENCES.md) |
 | zlib | `zalloc` on the Rust allocator, gzFile streams on calloc (`php-zlib` `Heap`) | the same (`php_zlib_alloc`) |
 | bzip2 | Rust port, stream filters counted, one-shot calls on malloc (`php-bz2` `Heap`) | the same |
 | libxml2 | none | malloc; libxml2 2.9.14 loops in its HTML parser on NULL |

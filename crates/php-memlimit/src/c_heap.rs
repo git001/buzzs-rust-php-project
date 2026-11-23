@@ -23,12 +23,17 @@ use std::ptr;
 
 use crate::current;
 
-/// Usable size of a block from `malloc` (0 for NULL).
-fn usable(p: *mut c_void) -> usize {
+/// Usable size of a block from these hooks (0 for NULL), for libraries
+/// that ask a block's size (sqlite's `xSize`).
+///
+/// # Safety
+///
+/// `p` is NULL or a live block of the C allocator.
+pub unsafe fn usable(p: *mut c_void) -> usize {
     if p.is_null() {
         return 0;
     }
-    // SAFETY: `p` is a live block of the C allocator.
+    // SAFETY: the caller passes a live block.
     unsafe { libc::malloc_usable_size(p) }
 }
 
@@ -44,7 +49,8 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
     }
     // SAFETY: malloc has no preconditions.
     let p = unsafe { libc::malloc(size) };
-    heap.account_c(usable(p), 0);
+    // SAFETY: `p` is NULL or the block malloc just returned.
+    heap.account_c(unsafe { usable(p) }, 0);
     p
 }
 
@@ -63,7 +69,8 @@ pub unsafe extern "C" fn calloc(count: usize, size: usize) -> *mut c_void {
     }
     // SAFETY: calloc has no preconditions.
     let p = unsafe { libc::calloc(count, size) };
-    heap.account_c(usable(p), 0);
+    // SAFETY: `p` is NULL or the block malloc just returned.
+    heap.account_c(unsafe { usable(p) }, 0);
     p
 }
 
@@ -75,7 +82,8 @@ pub unsafe extern "C" fn calloc(count: usize, size: usize) -> *mut c_void {
 /// As `realloc`: `p` is NULL or a live block of the C allocator.
 pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
     let heap = current();
-    let old = usable(p);
+    // SAFETY: the caller passes NULL or a live block.
+    let old = unsafe { usable(p) };
     if size > old && !heap.admits_c(size - old) {
         return ptr::null_mut();
     }
@@ -88,7 +96,8 @@ pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
         }
         return q;
     }
-    heap.account_c(usable(q), old);
+    // SAFETY: `q` is the block realloc just returned.
+    heap.account_c(unsafe { usable(q) }, old);
     q
 }
 
@@ -101,7 +110,8 @@ pub unsafe extern "C" fn free(p: *mut c_void) {
     if p.is_null() {
         return;
     }
-    let size = usable(p);
+    // SAFETY: the caller passes a live block.
+    let size = unsafe { usable(p) };
     // SAFETY: the caller passes a live block.
     unsafe { libc::free(p) };
     current().account_c(0, size);
