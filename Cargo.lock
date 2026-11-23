@@ -406,6 +406,7 @@ name = "php-curl"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "php-memlimit",
 ]
 
 [[package]]
@@ -1188,6 +1189,7 @@ dependencies = [
 name = "php-memlimit"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mimalloc",
 ]
 
@@ -1249,6 +1251,7 @@ name = "php-pcre"
 version = "0.1.0"
 dependencies = [
  "pcre2-sys",
+ "php-memlimit",
  "rustc-hash",
 ]
 

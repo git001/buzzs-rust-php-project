@@ -43,6 +43,7 @@
 //!
 //! See `INTEGRATION.md` in this crate for how the VM and bindings use it.
 
+pub mod c_heap;
 mod counting;
 mod grow;
 mod limit;

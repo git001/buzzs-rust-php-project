@@ -24,7 +24,7 @@ impl<'a> Exec<'a> {
     /// Allocates match data and a match context; `None` on allocation failure
     /// (PHP reports `PREG_INTERNAL_ERROR`).
     pub(crate) fn new(re: &'a Regex, cfg: &MatchConfig, subject: &'a [u8]) -> Option<Self> {
-        let md = MatchData::for_code(re.code())?;
+        let md = MatchData::for_code(re.code(), re.capture_count() + 1)?;
         let ctx = MatchContext::new(cfg.backtrack_limit, cfg.recursion_limit, cfg.jit)?;
         Some(Self {
             re,

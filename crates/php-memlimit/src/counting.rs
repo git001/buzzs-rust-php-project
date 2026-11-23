@@ -1209,6 +1209,78 @@ impl<A> CountingAlloc<A> {
         true
     }
 
+    // ---- blocks of C libraries ------------------------------------------
+
+    /// Whether a C library may take `extra` more bytes from its `malloc`
+    /// ([`crate::c_heap`]). Unlike a Rust allocation, which is granted and
+    /// reported at the next safe point, a C allocation past the soft limit
+    /// is refused: C code handles NULL, and the VM raises the recorded
+    /// violation once the call returns. The hard ceiling refuses without
+    /// calling its handler; [`set_max_allocs`](Self::set_max_allocs)'s
+    /// chosen allocation is refused as well (fault injection).
+    pub(crate) fn admits_c(&self, extra: usize) -> bool {
+        let new = self.raw_usage().saturating_add(extra);
+        let huge = extra > MAX_LARGE_SIZE;
+        if new <= self.soft_raw.load(Relaxed) && !huge && self.max_allocs.load(Relaxed) == 0 {
+            return true;
+        }
+        self.admits_c_slow(new, extra, huge)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn admits_c_slow(&self, new: usize, extra: usize, huge: bool) -> bool {
+        if self.in_hard_handler.load(Relaxed) {
+            return true;
+        }
+        let limit = self.limit.load(Relaxed);
+        if self.max_allocs.load(Relaxed) != 0 && self.count_down_max_allocs() {
+            self.record(OverLimit {
+                limit: self.limit().unwrap_or(LIMIT_MAX),
+                tried: extra,
+            });
+            return false;
+        }
+        if new > self.hard_raw.load(Relaxed) {
+            self.record(OverLimit {
+                limit: self.limit().unwrap_or(LIMIT_MAX),
+                tried: extra,
+            });
+            return false;
+        }
+        if limit == UNLIMITED {
+            return true;
+        }
+        if self.limit_allows(self.reported(new).saturating_sub(extra), extra, huge, limit) {
+            return true;
+        }
+        self.record(OverLimit {
+            limit,
+            tried: extra,
+        });
+        false
+    }
+
+    /// Accounts a C library's block changing from `sub` to `add` usable
+    /// bytes (a `malloc` is `(n, 0)`, a `free` `(0, n)`), after
+    /// [`admits_c`](Self::admits_c) let it grow. Never refuses.
+    pub(crate) fn account_c(&self, add: usize, sub: usize) {
+        let owner = self.is_owner();
+        if add >= sub {
+            let new = self.add_live_as(add - sub, owner);
+            self.raise_peak(new, owner);
+        } else {
+            self.release(sub - add);
+        }
+        let (h_add, h_sub) = (
+            if add > MAX_LARGE_SIZE { add } else { 0 },
+            if sub > MAX_LARGE_SIZE { sub } else { 0 },
+        );
+        if h_add != h_sub {
+            self.huge_change(h_add, h_sub);
+        }
+    }
+
     /// Bookkeeping for huge blocks (cold: they are 2 MiB or more): `add`
     /// and `sub` live bytes, then re-derive the thresholds.
     #[cold]

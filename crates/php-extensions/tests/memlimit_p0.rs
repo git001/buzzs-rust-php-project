@@ -399,13 +399,18 @@ const MYSQL_CASES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Cases that do not meet the contract yet, with what goes wrong. Keep in
+/// Cases that do not meet the contract, with what goes wrong. Keep in
 /// sync with the run (the test prints every result).
 const KNOWN_GAPS: &[(&str, &str)] = &[
-    // Stage 6 (C library hooks): libxml2 allocates outside the counter.
+    // As php-src, which never calls xmlMemSetup: libxml2 allocates with
+    // malloc, outside memory_limit. Counting it was tried (plan 3e, stage
+    // 6) and dropped: libxml2 2.9.14, the version Debian 13 and Ubuntu
+    // 24.04 ship, loops forever in its HTML parser when an allocation
+    // fails, and libxml2's future is uncertain. A threaded server bounds
+    // it with the process-wide ceiling (stage 7).
     (
         "dom_load_html",
-        "libxml2's parser memory is not counted: no fatal",
+        "libxml2's parser memory is not counted (as php-src): no fatal",
     ),
 ];
 

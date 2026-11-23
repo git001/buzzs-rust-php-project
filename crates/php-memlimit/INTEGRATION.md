@@ -56,6 +56,28 @@ gives it up with `php_memlimit::unbind_current_thread()` if another thread
 is to take it. Multi-threaded SAPIs (`php -S` request threads, later the
 FastCGI and HTTP workers) leave the binding to `request_start`/`request_end`.
 
+### C libraries
+
+A C library that allocates with its own `malloc` is invisible to the
+counter unless its memory functions are set to `php_memlimit::c_heap`
+(`malloc`, `calloc`, `realloc`, `free`, `strdup`). The blocks still come
+from glibc; the hooks count their usable size on the calling thread and
+return NULL, with the violation recorded, past the soft limit, so the
+library reports out of memory and the VM raises the fatal when the call
+returns (a builtin's exception in reaction to that NULL gives way to the
+fatal, `Vm::deliver_oom`). Only a library that handles NULL cleanly may
+use them: each one has a fault-injection test that fails every
+allocation of a script in turn (`crates/php-extensions/tests/*_alloc_faults.rs`).
+
+| Library | Hook | php-src |
+|---|---|---|
+| pcre2 | match data of patterns with more than 32 subpatterns (`php-pcre` `counted_context`) | the same (`gctx_zmm`, `femalloc`) |
+| libcurl | `curl_global_init_mem` (`php-curl` `global_init`) | malloc: Buzz is stricter (DIFFERENCES.md) |
+| zlib | `zalloc` on the Rust allocator, gzFile streams on calloc (`php-zlib` `Heap`) | the same (`php_zlib_alloc`) |
+| bzip2 | Rust port, stream filters counted, one-shot calls on malloc (`php-bz2` `Heap`) | the same |
+| libxml2 | none | malloc; libxml2 2.9.14 loops in its HTML parser on NULL |
+| libgmp | none (`uncounted`) | malloc |
+
 ## 1. php-cli: install the allocator (once)
 
 `crates/php-cli/Cargo.toml`: `php-memlimit = { path = "../php-memlimit" }`

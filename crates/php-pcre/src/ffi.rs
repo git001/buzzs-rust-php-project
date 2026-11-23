@@ -9,6 +9,7 @@
 use core::ffi::c_void;
 use std::cell::OnceCell;
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 
 use pcre2_sys as sys;
 
@@ -297,6 +298,54 @@ impl Drop for MatchContext {
     }
 }
 
+/// `PHP_PCRE_PREALLOC_MDATA_SIZE`: up to this many subpatterns php-src
+/// matches with match data preallocated at startup (persistent, outside
+/// `memory_limit`); beyond it, with match data from `gctx_zmm`.
+const PREALLOC_MDATA_SIZE: usize = 32;
+
+/// `php_pcre_emalloc()`: `femalloc(size, fallible)`, NULL past the limit.
+unsafe extern "C" fn counted_malloc(size: usize, _data: *mut c_void) -> *mut c_void {
+    // SAFETY: plain allocation; pcre2 handles NULL as PCRE2_ERROR_NOMEMORY.
+    unsafe { php_memlimit::c_heap::malloc(size) }
+}
+
+/// `php_pcre_efree()`.
+unsafe extern "C" fn counted_free(block: *mut c_void, _data: *mut c_void) {
+    // SAFETY: pcre2 frees only blocks from `counted_malloc` (or NULL).
+    unsafe { php_memlimit::c_heap::free(block) }
+}
+
+/// A general context; it only holds the two functions and is never
+/// changed after creation, so any thread may use it.
+struct GeneralContext(NonNull<sys::pcre2_general_context_8>);
+
+// SAFETY: see the type; pcre2 only reads a general context.
+unsafe impl Send for GeneralContext {}
+// SAFETY: as above.
+unsafe impl Sync for GeneralContext {}
+
+/// `PCRE_G(gctx_zmm)`: the general context whose memory counts against
+/// `memory_limit`; NULL (plain malloc) if it could not be created.
+fn counted_context() -> *mut sys::pcre2_general_context_8 {
+    static GCTX: OnceLock<Option<GeneralContext>> = OnceLock::new();
+    GCTX.get_or_init(|| {
+        // The context itself lives for the process: persistent.
+        php_memlimit::persistent(|| {
+            // SAFETY: both callbacks are valid for the process lifetime.
+            NonNull::new(unsafe {
+                sys::pcre2_general_context_create_8(
+                    Some(counted_malloc),
+                    Some(counted_free),
+                    std::ptr::null_mut(),
+                )
+            })
+            .map(GeneralContext)
+        })
+    })
+    .as_ref()
+    .map_or(std::ptr::null_mut(), |g| g.0.as_ptr())
+}
+
 /// Match data (ovector + mark) sized for one pattern.
 #[derive(Debug)]
 pub(crate) struct MatchData {
@@ -305,11 +354,22 @@ pub(crate) struct MatchData {
 }
 
 impl MatchData {
-    /// `pcre2_match_data_create_from_pattern()`.
-    pub(crate) fn for_code(code: &Code) -> Option<Self> {
-        // SAFETY: code is a valid compiled pattern; NULL context → malloc.
+    /// `pcre2_match_data_create_from_pattern()` for a pattern with
+    /// `num_subpats` subpatterns (groups + 1). As php-src, more than
+    /// [`PREALLOC_MDATA_SIZE`] take match data, and with it pcre2's
+    /// backtracking frames, from the counted heap (`gctx_zmm`); fewer stay
+    /// on malloc, as php-src's preallocated match data. `None` when the
+    /// allocation fails (past the limit: the violation is pending).
+    pub(crate) fn for_code(code: &Code, num_subpats: usize) -> Option<Self> {
+        let gctx = if num_subpats > PREALLOC_MDATA_SIZE {
+            counted_context()
+        } else {
+            std::ptr::null_mut()
+        };
+        // SAFETY: code is a valid compiled pattern; the context is NULL
+        // (malloc) or the process-lifetime counted one.
         let ptr = NonNull::new(unsafe {
-            sys::pcre2_match_data_create_from_pattern_8(code.ptr.as_ptr(), std::ptr::null_mut())
+            sys::pcre2_match_data_create_from_pattern_8(code.ptr.as_ptr(), gctx)
         })?;
         // SAFETY: ptr is valid match data.
         let pairs = unsafe { sys::pcre2_get_ovector_count_8(ptr.as_ptr()) } as usize;

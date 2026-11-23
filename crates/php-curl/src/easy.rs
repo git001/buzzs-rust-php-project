@@ -32,14 +32,30 @@ const ERRBUF_LEN: usize = CURL_ERROR_SIZE as usize + 1;
 
 static GLOBAL_INIT: Once = Once::new();
 
-/// `curl_global_init(CURL_GLOBAL_DEFAULT)` (MINIT), done once.
+/// `curl_global_init(CURL_GLOBAL_DEFAULT)` (MINIT), done once, with
+/// libcurl's memory on php-memlimit's C hooks: what a request makes libcurl
+/// allocate counts against its `memory_limit`, and past it libcurl gets
+/// NULL (`CURLE_OUT_OF_MEMORY`). php-src leaves libcurl on malloc; Buzz
+/// counts it so one request cannot exhaust a threaded server (documented
+/// in DIFFERENCES.md). What the global init keeps for the process is
+/// persistent, outside any request's usage.
 pub fn global_init() {
     GLOBAL_INIT.call_once(|| {
-        // SAFETY: called once, before any other libcurl function, from a
-        // single thread (the `Once` serialises callers).
-        unsafe {
-            ffi::curl_global_init(ffi::CURL_GLOBAL_DEFAULT);
-        }
+        php_memlimit::persistent(|| {
+            // SAFETY: called once, before any other libcurl function, from
+            // a single thread (the `Once` serialises callers); the hooks
+            // keep malloc's contracts and live for the process.
+            unsafe {
+                ffi::curl_global_init_mem(
+                    ffi::CURL_GLOBAL_DEFAULT,
+                    php_memlimit::c_heap::malloc,
+                    php_memlimit::c_heap::free,
+                    php_memlimit::c_heap::realloc,
+                    php_memlimit::c_heap::strdup,
+                    php_memlimit::c_heap::calloc,
+                );
+            }
+        });
     });
 }
 

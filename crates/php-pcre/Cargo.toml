@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "PHP's ext/pcre (preg_*) semantics on top of the PCRE2 engine"
 
 [dependencies]
+php-memlimit = { path = "../php-memlimit" }
 rustc-hash = "2"
 pcre2-sys = "0.2.10"
 

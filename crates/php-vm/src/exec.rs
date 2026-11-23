@@ -3545,12 +3545,17 @@ impl Vm {
     /// Where a builtin's result leaves it: a [`Throw::Fatal`] that is a
     /// still pending `memory_limit` violation (an [`OverLimit`] returned
     /// with `?`) is reported here, at the caller's line, before it unwinds
-    /// further. Any other result passes unchanged.
+    /// further. An exception thrown while a violation is pending gives way
+    /// to it: it is the builtin's reaction to the allocation that failed
+    /// (a C library's NULL through `php_memlimit::c_heap`, such as
+    /// `curl_multi_init()`'s "Could not initialize"), where php-src's
+    /// emalloc would have bailed out first. Any other result passes
+    /// unchanged.
     ///
     /// [`OverLimit`]: php_memlimit::OverLimit
     #[inline]
     pub(crate) fn deliver_oom<T>(&mut self, r: VmResult<T>) -> VmResult<T> {
-        if matches!(r, Err(Throw::Fatal)) && php_memlimit::is_pending() {
+        if matches!(r, Err(Throw::Fatal | Throw::Exception(_))) && php_memlimit::is_pending() {
             self.raise_pending_oom()?;
         }
         r
